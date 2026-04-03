@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: documind
+  datasource:
+    url: jdbc:mysql://localhost:3306/documind
+    username: root
+    password: ritepa64
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+server:
+  port: 8080
+
+jwt:
+  # HS256 최소 256bit(32자 이상) 필요. 운영 환경에서는 환경변수로 교체
+  secret: documind-secret-key-please-change-in-production-env
+  # 토큰 만료 시간 (ms). 86400000 = 24시간
+  expiration: 86400000
