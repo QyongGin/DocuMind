@@ -1,0 +1,47 @@
+# ───────────────────────────────────────
+# Claude Code 관련
+# ───────────────────────────────────────
+CLAUDE.md
+.claude/
+
+# ───────────────────────────────────────
+# 프로젝트 자산 (문서, 이미지 등)
+# ───────────────────────────────────────
+Assets/
+~$*.docx
+*.docx
+
+# ───────────────────────────────────────
+# Python / FastAPI (ai-server)
+# ───────────────────────────────────────
+ai-server/venv/
+ai-server/__pycache__/
+ai-server/**/__pycache__/
+ai-server/*.pyc
+ai-server/chroma_db/
+*.egg-info/
+.env
+
+# ───────────────────────────────────────
+# Node.js / React (frontend)
+# ───────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# ───────────────────────────────────────
+# Spring Boot / Java / Gradle (backend)
+# ───────────────────────────────────────
+documind/.gradle/
+documind/build/
+documind/out/
+documind/.idea/
+documind/**/*.class
+*.jar
+*.war
+
+# ───────────────────────────────────────
+# macOS
+# ───────────────────────────────────────
+.DS_Store
