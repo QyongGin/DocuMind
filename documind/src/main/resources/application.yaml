@@ -16,5 +16,7 @@ server:
 jwt:
   # HS256 최소 256bit(32자 이상) 필요. 운영 환경에서는 환경변수로 교체
   secret: documind-secret-key-please-change-in-production-env
-  # 토큰 만료 시간 (ms). 86400000 = 24시간
+  # Access Token 만료 시간 (ms). 86400000 = 24시간
   expiration: 86400000
+  # Refresh Token 만료 시간 (ms). 604800000 = 7일
+  refresh-expiration: 604800000
