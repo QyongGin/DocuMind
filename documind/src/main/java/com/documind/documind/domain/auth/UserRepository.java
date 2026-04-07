@@ -9,4 +9,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     // username으로 사용자를 조회. 로그인 시 사용
     Optional<User> findByUsername(String username);
+
+    // Refresh Token으로 사용자를 조회. 토큰 재발급 시 사용
+    Optional<User> findByRefreshToken(String refreshToken);
 }
