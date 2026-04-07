@@ -45,3 +45,5 @@ documind/**/*.class
 # macOS
 # ───────────────────────────────────────
 .DS_Store
+.vscode/
+docs/
