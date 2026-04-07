@@ -1,5 +1,7 @@
 package com.documind.documind.global.config;
 
+import com.documind.documind.global.auth.AccessDeniedHandlerImpl;
+import com.documind.documind.global.auth.AuthEntryPoint;
 import com.documind.documind.global.auth.JwtAuthenticationFilter;
 import com.documind.documind.global.auth.JwtProvider;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +25,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtProvider jwtProvider;
+    private final AuthEntryPoint authEntryPoint;
+    private final AccessDeniedHandlerImpl accessDeniedHandler;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -40,6 +44,11 @@ public class SecurityConfig {
                     .requestMatchers("/api/auth/login").permitAll()
                     // 나머지: USER는 로그인 불필요이므로 전체 허용
                     .anyRequest().permitAll()
+            )
+            // 인증/권한 예외 처리 핸들러 등록
+            .exceptionHandling(ex -> ex
+                    .authenticationEntryPoint(authEntryPoint)
+                    .accessDeniedHandler(accessDeniedHandler)
             )
             // JWT 필터를 UsernamePasswordAuthenticationFilter 앞에 등록
             .addFilterBefore(
