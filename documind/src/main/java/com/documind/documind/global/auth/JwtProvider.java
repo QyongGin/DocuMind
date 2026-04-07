@@ -23,6 +23,9 @@ public class JwtProvider {
     @Value("${jwt.expiration}")
     private long expiration;
 
+    @Value("${jwt.refresh-expiration}")
+    private long refreshExpiration;
+
     private SecretKey key;
 
     // @PostConstruct: 빈 생성 후 의존성 주입이 완료된 시점에 실행. secret으로 서명 키를 초기화
@@ -39,6 +42,17 @@ public class JwtProvider {
                 .claim("role", role)
                 .issuedAt(now)
                 .expiration(new Date(now.getTime() + expiration))
+                .signWith(key)
+                .compact();
+    }
+
+    // username만 담아 Refresh Token을 생성. role 정보는 포함하지 않음
+    public String generateRefreshToken(String username) {
+        Date now = new Date();
+        return Jwts.builder()
+                .subject(username)
+                .issuedAt(now)
+                .expiration(new Date(now.getTime() + refreshExpiration))
                 .signWith(key)
                 .compact();
     }

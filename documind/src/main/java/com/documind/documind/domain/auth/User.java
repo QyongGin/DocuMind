@@ -35,12 +35,27 @@ public class User {
     @Column(nullable = false)
     private Boolean isActive = true;
 
+    // Refresh Token 저장. 로그아웃 시 NULL로 초기화하여 무효화
+    @Column(length = 512)
+    private String refreshToken;
+
     // NULL 허용 (로그인 전에는 값 없음)
     private LocalDateTime lastLoginAt;
 
     // NOT NULL, updatable=false: 최초 저장 후 변경 불가
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
+
+    // 로그인 시 Refresh Token 저장 및 마지막 로그인 시각 갱신
+    public void login(String refreshToken) {
+        this.refreshToken = refreshToken;
+        this.lastLoginAt = LocalDateTime.now();
+    }
+
+    // 로그아웃 시 Refresh Token을 NULL로 초기화하여 재사용 차단
+    public void logout() {
+        this.refreshToken = null;
+    }
 
     // DB에 INSERT 되기 직전에 자동 실행되는 메서드
     @PrePersist
