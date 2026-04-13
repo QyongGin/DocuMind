@@ -71,4 +71,25 @@ public class Document {
     protected void onCreate() {
         this.createdAt = LocalDateTime.now();
     }
+
+    // 정적 팩토리 메서드. 외부에서 new Document() 대신 이 메서드로 생성
+    public static Document create(User uploadedBy, Category category,
+                                  String fileName, String originalName,
+                                  Long fileSize, String mimeType) {
+        Document doc = new Document();
+        doc.uploadedBy = uploadedBy;
+        doc.category = category;
+        doc.fileName = fileName;
+        doc.originalName = originalName;
+        doc.fileSize = fileSize;
+        doc.mimeType = mimeType;
+        doc.chunkCount = 0;
+        doc.isActive = true;
+        return doc;
+    }
+
+    // FastAPI 처리 완료 후 청크 수를 업데이트하는 메서드
+    public void updateChunkCount(int chunkCount) {
+        this.chunkCount = chunkCount;
+    }
 }

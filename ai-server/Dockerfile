@@ -1,4 +1,10 @@
 FROM python:3.12-slim
+
+# opendataloader-pdf가 내부적으로 Java CLI를 사용하므로 JRE 설치 필요
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends default-jre-headless && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

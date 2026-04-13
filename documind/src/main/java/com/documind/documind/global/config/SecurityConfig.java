@@ -7,6 +7,7 @@ import com.documind.documind.global.auth.JwtProvider;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -40,6 +41,9 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                     // 관리자 전용 경로: ADMIN 권한 필요
                     .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                    // 문서 업로드·삭제는 ADMIN 전용
+                    .requestMatchers(HttpMethod.POST, "/api/documents").hasRole("ADMIN")
+                    .requestMatchers(HttpMethod.DELETE, "/api/documents/**").hasRole("ADMIN")
                     // 로그인 엔드포인트: 인증 없이 접근 허용
                     .requestMatchers("/api/auth/login").permitAll()
                     // 나머지: USER는 로그인 불필요이므로 전체 허용
