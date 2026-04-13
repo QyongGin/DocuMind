@@ -5,7 +5,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.userdetails.UserDetails;
+
 import org.springframework.web.bind.annotation.*;
 
 // 인증 관련 엔드포인트를 처리하는 컨트롤러
@@ -27,10 +27,10 @@ public class AuthController {
     }
 
     // POST /api/auth/logout - 로그아웃
-    // @AuthenticationPrincipal: SecurityContext에서 현재 인증된 사용자 정보를 주입
+    // @AuthenticationPrincipal: SecurityContext에 저장된 principal을 주입. 필터에서 String(username)으로 저장했으므로 String으로 받는다
     @PostMapping("/logout")
-    public ResponseEntity<ApiResponse<Void>> logout(@AuthenticationPrincipal UserDetails userDetails) {
-        authService.logout(userDetails.getUsername());
+    public ResponseEntity<ApiResponse<Void>> logout(@AuthenticationPrincipal String username) {
+        authService.logout(username);
         return ResponseEntity.ok(ApiResponse.success("로그아웃 되었습니다."));
     }
 

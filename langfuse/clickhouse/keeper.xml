@@ -1,0 +1,51 @@
+<clickhouse>
+    <!--
+        ClickHouse Keeper: ZooKeeper를 대체하는 내장 합의 모듈.
+        단일 노드에서 ReplicatedMergeTree 테이블을 사용하려면 반드시 활성화해야 한다.
+        Langfuse v3는 ON CLUSTER default 구문으로 테이블을 생성하므로 이 설정이 필수다.
+    -->
+    <keeper_server>
+        <tcp_port>9181</tcp_port>
+        <server_id>1</server_id>
+        <log_storage_path>/var/lib/clickhouse/coordination/log</log_storage_path>
+        <snapshot_storage_path>/var/lib/clickhouse/coordination/snapshots</snapshot_storage_path>
+        <coordination_settings>
+            <operation_timeout_ms>10000</operation_timeout_ms>
+            <session_timeout_ms>30000</session_timeout_ms>
+            <raft_logs_level>warning</raft_logs_level>
+        </coordination_settings>
+        <raft_configuration>
+            <server>
+                <id>1</id>
+                <hostname>localhost</hostname>
+                <port>9234</port>
+            </server>
+        </raft_configuration>
+    </keeper_server>
+
+    <!-- ZooKeeper 연결 정보: Keeper가 내장돼 있으므로 localhost를 가리킨다 -->
+    <zookeeper>
+        <node>
+            <host>localhost</host>
+            <port>9181</port>
+        </node>
+    </zookeeper>
+
+    <!-- 클러스터 정의: Langfuse가 ON CLUSTER default로 테이블을 생성할 때 이 클러스터를 찾는다 -->
+    <remote_servers>
+        <default>
+            <shard>
+                <replica>
+                    <host>langfuse-clickhouse</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+        </default>
+    </remote_servers>
+
+    <!-- 복제 테이블 경로에 삽입되는 매크로 값 -->
+    <macros>
+        <shard>01</shard>
+        <replica>01</replica>
+    </macros>
+</clickhouse>

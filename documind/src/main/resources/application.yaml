@@ -1,6 +1,12 @@
 spring:
   application:
     name: documind
+  servlet:
+    multipart:
+      # 단일 파일 최대 크기. PDF 문서 업로드 대응
+      max-file-size: 50MB
+      # 요청 전체 최대 크기
+      max-request-size: 50MB
   datasource:
     url: jdbc:mysql://localhost:3306/documind
     username: root
@@ -8,10 +14,14 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: validate
+      ddl-auto: update
     show-sql: true
 server:
   port: 8080
+
+fastapi:
+  # FastAPI 서버 URL. Docker에서는 환경변수 FASTAPI_URL로 오버라이드
+  url: http://localhost:8000
 
 jwt:
   # HS256 최소 256bit(32자 이상) 필요. 운영 환경에서는 환경변수로 교체
