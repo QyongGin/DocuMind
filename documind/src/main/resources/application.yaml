@@ -3,10 +3,9 @@ spring:
     name: documind
   servlet:
     multipart:
-      # 단일 파일 최대 크기. PDF 문서 업로드 대응
-      max-file-size: 50MB
-      # 요청 전체 최대 크기
-      max-request-size: 50MB
+      # 512MB: MVP 개발 중 파일 크기 제한 없이 테스트. 운영 배포 시 정책에 맞게 조정
+      max-file-size: 512MB
+      max-request-size: 512MB
   datasource:
     url: jdbc:mysql://localhost:3306/documind
     username: root
@@ -18,6 +17,11 @@ spring:
     show-sql: true
 server:
   port: 8080
+  tomcat:
+    # -1: Tomcat 레벨 POST 크기 제한 비활성화
+    max-http-form-post-size: -1
+    # Tomcat 11 기본값 512바이트를 초과하는 긴 Content-Type(DOCX 등) 처리를 위해 증가
+    max-part-header-size: 4096
 
 fastapi:
   # FastAPI 서버 URL. Docker에서는 환경변수 FASTAPI_URL로 오버라이드

@@ -28,6 +28,8 @@ dependencies {
 	implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
 	runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
 	runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
+	// JSON 직렬화/역직렬화. jjwt-jackson이 runtimeOnly라 컴파일 타임에 Jackson이 없으므로 명시적으로 추가
+	implementation 'com.fasterxml.jackson.core:jackson-databind'
 	annotationProcessor 'org.projectlombok:lombok'
 	testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-security-test'

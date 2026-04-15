@@ -56,4 +56,13 @@ public class ChatSession {
     protected void onUpdate() {
         this.updatedAt = LocalDateTime.now();
     }
+
+    // 세션 생성 팩토리 메서드. title은 첫 질문 앞 50자를 잘라 전달
+    public static ChatSession create(User user, String sessionKey, String title) {
+        ChatSession session = new ChatSession();
+        session.user = user;
+        session.sessionKey = sessionKey;
+        session.title = title;
+        return session;
+    }
 }

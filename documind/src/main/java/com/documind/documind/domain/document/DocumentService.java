@@ -24,9 +24,12 @@ public class DocumentService {
     private final UserRepository userRepository;
     private final FastApiClient fastApiClient;
 
-    // 허용 MIME 타입 목록. PDF만 허용 (추후 docx, md 추가 예정)
+    // 허용 MIME 타입 목록. FastAPI 파서가 지원하는 형식과 동기화
     private static final List<String> ALLOWED_MIME_TYPES = Arrays.asList(
-            "application/pdf"
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // DOCX
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation", // PPTX
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" // XLSX
     );
 
     @Transactional

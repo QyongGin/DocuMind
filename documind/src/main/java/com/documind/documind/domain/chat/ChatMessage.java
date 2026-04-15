@@ -47,4 +47,18 @@ public class ChatMessage {
     protected void onCreate() {
         this.createdAt = LocalDateTime.now();
     }
+
+    // 메시지 생성 팩토리 메서드. answer/sourceDocs는 LLM 응답 후 complete()로 채운다
+    public static ChatMessage create(ChatSession chatSession, String question) {
+        ChatMessage message = new ChatMessage();
+        message.chatSession = chatSession;
+        message.question = question;
+        return message;
+    }
+
+    // LLM 응답 수신 후 answer와 sourceDocs를 저장. sourceDocs는 JSON 직렬화 문자열
+    public void complete(String answer, String sourceDocs) {
+        this.answer = answer;
+        this.sourceDocs = sourceDocs;
+    }
 }
