@@ -40,6 +40,7 @@ jsonschema-specifications==2025.9.1
 kubernetes==35.0.0
 langchain==1.2.13
 langfuse==4.2.0
+markitdown[all]==0.1.5
 langchain-opendataloader-pdf==2.0.0
 opendataloader-pdf==2.2.1
 langchain-classic==1.0.3
