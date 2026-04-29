@@ -259,8 +259,12 @@ async def query_document(request: QueryRequest):
         include=["documents", "metadatas", "distances"]
     )
 
-    docs = results["documents"][0]
-    metadatas = results["metadatas"][0]
+    # ChromaDB 컬렉션이 비어있거나 결과가 없으면 빈 리스트 반환
+    docs = results["documents"][0] if results["documents"] else []
+    metadatas = results["metadatas"][0] if results["metadatas"] else []
+
+    if not docs:
+        return {"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
 
     # 2. 검색된 청크를 하나의 컨텍스트 문자열로 합침
     context = "\n\n".join(docs)
@@ -277,8 +281,8 @@ async def query_document(request: QueryRequest):
 [답변]
 """
 
-    # 4. EXAONE LLM 호출. OllamaLLM.invoke()는 동기 함수이므로 await 없이 호출
-    answer = llm.invoke(prompt)
+    # 4. EXAONE LLM 비동기 호출. async 핸들러에서 ainvoke()로 이벤트 루프 블로킹 방지
+    answer = await llm.ainvoke(prompt)
 
     # 5. 출처 목록 구성: document_id, source(파일명), 청크 미리보기, 헤더 메타데이터 포함
     sources = []

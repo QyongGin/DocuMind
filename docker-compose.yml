@@ -4,6 +4,7 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
+      TZ: Asia/Seoul
     ports:
       - "3306:3306"
     volumes:
@@ -34,6 +35,8 @@ services:
       - "8001:8000"
     volumes:
       - chroma_data:/chroma/chroma
+    environment:
+      TZ: Asia/Seoul
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8000'"]
       interval: 15s

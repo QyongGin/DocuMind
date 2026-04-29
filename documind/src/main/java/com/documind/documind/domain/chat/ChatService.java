@@ -5,11 +5,13 @@ import com.documind.documind.global.infra.fastapi.FastApiQueryResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 // 질의응답 비즈니스 로직. 세션 관리 → FastAPI 호출 → 메시지 저장을 담당
 // @RequiredArgsConstructor: final 필드를 인자로 받는 생성자를 자동 생성 (Lombok)
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ChatService {
@@ -17,9 +19,8 @@ public class ChatService {
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
     private final FastApiClient fastApiClient;
-    // ObjectMapper는 스레드 안전하므로 static으로 선언해 재사용
-    // spring-boot-starter-webmvc가 Jackson 자동 설정을 포함하지 않아 빈 주입 불가
-    private static final ObjectMapper objectMapper = new ObjectMapper();
+    // Spring Boot가 자동 설정한 ObjectMapper 빈을 주입해 Jackson 전역 설정을 공유
+    private final ObjectMapper objectMapper;
 
     // 기본 Top-K 값. FastAPI 기본값과 동기화
     private static final int DEFAULT_TOP_K = 5;
@@ -41,9 +42,8 @@ public class ChatService {
         // 4. sources 리스트를 JSON 문자열로 직렬화해 chat_messages.source_docs에 저장
         String sourceDocsJson = serializeSources(fastApiResponse);
 
-        // 5. 메시지에 answer와 sourceDocs를 채워 DB에 반영
+        // 5. 메시지에 answer와 sourceDocs를 채움. @Transactional dirty checking으로 자동 UPDATE
         message.complete(fastApiResponse.getAnswer(), sourceDocsJson);
-        chatMessageRepository.save(message);
 
         return ChatResponse.builder()
                 .sessionId(session.getId())
@@ -79,6 +79,7 @@ public class ChatService {
         try {
             return objectMapper.writeValueAsString(response.getSources());
         } catch (JsonProcessingException e) {
+            log.error("sources 직렬화 실패. 빈 배열로 폴백합니다.", e);
             return "[]";
         }
     }

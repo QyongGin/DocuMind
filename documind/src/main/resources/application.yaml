@@ -18,8 +18,8 @@ spring:
 server:
   port: 8080
   tomcat:
-    # -1: Tomcat 레벨 POST 크기 제한 비활성화
-    max-http-form-post-size: -1
+    # 512MB (바이트): Spring multipart 설정과 동일하게 맞춰 Tomcat 레벨 DoS 방어
+    max-http-form-post-size: 536870912
     # Tomcat 11 기본값 512바이트를 초과하는 긴 Content-Type(DOCX 등) 처리를 위해 증가
     max-part-header-size: 4096
 

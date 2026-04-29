@@ -7,9 +7,11 @@ import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -26,7 +28,11 @@ public class FastApiClient {
 
     // application.yaml의 fastapi.url 값을 주입. Docker에서는 환경변수 FASTAPI_URL로 오버라이드
     public FastApiClient(@Value("${fastapi.url}") String baseUrl) {
-        this.restTemplate = new RestTemplate();
+        // LLM 추론이 길어질 수 있으므로 readTimeout을 120초로 설정. connectTimeout은 서버 다운 감지용 5초
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5_000);
+        factory.setReadTimeout(120_000);
+        this.restTemplate = new RestTemplate(factory);
         this.baseUrl = baseUrl;
     }
 
@@ -79,13 +85,16 @@ public class FastApiClient {
 
         HttpEntity<FastApiQueryRequest> requestEntity = new HttpEntity<>(queryRequest, headers);
 
-        FastApiQueryResponse response = restTemplate.postForObject(
-                baseUrl + "/query",
-                requestEntity,
-                FastApiQueryResponse.class
-        );
-
-        // FastAPI 응답이 null인 경우 명시적 예외로 변환
-        return Objects.requireNonNull(response, "FastAPI /query 응답이 null입니다.");
+        try {
+            FastApiQueryResponse response = restTemplate.postForObject(
+                    baseUrl + "/query",
+                    requestEntity,
+                    FastApiQueryResponse.class
+            );
+            // FastAPI 응답이 null인 경우 명시적 예외로 변환
+            return Objects.requireNonNull(response, "FastAPI /query 응답이 null입니다.");
+        } catch (RestClientException e) {
+            throw new CustomException(ErrorCode.FASTAPI_QUERY_FAILED);
+        }
     }
 }
