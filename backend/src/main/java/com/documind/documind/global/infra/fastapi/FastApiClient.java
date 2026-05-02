@@ -2,9 +2,10 @@ package com.documind.documind.global.infra.fastapi;
 
 import com.documind.documind.global.exception.CustomException;
 import com.documind.documind.global.exception.ErrorCode;
-import org.springframework.core.ParameterizedTypeReference;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.http.codec.ServerSentEvent;
@@ -18,6 +19,7 @@ import java.time.Duration;
 import java.util.Objects;
 
 // FastAPI 서버와 통신하는 HTTP 클라이언트
+@Slf4j
 // @Component: 스프링 빈으로 등록
 @Component
 public class FastApiClient {
@@ -56,6 +58,7 @@ public class FastApiClient {
                     .block(responseTimeout);
             return Objects.requireNonNull(response, "FastAPI /documents 응답이 null입니다.");
         } catch (RuntimeException e) {
+            log.warn("FastAPI /documents 호출 실패. documentId={}", documentId, e);
             throw new CustomException(ErrorCode.FASTAPI_UPLOAD_FAILED);
         }
     }
@@ -78,6 +81,7 @@ public class FastApiClient {
             // FastAPI 응답이 null인 경우 명시적 예외로 변환
             return Objects.requireNonNull(response, "FastAPI /query 응답이 null입니다.");
         } catch (RuntimeException e) {
+            log.warn("FastAPI /query 호출 실패. topK={}", topK, e);
             throw new CustomException(ErrorCode.FASTAPI_QUERY_FAILED);
         }
     }
