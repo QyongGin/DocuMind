@@ -16,6 +16,11 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.List;
 
 // Spring Security 전역 설정 클래스
 // @Configuration: 스프링 설정 클래스임을 선언
@@ -32,6 +37,8 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
+            // EventSource(SSE)는 브라우저가 CORS 요청으로 전송하므로 반드시 CORS 설정이 선행되어야 한다
+            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             // REST API는 CSRF 공격 대상이 아니므로 비활성화
             .csrf(AbstractHttpConfigurer::disable)
             // JWT 사용으로 세션이 필요 없으므로 STATELESS로 설정
@@ -61,6 +68,20 @@ public class SecurityConfig {
             );
 
         return http.build();
+    }
+
+    // Vite dev server(5173), Docker nginx(80), nginx 기본 포트(80)에서의 브라우저 요청 허용
+    @Bean
+    CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(List.of("http://localhost:5173", "http://localhost:80", "http://localhost"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("*"));
+        // EventSource(SSE) 쿠키 기반 세션 추적을 위해 credentials 허용
+        config.setAllowCredentials(true);
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
     }
 
     // BCrypt 해시 알고리즘으로 비밀번호를 암호화. 스프링 빈으로 등록해 어디서든 주입 가능

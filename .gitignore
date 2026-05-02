@@ -1,7 +1,9 @@
 # ───────────────────────────────────────
-# Claude Code 관련
+# 에이전트 지시어 / 동적 상태 (로컬 전용)
 # ───────────────────────────────────────
+AGENTS.md
 CLAUDE.md
+memory-bank/
 .claude/
 
 # ───────────────────────────────────────
@@ -33,11 +35,11 @@ frontend/.env.local
 # ───────────────────────────────────────
 # Spring Boot / Java / Gradle (backend)
 # ───────────────────────────────────────
-documind/.gradle/
-documind/build/
-documind/out/
-documind/.idea/
-documind/**/*.class
+backend/.gradle/
+backend/build/
+backend/out/
+backend/.idea/
+backend/**/*.class
 *.jar
 *.war
 
