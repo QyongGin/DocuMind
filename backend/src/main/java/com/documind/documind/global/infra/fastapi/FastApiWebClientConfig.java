@@ -17,16 +17,39 @@ public class FastApiWebClientConfig {
 
     // @Bean: FastAPI 전용 WebClient를 스프링 빈으로 등록
     @Bean
-    public WebClient fastApiWebClient(
+    public WebClient fastApiBlockingWebClient(
             @Value("${fastapi.url}") String baseUrl,
             @Value("${fastapi.connect-timeout:5s}") Duration connectTimeout,
             @Value("${fastapi.response-timeout:180s}") Duration responseTimeout
     ) {
-        HttpClient httpClient = HttpClient.create()
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, Math.toIntExact(connectTimeout.toMillis()))
-                // 임베딩 모델 로드 + ChromaDB 검색 + EXAONE 첫 토큰 생성 시간을 고려해 설정값으로 제어
+        HttpClient httpClient = createBaseHttpClient(connectTimeout)
+                // 문서 업로드와 일반 질의응답은 응답 완료 시간을 제한해 장애를 빠르게 감지
                 .responseTimeout(responseTimeout);
 
+        return createWebClient(baseUrl, httpClient);
+    }
+
+    // @Bean: FastAPI SSE 스트리밍 전용 WebClient를 스프링 빈으로 등록
+    @Bean
+    public WebClient fastApiStreamingWebClient(
+            @Value("${fastapi.url}") String baseUrl,
+            @Value("${fastapi.connect-timeout:5s}") Duration connectTimeout,
+            @Value("${fastapi.stream-timeout:0s}") Duration streamTimeout
+    ) {
+        HttpClient httpClient = createBaseHttpClient(connectTimeout);
+        if (!streamTimeout.isZero() && !streamTimeout.isNegative()) {
+            httpClient = httpClient.responseTimeout(streamTimeout);
+        }
+
+        return createWebClient(baseUrl, httpClient);
+    }
+
+    private HttpClient createBaseHttpClient(Duration connectTimeout) {
+        return HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, Math.toIntExact(connectTimeout.toMillis()));
+    }
+
+    private WebClient createWebClient(String baseUrl, HttpClient httpClient) {
         return WebClient.builder()
                 .baseUrl(baseUrl)
                 .clientConnector(new ReactorClientHttpConnector(httpClient))

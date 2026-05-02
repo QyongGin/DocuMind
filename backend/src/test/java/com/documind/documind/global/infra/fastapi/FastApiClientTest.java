@@ -1,5 +1,7 @@
 package com.documind.documind.global.infra.fastapi;
 
+import com.documind.documind.global.exception.CustomException;
+import com.documind.documind.global.exception.ErrorCode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -18,11 +20,13 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FastApiClientTest {
 
     private HttpServer server;
+    private WebClient webClient;
     private FastApiClient fastApiClient;
 
     @BeforeEach
@@ -31,9 +35,10 @@ class FastApiClientTest {
         server.start();
 
         String baseUrl = "http://localhost:" + server.getAddress().getPort();
-        fastApiClient = new FastApiClient(WebClient.builder()
+        webClient = WebClient.builder()
                 .baseUrl(baseUrl)
-                .build(), Duration.ofSeconds(3));
+                .build();
+        fastApiClient = new FastApiClient(webClient, webClient, Duration.ofSeconds(3));
     }
 
     @AfterEach
@@ -89,6 +94,74 @@ class FastApiClientTest {
     }
 
     @Test
+    void uploadDocumentWrapsServerError() {
+        server.createContext("/documents", exchange -> {
+            exchange.sendResponseHeaders(500, -1);
+            exchange.close();
+        });
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "sample.pdf",
+                MediaType.APPLICATION_PDF_VALUE,
+                "pdf-content".getBytes(StandardCharsets.UTF_8)
+        );
+
+        CustomException exception = assertThrows(CustomException.class,
+                () -> fastApiClient.uploadDocument(file, 7L));
+
+        assertEquals(ErrorCode.FASTAPI_UPLOAD_FAILED, exception.getErrorCode());
+    }
+
+    @Test
+    void uploadDocumentWrapsTimeout() {
+        FastApiClient shortTimeoutClient = new FastApiClient(webClient, webClient, Duration.ofMillis(50));
+        server.createContext("/documents", exchange -> {
+            sleep(300);
+            sendJson(exchange, "{\"status\":\"success\",\"filename\":\"sample.pdf\",\"chunks\":3}");
+        });
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "sample.pdf",
+                MediaType.APPLICATION_PDF_VALUE,
+                "pdf-content".getBytes(StandardCharsets.UTF_8)
+        );
+
+        CustomException exception = assertThrows(CustomException.class,
+                () -> shortTimeoutClient.uploadDocument(file, 7L));
+
+        assertEquals(ErrorCode.FASTAPI_UPLOAD_FAILED, exception.getErrorCode());
+    }
+
+    @Test
+    void queryWrapsServerError() {
+        server.createContext("/query", exchange -> {
+            exchange.sendResponseHeaders(500, -1);
+            exchange.close();
+        });
+
+        CustomException exception = assertThrows(CustomException.class,
+                () -> fastApiClient.query("질문", 5));
+
+        assertEquals(ErrorCode.FASTAPI_QUERY_FAILED, exception.getErrorCode());
+    }
+
+    @Test
+    void queryWrapsTimeout() {
+        FastApiClient shortTimeoutClient = new FastApiClient(webClient, webClient, Duration.ofMillis(50));
+        server.createContext("/query", exchange -> {
+            sleep(300);
+            sendJson(exchange, "{\"answer\":\"답변\",\"sources\":[]}");
+        });
+
+        CustomException exception = assertThrows(CustomException.class,
+                () -> shortTimeoutClient.query("질문", 5));
+
+        assertEquals(ErrorCode.FASTAPI_QUERY_FAILED, exception.getErrorCode());
+    }
+
+    @Test
     void streamQueryReadsSseDataEvents() {
         AtomicReference<String> contentType = new AtomicReference<>();
         AtomicReference<String> requestBody = new AtomicReference<>();
@@ -128,5 +201,14 @@ class FastApiClientTest {
         exchange.sendResponseHeaders(200, response.length);
         exchange.getResponseBody().write(response);
         exchange.close();
+    }
+
+    private void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 }

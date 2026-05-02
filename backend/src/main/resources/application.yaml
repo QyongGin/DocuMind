@@ -30,6 +30,8 @@ fastapi:
   connect-timeout: 5s
   # FastAPI 응답 타임아웃. 모델 cold start와 첫 토큰 생성 시간을 고려해 설정
   response-timeout: 180s
+  # SSE 스트리밍 응답 타임아웃. 0s는 스트림 중간 idle gap으로 끊기지 않도록 Reactor Netty responseTimeout 미설정
+  stream-timeout: 0s
 
 jwt:
   # HS256 최소 256bit(32자 이상) 필요. 운영 환경에서는 환경변수로 교체
