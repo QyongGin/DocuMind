@@ -22,6 +22,11 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-security'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	// WebClient SSE 스트림 소비용. Spring MVC와 공존 가능하며 WebClient 빈만 사용
+	implementation 'org.springframework.boot:spring-boot-starter-webflux'
+	implementation 'com.fasterxml.jackson.core:jackson-databind'
+	// JavaTimeModule: LocalDateTime 등 Java 8 날짜 타입 JSON 직렬화 지원
+	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
 	compileOnly 'org.projectlombok:lombok'
 	runtimeOnly 'com.mysql:mysql-connector-j'
 	// JWT 토큰 생성/검증 라이브러리

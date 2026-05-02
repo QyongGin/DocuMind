@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_opendataloader_pdf import OpenDataLoaderPDFLoader
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
@@ -10,6 +10,8 @@ import chromadb
 import tempfile
 import os
 import re
+import json
+import asyncio
 from langfuse_callback import get_langfuse_handler
 
 app = FastAPI(title="DocuMind AI Server", version="1.0.0")
@@ -209,9 +211,6 @@ async def upload_document(
     file: UploadFile = File(...),
     document_id: int = Form(None)
 ):
-    import logging
-    logging.warning(f"[DEBUG] filename={file.filename}, content_type={file.content_type}, document_id={document_id}")
-
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -242,49 +241,38 @@ class QueryRequest(BaseModel):
     top_k: int = 5  # 검색할 유사 청크 수. 기본값 5
 
 
-@app.post("/query")
-async def query_document(request: QueryRequest):
+def _prepare_query(question: str, top_k: int) -> tuple[str | None, list]:
     """
-    RAG 질의응답 파이프라인:
-    1. 질문 임베딩 → ChromaDB Top-K 유사도 검색
-    2. 검색된 청크를 컨텍스트로 프롬프트 조합
-    3. EXAONE (Ollama) 답변 생성
-    4. 답변 + 출처 반환
+    질문 임베딩 → ChromaDB 검색 → 프롬프트 + 출처 조합.
+    문서가 없으면 (None, []) 반환. 호출자가 빈 응답 처리를 담당한다.
     """
-    # 1. 질문 임베딩 후 ChromaDB에서 유사 청크 검색
-    question_vector = embeddings.embed_query(request.question)
+    question_vector = embeddings.embed_query(question)
     results = collection.query(
         query_embeddings=[question_vector],
-        n_results=request.top_k,
+        n_results=top_k,
         include=["documents", "metadatas", "distances"]
     )
 
-    # ChromaDB 컬렉션이 비어있거나 결과가 없으면 빈 리스트 반환
     docs = results["documents"][0] if results["documents"] else []
     metadatas = results["metadatas"][0] if results["metadatas"] else []
 
     if not docs:
-        return {"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
+        return None, []
 
-    # 2. 검색된 청크를 하나의 컨텍스트 문자열로 합침
     context = "\n\n".join(docs)
-
-    # 3. 프롬프트 조합: 문서 외 내용 답변 방지를 위해 명시적 제약 포함
+    # 프롬프트 조합: 문서 외 내용 답변 방지를 위해 명시적 제약 포함
     prompt = f"""주어진 문서를 참고하여 질문에 답변하세요. 문서에 없는 내용은 "관련 내용을 문서에서 찾을 수 없습니다."라고 답하세요.
 
 [문서]
 {context}
 
 [질문]
-{request.question}
+{question}
 
 [답변]
 """
 
-    # 4. EXAONE LLM 비동기 호출. async 핸들러에서 ainvoke()로 이벤트 루프 블로킹 방지
-    answer = await llm.ainvoke(prompt)
-
-    # 5. 출처 목록 구성: document_id, source(파일명), 청크 미리보기, 헤더 메타데이터 포함
+    # 출처 목록 구성: document_id, source(파일명), 청크 미리보기, 헤더 메타데이터 포함
     sources = []
     for doc, meta in zip(docs, metadatas):
         source: dict = {
@@ -299,7 +287,67 @@ async def query_document(request: QueryRequest):
                 source[k] = v
         sources.append(source)
 
-    return {
-        "answer": answer,
-        "sources": sources
-    }
+    return prompt, sources
+
+
+@app.post("/query")
+async def query_document(request: QueryRequest):
+    """
+    RAG 질의응답 파이프라인 (동기):
+    1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query)
+    2. EXAONE LLM 비동기 호출 → 답변 반환
+    """
+    prompt, sources = _prepare_query(request.question, request.top_k)
+
+    if prompt is None:
+        return {"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
+
+    # async 핸들러에서 ainvoke()로 이벤트 루프 블로킹 방지
+    answer = await llm.ainvoke(prompt)
+
+    return {"answer": answer, "sources": sources}
+
+
+@app.post("/query/stream")
+async def query_stream(request: QueryRequest):
+    """
+    SSE 스트리밍 RAG 파이프라인:
+    1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query)
+    2. EXAONE 토큰 스트리밍 → SSE data 이벤트 전송
+    3. 완료 시 sources 포함 done 이벤트 전송
+    클라이언트 연결 종료 시 asyncio.CancelledError로 자동 중단된다.
+    """
+    prompt, sources = _prepare_query(request.question, request.top_k)
+
+    if prompt is None:
+        async def empty_stream():
+            payload = json.dumps(
+                {"done": True, "answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []},
+                ensure_ascii=False
+            )
+            yield f"data: {payload}\n\n"
+
+        return StreamingResponse(
+            empty_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+        )
+
+    async def token_stream():
+        try:
+            async for chunk in llm.astream(prompt):
+                if chunk:
+                    yield f"data: {json.dumps({'token': chunk}, ensure_ascii=False)}\n\n"
+            # 정상 완료 시 출처 포함 done 이벤트 전송
+            yield f"data: {json.dumps({'done': True, 'sources': sources}, ensure_ascii=False)}\n\n"
+        except asyncio.CancelledError:
+            # 클라이언트가 연결을 끊은 정상적인 중단. 재전파해 FastAPI가 정리하도록 한다
+            raise
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        token_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )

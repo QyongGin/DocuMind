@@ -30,7 +30,7 @@ services:
       start_period: 30s
 
   chromadb:
-    image: chromadb/chroma:latest
+    image: chromadb/chroma:1.0.0
     ports:
       - "8001:8000"
     volumes:
@@ -64,7 +64,7 @@ services:
       TZ: Asia/Seoul
 
   backend:
-    build: ./documind
+    build: ./backend
     ports:
       - "8080:8080"
     depends_on:
