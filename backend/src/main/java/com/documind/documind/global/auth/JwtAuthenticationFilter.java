@@ -31,6 +31,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (token != null && jwtProvider.validateToken(token)) {
             String username = jwtProvider.getUsername(token);
             String role = jwtProvider.getRole(token);
+            Long userId = jwtProvider.getUserId(token);
 
             // UsernamePasswordAuthenticationToken: Spring Security의 인증 객체
             UsernamePasswordAuthenticationToken authentication =
@@ -39,6 +40,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                             null,
                             List.of(new SimpleGrantedAuthority("ROLE_" + role))
                     );
+            // details에 userId를 저장해 컨트롤러에서 DB 조회 없이 소유권 검증에 사용
+            authentication.setDetails(userId);
 
             SecurityContextHolder.getContext().setAuthentication(authentication);
         }

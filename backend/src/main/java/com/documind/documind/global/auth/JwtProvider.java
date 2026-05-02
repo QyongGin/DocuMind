@@ -34,12 +34,13 @@ public class JwtProvider {
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 
-    // username과 role을 담아 JWT를 생성
-    public String generateToken(String username, String role) {
+    // username, role, userId를 담아 JWT를 생성. userId는 채팅 세션 소유권 검증에 사용
+    public String generateToken(String username, String role, Long userId) {
         Date now = new Date();
         return Jwts.builder()
                 .subject(username)
                 .claim("role", role)
+                .claim("userId", userId)
                 .issuedAt(now)
                 .expiration(new Date(now.getTime() + expiration))
                 .signWith(key)
@@ -65,6 +66,11 @@ public class JwtProvider {
     // JWT에서 role 클레임을 추출
     public String getRole(String token) {
         return parseClaims(token).get("role", String.class);
+    }
+
+    // JWT에서 userId 클레임을 추출. DB 조회 없이 채팅 세션 소유권 검증에 사용
+    public Long getUserId(String token) {
+        return parseClaims(token).get("userId", Long.class);
     }
 
     // JWT 유효성 검증. 만료되거나 서명이 잘못된 경우 false 반환
