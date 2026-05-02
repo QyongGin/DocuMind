@@ -7,12 +7,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
 import java.io.IOException;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 // 질의응답 비즈니스 로직. 세션 관리 → FastAPI 호출 → 메시지 저장을 담당
@@ -35,7 +37,7 @@ public class ChatService {
     public ChatResponse chat(ChatRequest request) {
         // 1. 세션 조회 또는 신규 생성
         // sessionKey가 있으면 기존 세션 재사용, 없거나 DB에 없으면 새 세션 생성
-        ChatSession session = resolveSession(request);
+        ChatSession session = getOrCreateSession(request.getQuestion(), request.getSessionKey());
 
         // 2. 메시지를 question만 먼저 저장 (answer는 LLM 응답 후 채움)
         ChatMessage message = ChatMessage.create(session, request.getQuestion());
@@ -59,22 +61,24 @@ public class ChatService {
                 .build();
     }
 
-    // sessionKey로 기존 세션을 찾거나, 없으면 새 세션을 생성해 반환
-    private ChatSession resolveSession(ChatRequest request) {
-        if (request.getSessionKey() != null) {
-            return chatSessionRepository.findBySessionKey(request.getSessionKey())
-                    .orElseGet(() -> createSession(request));
+    // sessionKey로 기존 세션을 찾거나, 없으면 새 세션을 생성해 반환.
+    // 동일 sessionKey 동시 요청 시 unique 충돌이 발생할 수 있으므로
+    // DataIntegrityViolationException을 잡아 먼저 저장된 세션을 재조회한다.
+    private ChatSession getOrCreateSession(String question, String sessionKey) {
+        if (sessionKey != null) {
+            Optional<ChatSession> existing = chatSessionRepository.findBySessionKey(sessionKey);
+            if (existing.isPresent()) {
+                return existing.get();
+            }
         }
-        return createSession(request);
-    }
-
-    // 새 채팅 세션 생성. 제목은 첫 질문 앞 50자로 설정
-    private ChatSession createSession(ChatRequest request) {
-        String title = request.getQuestion().length() > 50
-                ? request.getQuestion().substring(0, 50)
-                : request.getQuestion();
-        ChatSession session = ChatSession.create(null, request.getSessionKey(), title);
-        return chatSessionRepository.save(session);
+        String title = question.length() > 50 ? question.substring(0, 50) : question;
+        try {
+            return chatSessionRepository.save(ChatSession.create(null, sessionKey, title));
+        } catch (DataIntegrityViolationException e) {
+            // 동일 sessionKey로 동시 요청이 INSERT를 시도한 경우 먼저 저장된 세션을 반환
+            return chatSessionRepository.findBySessionKey(sessionKey)
+                    .orElseThrow(() -> e);
+        }
     }
 
     // sources 리스트를 JSON 문자열로 변환. 직렬화 실패 시 빈 배열 문자열로 폴백
@@ -99,7 +103,7 @@ public class ChatService {
         int resolvedTopK = topK != null ? topK : DEFAULT_TOP_K;
 
         // 세션 조회 또는 생성
-        ChatSession session = resolveStreamSession(question, sessionKey);
+        ChatSession session = getOrCreateSession(question, sessionKey);
 
         // question만 먼저 저장. answer는 스트리밍 완료 후 채움
         ChatMessage message = ChatMessage.create(session, question);
@@ -152,8 +156,6 @@ public class ChatService {
             // 원본 JSON을 그대로 전달해 React에서 추가 파싱 없이 사용 가능하도록 함
             emitter.send(SseEmitter.event().data(jsonData));
         } else if (node.has("done") && node.get("done").asBoolean()) {
-            // onCompletion이 정상 완료로 판단하도록 플래그 먼저 설정
-            normallyCompleted.set(true);
             String sourcesJson = node.has("sources")
                     ? objectMapper.writeValueAsString(node.get("sources"))
                     : "[]";
@@ -170,22 +172,14 @@ public class ChatService {
             });
 
             emitter.send(SseEmitter.event().data(jsonData));
+            // DB 저장과 SSE 전송이 모두 성공한 뒤에만 정상 완료로 표시.
+            // 이전에 이 플래그를 먼저 올리면 그 사이 예외 발생 시 onCompletion 폴백이 건너뛰어진다.
+            normallyCompleted.set(true);
             emitter.complete();
         } else if (node.has("error")) {
             log.error("FastAPI 오류 이벤트: {}", node.get("error").asText());
             emitter.send(SseEmitter.event().data(jsonData));
             emitter.complete();
         }
-    }
-
-    // 스트리밍 전용 세션 조회·생성. String 파라미터를 직접 받아 ChatRequest 의존성을 제거
-    private ChatSession resolveStreamSession(String question, String sessionKey) {
-        String title = question.length() > 50 ? question.substring(0, 50) : question;
-        if (sessionKey != null) {
-            return chatSessionRepository.findBySessionKey(sessionKey)
-                    .orElseGet(() -> chatSessionRepository.save(
-                            ChatSession.create(null, sessionKey, title)));
-        }
-        return chatSessionRepository.save(ChatSession.create(null, null, title));
     }
 }

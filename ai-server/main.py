@@ -12,7 +12,10 @@ import os
 import re
 import json
 import asyncio
+import logging
 from langfuse_callback import get_langfuse_handler
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="DocuMind AI Server", version="1.0.0")
 
@@ -71,8 +74,7 @@ if os.getenv("LANGFUSE_SECRET_KEY"):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    import logging
-    logging.error(f"[422 DETAIL] {exc.errors()}")
+    logger.error(f"[422 DETAIL] {exc.errors()}")
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
@@ -297,7 +299,10 @@ async def query_document(request: QueryRequest):
     1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query)
     2. EXAONE LLM 비동기 호출 → 답변 반환
     """
-    prompt, sources = _prepare_query(request.question, request.top_k)
+    # _prepare_query는 embed_query·Chroma 조회가 모두 동기 블로킹이다.
+    # async 핸들러에서 직접 호출하면 이벤트 루프가 묶여 다른 요청이 대기하므로
+    # asyncio.to_thread()로 별도 스레드에서 실행한다.
+    prompt, sources = await asyncio.to_thread(_prepare_query, request.question, request.top_k)
 
     if prompt is None:
         return {"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
@@ -317,7 +322,7 @@ async def query_stream(request: QueryRequest):
     3. 완료 시 sources 포함 done 이벤트 전송
     클라이언트 연결 종료 시 asyncio.CancelledError로 자동 중단된다.
     """
-    prompt, sources = _prepare_query(request.question, request.top_k)
+    prompt, sources = await asyncio.to_thread(_prepare_query, request.question, request.top_k)
 
     if prompt is None:
         async def empty_stream():
@@ -343,8 +348,11 @@ async def query_stream(request: QueryRequest):
         except asyncio.CancelledError:
             # 클라이언트가 연결을 끊은 정상적인 중단. 재전파해 FastAPI가 정리하도록 한다
             raise
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+        except Exception:
+            # str(e)를 그대로 내보내면 Ollama/Chroma 내부 오류가 브라우저에 노출된다.
+            # 상세 원인은 서버 로그에만 기록하고 클라이언트에는 고정 메시지만 전달한다.
+            logger.exception("SSE 스트리밍 중 오류 발생")
+            yield f"data: {json.dumps({'error': '응답 생성 중 오류가 발생했습니다.'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         token_stream(),
