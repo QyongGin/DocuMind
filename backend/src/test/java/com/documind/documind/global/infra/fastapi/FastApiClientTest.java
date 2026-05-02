@@ -33,7 +33,7 @@ class FastApiClientTest {
         String baseUrl = "http://localhost:" + server.getAddress().getPort();
         fastApiClient = new FastApiClient(WebClient.builder()
                 .baseUrl(baseUrl)
-                .build());
+                .build(), Duration.ofSeconds(3));
     }
 
     @AfterEach
@@ -90,8 +90,12 @@ class FastApiClientTest {
 
     @Test
     void streamQueryReadsSseDataEvents() {
+        AtomicReference<String> contentType = new AtomicReference<>();
+        AtomicReference<String> requestBody = new AtomicReference<>();
+
         server.createContext("/query/stream", exchange -> {
-            readBody(exchange);
+            contentType.set(exchange.getRequestHeaders().getFirst(HttpHeaders.CONTENT_TYPE));
+            requestBody.set(readBody(exchange));
             byte[] response = """
                     data: {"token":"안녕"}
 
@@ -109,6 +113,9 @@ class FastApiClientTest {
                 .block(Duration.ofSeconds(3));
 
         assertEquals(List.of("{\"token\":\"안녕\"}", "{\"done\":true,\"sources\":[]}"), events);
+        assertTrue(contentType.get().startsWith(MediaType.APPLICATION_JSON_VALUE));
+        assertTrue(requestBody.get().contains("\"question\":\"질문\""));
+        assertTrue(requestBody.get().contains("\"top_k\":5"));
     }
 
     private String readBody(HttpExchange exchange) throws IOException {

@@ -15,15 +15,17 @@ import java.time.Duration;
 @Configuration
 public class FastApiWebClientConfig {
 
-    public static final Duration RESPONSE_TIMEOUT = Duration.ofSeconds(180);
-
     // @Bean: FastAPI 전용 WebClient를 스프링 빈으로 등록
     @Bean
-    public WebClient fastApiWebClient(@Value("${fastapi.url}") String baseUrl) {
+    public WebClient fastApiWebClient(
+            @Value("${fastapi.url}") String baseUrl,
+            @Value("${fastapi.connect-timeout:5s}") Duration connectTimeout,
+            @Value("${fastapi.response-timeout:180s}") Duration responseTimeout
+    ) {
         HttpClient httpClient = HttpClient.create()
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5_000)
-                // 임베딩 모델 로드 + ChromaDB 검색 + EXAONE 첫 토큰 생성 시간을 고려해 180초로 설정
-                .responseTimeout(RESPONSE_TIMEOUT);
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, Math.toIntExact(connectTimeout.toMillis()))
+                // 임베딩 모델 로드 + ChromaDB 검색 + EXAONE 첫 토큰 생성 시간을 고려해 설정값으로 제어
+                .responseTimeout(responseTimeout);
 
         return WebClient.builder()
                 .baseUrl(baseUrl)

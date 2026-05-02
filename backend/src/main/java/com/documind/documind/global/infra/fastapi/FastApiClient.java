@@ -3,19 +3,17 @@ package com.documind.documind.global.infra.fastapi;
 import com.documind.documind.global.exception.CustomException;
 import com.documind.documind.global.exception.ErrorCode;
 import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.core.io.ByteArrayResource;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Component;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientException;
 import reactor.core.publisher.Flux;
 
-import java.io.IOException;
+import java.time.Duration;
 import java.util.Objects;
 
 // FastAPI 서버와 통신하는 HTTP 클라이언트
@@ -24,44 +22,36 @@ import java.util.Objects;
 public class FastApiClient {
 
     private final WebClient webClient;
+    private final Duration responseTimeout;
 
-    public FastApiClient(WebClient fastApiWebClient) {
+    public FastApiClient(
+            WebClient fastApiWebClient,
+            @Value("${fastapi.response-timeout:180s}") Duration responseTimeout
+    ) {
         this.webClient = fastApiWebClient;
+        this.responseTimeout = responseTimeout;
     }
 
     // PDF 파일과 document_id를 FastAPI에 전송해 청킹·임베딩·저장을 요청
     public FastApiUploadResponse uploadDocument(MultipartFile file, Long documentId) {
-        // WebClient multipart 전송. boundary는 BodyInserters가 자동 생성한다
-        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-
-        try {
-            byte[] bytes = file.getBytes();
-            // getFilename() 오버라이드: Content-Disposition의 filename 파라미터로 원본 파일명 전달
-            ByteArrayResource fileResource = new ByteArrayResource(bytes) {
-                @Override
-                public String getFilename() {
-                    return file.getOriginalFilename();
-                }
-            };
-            body.add("file", fileResource);
-        } catch (IOException e) {
-            throw new CustomException(ErrorCode.FILE_READ_FAILED);
-        }
-
-        // document_id는 String으로 추가: WebClient multipart writer가 문자열 파트로 직렬화
+        // MultipartBodyBuilder: multipart/form-data 파트를 생성하고 boundary는 WebClient가 자동 생성
+        MultipartBodyBuilder body = new MultipartBodyBuilder();
+        // MultipartFile#getResource(): 파일 전체를 힙에 올리지 않고 Resource로 전달
+        body.part("file", file.getResource())
+                .filename(Objects.requireNonNullElse(file.getOriginalFilename(), "upload"));
         // FastAPI Form 필드는 문자열로 수신 후 int로 자동 변환함
-        body.add("document_id", documentId.toString());
+        body.part("document_id", documentId.toString());
 
         try {
             FastApiUploadResponse response = webClient.post()
                     .uri("/documents")
                     .contentType(MediaType.MULTIPART_FORM_DATA)
-                    .body(BodyInserters.fromMultipartData(body))
+                    .body(BodyInserters.fromMultipartData(body.build()))
                     .retrieve()
                     .bodyToMono(FastApiUploadResponse.class)
-                    .block(FastApiWebClientConfig.RESPONSE_TIMEOUT);
+                    .block(responseTimeout);
             return Objects.requireNonNull(response, "FastAPI /documents 응답이 null입니다.");
-        } catch (WebClientException e) {
+        } catch (RuntimeException e) {
             throw new CustomException(ErrorCode.FASTAPI_UPLOAD_FAILED);
         }
     }
@@ -80,10 +70,10 @@ public class FastApiClient {
                     .bodyValue(queryRequest)
                     .retrieve()
                     .bodyToMono(FastApiQueryResponse.class)
-                    .block(FastApiWebClientConfig.RESPONSE_TIMEOUT);
+                    .block(responseTimeout);
             // FastAPI 응답이 null인 경우 명시적 예외로 변환
             return Objects.requireNonNull(response, "FastAPI /query 응답이 null입니다.");
-        } catch (WebClientException e) {
+        } catch (RuntimeException e) {
             throw new CustomException(ErrorCode.FASTAPI_QUERY_FAILED);
         }
     }
