@@ -26,6 +26,16 @@ server:
 fastapi:
   # FastAPI 서버 URL. Docker에서는 환경변수 FASTAPI_URL로 오버라이드
   url: http://localhost:8000
+  # FastAPI 연결 타임아웃. Docker 네트워크 장애나 서버 다운을 빠르게 감지
+  connect-timeout: 5s
+  # FastAPI 응답 타임아웃. 모델 cold start와 첫 토큰 생성 시간을 고려해 설정
+  response-timeout: 180s
+  # SSE 스트리밍 응답 타임아웃. 기본 5분, 더 긴 답변이 필요하면 환경변수 FASTAPI_STREAM_TIMEOUT으로 조정
+  stream-timeout: 5m
+
+chat:
+  # Spring MVC SseEmitter 타임아웃. 기본 5분, 더 긴 답변이 필요하면 환경변수 CHAT_SSE_EMITTER_TIMEOUT으로 조정
+  sse-emitter-timeout: 5m
 
 jwt:
   # HS256 최소 256bit(32자 이상) 필요. 운영 환경에서는 환경변수로 교체
