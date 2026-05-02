@@ -33,6 +33,10 @@ fastapi:
   # SSE 스트리밍 응답 타임아웃. 0s는 스트림 중간 idle gap으로 끊기지 않도록 Reactor Netty responseTimeout 미설정
   stream-timeout: 0s
 
+chat:
+  # Spring MVC SseEmitter 타임아웃. 0s는 브라우저 SSE 연결을 서버가 임의로 끊지 않음
+  sse-emitter-timeout: 0s
+
 jwt:
   # HS256 최소 256bit(32자 이상) 필요. 운영 환경에서는 환경변수로 교체
   secret: documind-secret-key-please-change-in-production-env
