@@ -4,7 +4,10 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 
-// 서비스 전체에서 사용하는 에러 코드 목록. HTTP 상태코드와 메시지를 한 곳에서 관리
+/**
+ * 서비스 전체에서 사용하는 에러 코드 목록.
+ * HTTP 상태코드와 클라이언트 응답 메시지를 한 곳에서 관리한다.
+ */
 // @RequiredArgsConstructor: final 필드를 인자로 받는 생성자를 자동 생성 (Lombok)
 @Getter
 @RequiredArgsConstructor

@@ -4,6 +4,8 @@ import com.documind.documind.global.auth.JwtProvider;
 import com.documind.documind.global.exception.CustomException;
 import com.documind.documind.global.exception.ErrorCode;
 import com.documind.documind.global.infra.fastapi.FastApiClient;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -12,6 +14,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -40,6 +44,9 @@ class AuthApiTest {
 
     @Autowired
     private JwtProvider jwtProvider;
+
+    @Autowired
+    private Validator validator;
 
     // FastApiClient Bean이 컨텍스트에 등록되어 있어 Mock으로 대체해야 컨텍스트 로딩이 성공한다
     @MockitoBean
@@ -126,15 +133,40 @@ class AuthApiTest {
     }
 
     @Test
-    @DisplayName("비밀번호 변경 - 현재 비밀번호 일치 시 변경되고 새 비밀번호로 로그인에 성공한다")
+    @DisplayName("비밀번호 변경 - 현재 비밀번호 일치 시 변경되고 기존 토큰과 비밀번호가 무효화된다")
     void changePassword_success() {
         String newPassword = "newPassword123";
+        LoginResponse oldLoginResponse = authService.login(ADMIN_USERNAME, RAW_PASSWORD);
 
         authService.changePassword(ADMIN_USERNAME, RAW_PASSWORD, newPassword);
+
+        // 비밀번호 변경 직후 기존 Refresh Token을 DB에서 제거해 재발급을 차단한다
+        User afterChange = userRepository.findByUsername(ADMIN_USERNAME).orElseThrow();
+        assertNull(afterChange.getRefreshToken());
+
+        CustomException reissueEx = assertThrows(CustomException.class,
+                () -> authService.reissue(oldLoginResponse.getRefreshToken()));
+        assertEquals(ErrorCode.INVALID_TOKEN, reissueEx.getErrorCode());
+
+        // 이전 비밀번호로 로그인 실패 검증
+        CustomException loginEx = assertThrows(CustomException.class,
+                () -> authService.login(ADMIN_USERNAME, RAW_PASSWORD));
+        assertEquals(ErrorCode.INVALID_CREDENTIALS, loginEx.getErrorCode());
 
         // 새 비밀번호로 로그인 성공 여부로 실제 변경을 검증
         LoginResponse response = authService.login(ADMIN_USERNAME, newPassword);
         assertNotNull(response.getAccessToken());
+    }
+
+    @Test
+    @DisplayName("비밀번호 변경 요청 - 새 비밀번호가 8자 미만이면 검증 실패한다")
+    void changePasswordRequest_shortNewPassword() {
+        PasswordChangeRequest request = new PasswordChangeRequest(RAW_PASSWORD, "short");
+
+        Set<ConstraintViolation<PasswordChangeRequest>> violations = validator.validate(request);
+
+        assertTrue(violations.stream()
+                .anyMatch(v -> "새 비밀번호는 최소 8자 이상이어야 합니다.".equals(v.getMessage())));
     }
 
     @Test

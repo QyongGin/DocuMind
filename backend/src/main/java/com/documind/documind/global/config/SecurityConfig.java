@@ -22,7 +22,10 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.List;
 
-// Spring Security 전역 설정 클래스
+/**
+ * Spring Security 전역 설정 클래스.
+ * JWT 기반 stateless 인증, CORS, 경로별 인가 정책을 정의한다.
+ */
 // @Configuration: 스프링 설정 클래스임을 선언
 // @EnableWebSecurity: Spring Security 활성화
 @Configuration
@@ -34,6 +37,10 @@ public class SecurityConfig {
     private final AuthEntryPoint authEntryPoint;
     private final AccessDeniedHandlerImpl accessDeniedHandler;
 
+    /**
+     * HTTP 보안 필터 체인을 구성한다.
+     * 관리자 전용 API는 ADMIN 권한을 요구하고, 사용자 채팅 API는 비로그인 접근을 허용한다.
+     */
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
@@ -56,6 +63,8 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.POST, "/api/categories").hasRole("ADMIN")
                     // 비밀번호 변경은 ADMIN 전용. 미설정 시 anyRequest().permitAll()에 걸려 비인증 요청이 서비스 레이어까지 도달한다
                     .requestMatchers(HttpMethod.POST, "/api/auth/password").hasRole("ADMIN")
+                    // 로그아웃은 DB의 Refresh Token을 제거하므로 인증된 사용자만 호출할 수 있다
+                    .requestMatchers(HttpMethod.POST, "/api/auth/logout").authenticated()
                     // 로그인 엔드포인트: 인증 없이 접근 허용
                     .requestMatchers("/api/auth/login").permitAll()
                     // 나머지: USER는 로그인 불필요이므로 전체 허용
@@ -89,7 +98,9 @@ public class SecurityConfig {
         return source;
     }
 
-    // BCrypt 해시 알고리즘으로 비밀번호를 암호화. 스프링 빈으로 등록해 어디서든 주입 가능
+    /**
+     * BCrypt 해시 알고리즘으로 비밀번호를 암호화하는 PasswordEncoder Bean을 등록한다.
+     */
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();

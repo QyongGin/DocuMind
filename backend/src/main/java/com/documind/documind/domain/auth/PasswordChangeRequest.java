@@ -1,6 +1,7 @@
 package com.documind.documind.domain.auth;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 
@@ -18,6 +19,8 @@ public class PasswordChangeRequest {
     @NotBlank
     private String currentPassword;
 
+    // @Size: 새 비밀번호 최소 길이 정책 검증
     @NotBlank
+    @Size(min = 8, message = "새 비밀번호는 최소 8자 이상이어야 합니다.")
     private String newPassword;
 }

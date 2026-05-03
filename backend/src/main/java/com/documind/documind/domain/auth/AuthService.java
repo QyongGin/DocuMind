@@ -8,7 +8,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-// 로그인, 로그아웃, 토큰 재발급 비즈니스 로직을 담당
+/**
+ * 로그인, 로그아웃, 토큰 재발급, 비밀번호 변경 비즈니스 로직을 담당한다.
+ */
 // @Service: 스프링 빈으로 등록
 // @RequiredArgsConstructor: final 필드를 인자로 받는 생성자를 자동 생성 (Lombok)
 @Service
@@ -19,7 +21,11 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtProvider jwtProvider;
 
-    // 로그인: username/password 검증 후 Access Token과 Refresh Token을 발급
+    /**
+     * username/password 검증 후 Access Token과 Refresh Token을 발급한다.
+     * @return 발급된 Access Token과 Refresh Token
+     * @throws CustomException INVALID_CREDENTIALS — 사용자명 또는 비밀번호 불일치
+     */
     // @Transactional: 메서드 실행 전 트랜잭션을 시작하고, 정상 종료 시 커밋, 예외 발생 시 롤백
     @Transactional
     public LoginResponse login(String username, String password) {
@@ -43,7 +49,10 @@ public class AuthService {
                 .build();
     }
 
-    // 로그아웃: DB의 Refresh Token을 NULL로 초기화하여 재사용 차단
+    /**
+     * DB의 Refresh Token을 NULL로 초기화해 재사용을 차단한다.
+     * @throws CustomException USER_NOT_FOUND — 사용자 미존재
+     */
     @Transactional
     public void logout(String username) {
         User user = userRepository.findByUsername(username)
@@ -68,9 +77,14 @@ public class AuthService {
         }
 
         user.changePassword(passwordEncoder.encode(newPassword));
+        user.logout();
     }
 
-    // Access Token 재발급: Refresh Token 유효성 검증 후 새로운 Access Token 발급
+    /**
+     * Refresh Token 유효성 검증 후 새로운 Access Token을 발급한다.
+     * @return 새로 발급된 Access Token
+     * @throws CustomException INVALID_TOKEN — Refresh Token 만료, 위조, 미저장 상태
+     */
     @Transactional
     public String reissue(String refreshToken) {
         if (!jwtProvider.validateToken(refreshToken)) {
