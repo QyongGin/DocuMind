@@ -4,7 +4,11 @@ import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
 
-// DB의 users 테이블과 매핑되는 Entity 클래스임을 선언
+/**
+ * users 테이블과 매핑되는 사용자 엔티티.
+ * 관리자 인증과 Refresh Token 저장 상태를 관리한다.
+ */
+// @Entity: DB의 users 테이블과 매핑되는 Entity 클래스임을 선언
 @Entity
 // 매핑할 테이블 이름 지정 (생략하면 클래스명 그대로 사용)
 @Table(name = "users")
@@ -46,15 +50,27 @@ public class User {
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
-    // 로그인 시 Refresh Token 저장 및 마지막 로그인 시각 갱신
+    /**
+     * 로그인 시 Refresh Token을 저장하고 마지막 로그인 시각을 갱신한다.
+     */
     public void login(String refreshToken) {
         this.refreshToken = refreshToken;
         this.lastLoginAt = LocalDateTime.now();
     }
 
-    // 로그아웃 시 Refresh Token을 NULL로 초기화하여 재사용 차단
+    /**
+     * 로그아웃 시 Refresh Token을 NULL로 초기화하여 재사용을 차단한다.
+     */
     public void logout() {
         this.refreshToken = null;
+    }
+
+    /**
+     * 비밀번호를 변경한다.
+     * @param encodedNewPassword BCrypt 등으로 인코딩된 새 비밀번호. 호출 전 서비스 레이어에서 인코딩해야 한다.
+     */
+    public void changePassword(String encodedNewPassword) {
+        this.password = encodedNewPassword;
     }
 
     // DB에 INSERT 되기 직전에 자동 실행되는 메서드
@@ -76,7 +92,9 @@ public class User {
         return user;
     }
 
-    // User 클래스 안에 Role Enum 정의
+    /**
+     * 사용자 권한.
+     */
     public enum Role {
         ADMIN, USER
     }
