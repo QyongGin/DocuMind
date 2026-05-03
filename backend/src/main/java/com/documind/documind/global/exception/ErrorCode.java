@@ -22,9 +22,14 @@ public enum ErrorCode {
     // 문서
     FILE_READ_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "파일을 읽는 중 오류가 발생했습니다."),
     FASTAPI_UPLOAD_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "AI 서버 문서 처리 중 오류가 발생했습니다."),
+    FASTAPI_DELETE_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "AI 서버 문서 삭제 중 오류가 발생했습니다."),
     FASTAPI_QUERY_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "AI 서버 질의응답 처리 중 오류가 발생했습니다."),
     DOCUMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "문서를 찾을 수 없습니다."),
     INVALID_FILE_TYPE(HttpStatus.BAD_REQUEST, "지원하지 않는 파일 형식입니다."),
+
+    // 카테고리
+    CATEGORY_NOT_FOUND(HttpStatus.NOT_FOUND, "카테고리를 찾을 수 없습니다."),
+    CATEGORY_ALREADY_EXISTS(HttpStatus.CONFLICT, "이미 존재하는 카테고리 이름입니다."),
 
     // 채팅
     CHAT_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "채팅 세션을 찾을 수 없습니다."),

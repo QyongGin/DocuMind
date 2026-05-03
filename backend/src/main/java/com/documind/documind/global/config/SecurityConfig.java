@@ -48,9 +48,12 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                     // 관리자 전용 경로: ADMIN 권한 필요
                     .requestMatchers("/api/admin/**").hasRole("ADMIN")
-                    // 문서 업로드·삭제는 ADMIN 전용
+                    // 문서 업로드·목록·삭제는 ADMIN 전용
+                    .requestMatchers(HttpMethod.GET, "/api/documents").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.POST, "/api/documents").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.DELETE, "/api/documents/**").hasRole("ADMIN")
+                    // 카테고리 생성은 ADMIN 전용, 목록 조회는 anyRequest().permitAll()로 허용
+                    .requestMatchers(HttpMethod.POST, "/api/categories").hasRole("ADMIN")
                     // 로그인 엔드포인트: 인증 없이 접근 허용
                     .requestMatchers("/api/auth/login").permitAll()
                     // 나머지: USER는 로그인 불필요이므로 전체 허용

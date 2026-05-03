@@ -63,7 +63,9 @@ public class Document {
     private String summary;
 
     // NOT NULL, updatable=false: 최초 저장 후 변경 불가
-    @Column(nullable = false, updatable = false)
+    // columnDefinition="datetime(6)": 마이크로초 정밀도 지정.
+    // 미지정 시 H2(MODE=MySQL)가 DATETIME을 초 단위로만 저장해 createdAt 정렬 테스트가 불안정해진다.
+    @Column(nullable = false, updatable = false, columnDefinition = "datetime(6)")
     private LocalDateTime createdAt;
 
     // DB에 INSERT 되기 직전에 자동 실행되는 메서드
@@ -88,8 +90,20 @@ public class Document {
         return doc;
     }
 
-    // FastAPI 처리 완료 후 청크 수를 업데이트하는 메서드
+    /**
+     * FastAPI 처리 완료 후 청크 수를 업데이트한다.
+     *
+     * @param chunkCount ChromaDB에 저장된 청크 수
+     */
     public void updateChunkCount(int chunkCount) {
         this.chunkCount = chunkCount;
+    }
+
+    /**
+     * 문서를 논리 삭제한다. is_active=false로 설정해 FK 무결성을 보존하면서 비활성화한다.
+     * 채팅 메시지의 출처(sources) JSON이 document_id를 참조하므로 물리 삭제를 사용하지 않는다.
+     */
+    public void deactivate() {
+        this.isActive = false;
     }
 }
