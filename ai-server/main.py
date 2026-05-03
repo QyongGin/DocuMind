@@ -292,6 +292,22 @@ def _prepare_query(question: str, top_k: int) -> tuple[str | None, list]:
     return prompt, sources
 
 
+@app.delete("/documents/{document_id}")
+async def delete_document(document_id: int):
+    """
+    ChromaDB에서 document_id에 해당하는 청크를 모두 삭제한다.
+    Spring Boot 논리 삭제와 쌍으로 호출되어, RAG 검색에서 해당 문서가 제외되도록 한다.
+    """
+    results = collection.get(
+        where={"document_id": str(document_id)},
+        include=[]  # IDs만 필요하므로 documents/embeddings/metadatas 제외
+    )
+    ids_to_delete = results["ids"]
+    if ids_to_delete:
+        collection.delete(ids=ids_to_delete)
+    return {"status": "success", "deleted_chunks": len(ids_to_delete)}
+
+
 @app.post("/query")
 async def query_document(request: QueryRequest):
     """

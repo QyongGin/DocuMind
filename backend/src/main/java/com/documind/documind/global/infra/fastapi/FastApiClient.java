@@ -86,6 +86,25 @@ public class FastApiClient {
         }
     }
 
+    /**
+     * ChromaDB에서 해당 document_id의 청크를 삭제하도록 FastAPI에 요청한다.
+     * Spring Boot 논리 삭제와 쌍으로 호출되어 RAG 검색에서 해당 문서가 제외되도록 한다.
+     *
+     * @param documentId 삭제할 문서의 PK
+     */
+    public void deleteDocument(Long documentId) {
+        try {
+            blockingWebClient.delete()
+                    .uri("/documents/{id}", documentId)
+                    .retrieve()
+                    .bodyToMono(Void.class)
+                    .block(responseTimeout);
+        } catch (RuntimeException e) {
+            log.warn("FastAPI DELETE /documents/{} 호출 실패", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_DELETE_FAILED);
+        }
+    }
+
     // FastAPI /query/stream SSE 엔드포인트를 구독해 data 필드 JSON 문자열 Flux를 반환
     // ServerSentEvent<String> 디코더가 SSE 포맷을 자동 파싱하므로 "data: " 접두사 제거 불필요
     public Flux<String> streamQuery(String question, int topK) {

@@ -33,4 +33,17 @@ public class Category {
     protected void onCreate() {
         this.createdAt = LocalDateTime.now();
     }
+
+    /**
+     * 카테고리를 생성하는 정적 팩토리 메서드.
+     * 외부에서 new Category() 대신 이 메서드를 사용한다.
+     *
+     * @param name 카테고리 이름 (unique 제약 있음)
+     * @return 생성된 Category 인스턴스
+     */
+    public static Category create(String name) {
+        Category category = new Category();
+        category.name = name;
+        return category;
+    }
 }

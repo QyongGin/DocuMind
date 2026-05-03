@@ -88,8 +88,20 @@ public class Document {
         return doc;
     }
 
-    // FastAPI 처리 완료 후 청크 수를 업데이트하는 메서드
+    /**
+     * FastAPI 처리 완료 후 청크 수를 업데이트한다.
+     *
+     * @param chunkCount ChromaDB에 저장된 청크 수
+     */
     public void updateChunkCount(int chunkCount) {
         this.chunkCount = chunkCount;
+    }
+
+    /**
+     * 문서를 논리 삭제한다. is_active=false로 설정해 FK 무결성을 보존하면서 비활성화한다.
+     * 채팅 메시지의 출처(sources) JSON이 document_id를 참조하므로 물리 삭제를 사용하지 않는다.
+     */
+    public void deactivate() {
+        this.isActive = false;
     }
 }
