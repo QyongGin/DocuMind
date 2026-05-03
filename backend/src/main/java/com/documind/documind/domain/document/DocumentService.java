@@ -98,9 +98,15 @@ public class DocumentService {
     /**
      * 문서를 논리 삭제하고 ChromaDB에서 청크를 제거한다.
      *
-     * <p>DB 논리 삭제(is_active=false)와 ChromaDB 청크 삭제를 하나의 트랜잭션으로 처리한다.
-     * FastAPI 호출이 실패하면 {@code CustomException}(RuntimeException)이 발생해
-     * {@code @Transactional}이 롤백되므로 DB도 활성 상태로 유지된다.</p>
+     * <p>FastAPI 호출이 실패하면 {@code CustomException}(RuntimeException)이 발생해
+     * {@code @Transactional}이 롤백되므로 DB도 활성 상태를 유지한다.
+     * HTTP 호출을 {@code @Transactional} 외부로 이동하는 방식({@code @TransactionalEventListener})은
+     * FastAPI 실패 시 DB 롤백이 불가능해 {@code is_active=false}인 문서의 청크가 RAG 검색에
+     * 계속 노출되는 더 심각한 문제가 발생한다. 이 트레이드오프를 고려해 현재 구조를 유지한다.</p>
+     *
+     * <p>알려진 엣지 케이스: FastAPI 삭제 성공 후 DB 커밋 직전 장애가 발생하면 Chroma 청크는
+     * 삭제됐으나 DB는 활성 상태로 남는 불일치가 생길 수 있다. ChromaDB는 존재하지 않는
+     * ID 삭제 요청을 무시하므로, 동일 문서에 대해 삭제를 재시도하면 정상 처리된다.</p>
      *
      * <p>{@code @Transactional} 범위 내에서 HTTP 호출이 발생하므로 FastAPI 응답 지연 시
      * DB 커넥션이 그 시간만큼 점유된다. ADMIN 전용 엔드포인트로 동시 호출 빈도가 낮고,
@@ -109,6 +115,7 @@ public class DocumentService {
      *
      * @param documentId 삭제할 문서의 PK
      * @throws CustomException 문서를 찾을 수 없는 경우 DOCUMENT_NOT_FOUND
+     * @throws CustomException FastAPI 청크 삭제 실패 시 FASTAPI_DELETE_FAILED
      */
     @Transactional
     public void delete(Long documentId) {
