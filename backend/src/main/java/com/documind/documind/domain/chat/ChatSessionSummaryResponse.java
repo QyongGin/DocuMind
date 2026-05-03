@@ -5,8 +5,10 @@ import lombok.Getter;
 
 import java.time.LocalDateTime;
 
-// GET /api/chat/sessions 목록 응답 DTO. 세션 기본 정보만 포함해 네트워크 비용을 줄임
-// @Builder: 서비스 레이어에서 필드를 명시적으로 지정해 객체를 생성
+/**
+ * GET /api/chat/sessions 목록 응답 DTO.
+ * 세션 기본 정보만 포함해 메시지 목록을 제외함으로써 네트워크 비용을 줄인다.
+ */
 @Getter
 @Builder
 public class ChatSessionSummaryResponse {

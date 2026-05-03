@@ -7,8 +7,10 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
-// 세션 상세 조회 응답에 포함되는 단일 메시지 DTO
-// @Builder: 서비스 레이어에서 필드를 명시적으로 지정해 객체를 생성
+/**
+ * GET /api/chat/sessions/{id} 상세 조회 응답에 포함되는 단일 메시지 DTO.
+ * sources는 DB의 JSON 문자열을 역직렬화한 결과이며, 역직렬화 실패 시 빈 리스트로 폴백한다.
+ */
 @Getter
 @Builder
 public class ChatMessageResponse {

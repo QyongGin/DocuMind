@@ -6,8 +6,10 @@ import lombok.Getter;
 import java.time.LocalDateTime;
 import java.util.List;
 
-// GET /api/chat/sessions/{id} 상세 조회 응답 DTO. 세션 정보와 전체 메시지 목록을 포함
-// @Builder: 서비스 레이어에서 필드를 명시적으로 지정해 객체를 생성
+/**
+ * GET /api/chat/sessions/{id} 상세 조회 응답 DTO.
+ * 세션 정보와 시간순 정렬된 전체 메시지 목록을 포함한다.
+ */
 @Getter
 @Builder
 public class ChatSessionDetailResponse {

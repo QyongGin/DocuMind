@@ -40,8 +40,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                             null,
                             List.of(new SimpleGrantedAuthority("ROLE_" + role))
                     );
-            // details에 userId를 저장해 컨트롤러에서 DB 조회 없이 소유권 검증에 사용
-            authentication.setDetails(userId);
+            // JwtAuthenticationDetails: userId + WebAuthenticationDetails(remoteAddress, sessionId)를 함께 보관
+            // Long을 직접 setDetails하면 WebAuthenticationDetails를 기대하는 Spring 내부에서 ClassCastException 위험
+            authentication.setDetails(new JwtAuthenticationDetails(request, userId));
 
             SecurityContextHolder.getContext().setAuthentication(authentication);
         }

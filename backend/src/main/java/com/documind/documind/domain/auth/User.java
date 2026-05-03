@@ -63,6 +63,19 @@ public class User {
         this.createdAt = LocalDateTime.now();
     }
 
+    /**
+     * User 인스턴스를 생성하는 팩토리 메서드.
+     * @param encodedPassword BCrypt 등으로 인코딩된 비밀번호
+     */
+    public static User create(String username, String encodedPassword, Role role) {
+        User user = new User();
+        user.username = username;
+        user.password = encodedPassword;
+        user.role = role;
+        user.isActive = true;
+        return user;
+    }
+
     // User 클래스 안에 Role Enum 정의
     public enum Role {
         ADMIN, USER

@@ -1,5 +1,6 @@
 package com.documind.documind.domain.chat;
 
+import com.documind.documind.global.auth.JwtAuthenticationDetails;
 import com.documind.documind.global.common.ApiResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -43,7 +44,11 @@ public class ChatController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
-    // 채팅 세션 목록 조회. 로그인: JWT로 사용자 전체 세션 반환, 비로그인: X-Session-Key 헤더로 단일 세션 반환
+    /**
+     * 채팅 세션 목록을 조회한다.
+     * 로그인 사용자(ADMIN)는 JWT userId 기반 전체 세션을 최신 활동 순으로 반환하고,
+     * 비로그인 사용자는 X-Session-Key 헤더 기반 단일 세션을 반환한다.
+     */
     @GetMapping("/sessions")
     public ResponseEntity<ApiResponse<List<ChatSessionSummaryResponse>>> getSessions(
             Authentication authentication,
@@ -53,7 +58,10 @@ public class ChatController {
         return ResponseEntity.ok(ApiResponse.success(chatService.getSessions(userId, sessionKey)));
     }
 
-    // 채팅 세션 상세 조회. 세션 정보와 시간순 메시지 목록을 반환. 소유권 검증 실패 시 404
+    /**
+     * 채팅 세션 상세 정보와 시간순 메시지 목록을 조회한다.
+     * sessionId와 소유자(userId 또는 sessionKey)가 일치하지 않으면 404를 반환한다.
+     */
     @GetMapping("/sessions/{id}")
     public ResponseEntity<ApiResponse<ChatSessionDetailResponse>> getSessionDetail(
             @PathVariable Long id,
@@ -64,7 +72,10 @@ public class ChatController {
         return ResponseEntity.ok(ApiResponse.success(chatService.getSessionDetail(id, userId, sessionKey)));
     }
 
-    // 채팅 세션 삭제. 메시지 포함 물리삭제. 소유권 검증 실패 시 404
+    /**
+     * 채팅 세션과 소속 메시지를 물리삭제한다.
+     * 소유권 검증 실패 시 404를 반환한다.
+     */
     @DeleteMapping("/sessions/{id}")
     public ResponseEntity<ApiResponse<Void>> deleteSession(
             @PathVariable Long id,
@@ -76,8 +87,11 @@ public class ChatController {
         return ResponseEntity.ok(ApiResponse.success("채팅 세션이 삭제되었습니다."));
     }
 
-    // AnonymousAuthenticationToken.isAuthenticated()는 true를 반환하므로 instanceof로 로그인 여부를 구분.
-    // 로그인 사용자이면 details에서 userId를 꺼내고, 비로그인이면 null을 반환해 sessionKey 분기로 처리
+    /**
+     * Authentication 객체에서 userId를 추출한다.
+     * AnonymousAuthenticationToken.isAuthenticated()는 true를 반환하므로 instanceof로 명시적으로 구분한다.
+     * 비로그인이거나 details가 JwtAuthenticationDetails가 아니면 null을 반환해 sessionKey 분기로 처리한다.
+     */
     private Long extractUserId(Authentication authentication) {
         if (authentication == null
                 || authentication instanceof AnonymousAuthenticationToken
@@ -85,7 +99,7 @@ public class ChatController {
             return null;
         }
         Object details = authentication.getDetails();
-        return details instanceof Long ? (Long) details : null;
+        return details instanceof JwtAuthenticationDetails jad ? jad.getUserId() : null;
     }
 
     // SSE 스트리밍 질의응답. EventSource는 GET만 지원하므로 question을 query param으로 전달
