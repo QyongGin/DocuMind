@@ -54,6 +54,8 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.DELETE, "/api/documents/**").hasRole("ADMIN")
                     // 카테고리 생성은 ADMIN 전용, 목록 조회는 anyRequest().permitAll()로 허용
                     .requestMatchers(HttpMethod.POST, "/api/categories").hasRole("ADMIN")
+                    // 비밀번호 변경은 ADMIN 전용. 미설정 시 anyRequest().permitAll()에 걸려 비인증 요청이 서비스 레이어까지 도달한다
+                    .requestMatchers(HttpMethod.POST, "/api/auth/password").hasRole("ADMIN")
                     // 로그인 엔드포인트: 인증 없이 접근 허용
                     .requestMatchers("/api/auth/login").permitAll()
                     // 나머지: USER는 로그인 불필요이므로 전체 허용

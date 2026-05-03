@@ -57,6 +57,14 @@ public class User {
         this.refreshToken = null;
     }
 
+    /**
+     * 비밀번호를 변경한다.
+     * @param encodedNewPassword BCrypt 등으로 인코딩된 새 비밀번호. 호출 전 서비스 레이어에서 인코딩해야 한다.
+     */
+    public void changePassword(String encodedNewPassword) {
+        this.password = encodedNewPassword;
+    }
+
     // DB에 INSERT 되기 직전에 자동 실행되는 메서드
     @PrePersist
     protected void onCreate() {

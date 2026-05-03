@@ -51,6 +51,25 @@ public class AuthService {
         user.logout();
     }
 
+    /**
+     * 비밀번호를 변경한다.
+     * currentPassword를 재확인하는 이유: Access Token이 유효해도 세션 탈취 공격자가
+     * 비밀번호를 바꿔버리는 것을 막기 위해 본인 의사 확인이 필요하다.
+     * @throws CustomException WRONG_PASSWORD — 현재 비밀번호 불일치
+     * @throws CustomException USER_NOT_FOUND — 사용자 미존재 (정상 흐름에서는 발생하지 않음)
+     */
+    @Transactional
+    public void changePassword(String username, String currentPassword, String newPassword) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new CustomException(ErrorCode.USER_NOT_FOUND));
+
+        if (!passwordEncoder.matches(currentPassword, user.getPassword())) {
+            throw new CustomException(ErrorCode.WRONG_PASSWORD);
+        }
+
+        user.changePassword(passwordEncoder.encode(newPassword));
+    }
+
     // Access Token 재발급: Refresh Token 유효성 검증 후 새로운 Access Token 발급
     @Transactional
     public String reissue(String refreshToken) {
