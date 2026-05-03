@@ -31,7 +31,7 @@ public class AuthService {
             throw new CustomException(ErrorCode.INVALID_CREDENTIALS);
         }
 
-        String accessToken = jwtProvider.generateToken(user.getUsername(), user.getRole().name());
+        String accessToken = jwtProvider.generateToken(user.getUsername(), user.getRole().name(), user.getId());
         String refreshToken = jwtProvider.generateRefreshToken(user.getUsername());
 
         // Refresh Token 저장 및 마지막 로그인 시각 갱신
@@ -61,6 +61,6 @@ public class AuthService {
         User user = userRepository.findByRefreshToken(refreshToken)
                 .orElseThrow(() -> new CustomException(ErrorCode.INVALID_TOKEN));
 
-        return jwtProvider.generateToken(user.getUsername(), user.getRole().name());
+        return jwtProvider.generateToken(user.getUsername(), user.getRole().name(), user.getId());
     }
 }

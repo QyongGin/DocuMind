@@ -1,8 +1,11 @@
 package com.documind.documind.domain.chat;
 
+import com.documind.documind.global.exception.CustomException;
+import com.documind.documind.global.exception.ErrorCode;
 import com.documind.documind.global.infra.fastapi.FastApiClient;
 import com.documind.documind.global.infra.fastapi.FastApiQueryResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -14,6 +17,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -53,12 +59,99 @@ public class ChatService {
         // 5. 메시지에 answer와 sourceDocs를 채움. @Transactional dirty checking으로 자동 UPDATE
         message.complete(fastApiResponse.getAnswer(), sourceDocsJson);
 
+        // 6. 세션의 마지막 활동 시각 갱신. 사이드바 목록의 최신 활동 순 정렬에 사용
+        chatSessionRepository.updateUpdatedAt(session.getId(), LocalDateTime.now());
+
         return ChatResponse.builder()
                 .sessionId(session.getId())
                 .messageId(message.getId())
                 .answer(fastApiResponse.getAnswer())
                 .sources(fastApiResponse.getSources())
                 .build();
+    }
+
+    // 세션 목록 조회. 로그인 사용자는 userId 기반 전체 목록, 비로그인은 sessionKey 기반 단일 세션 반환
+    @Transactional(readOnly = true)
+    public List<ChatSessionSummaryResponse> getSessions(Long userId, String sessionKey) {
+        List<ChatSession> sessions;
+        if (userId != null) {
+            sessions = chatSessionRepository.findByUserIdOrderByUpdatedAtDesc(userId);
+        } else if (sessionKey != null) {
+            // 비로그인은 sessionKey가 unique이므로 최대 1개. List 형식으로 통일해 클라이언트 처리 단순화
+            sessions = chatSessionRepository.findBySessionKey(sessionKey)
+                    .map(List::of)
+                    .orElse(List.of());
+        } else {
+            return List.of();
+        }
+        return sessions.stream()
+                .map(s -> ChatSessionSummaryResponse.builder()
+                        .sessionId(s.getId())
+                        .title(s.getTitle())
+                        .createdAt(s.getCreatedAt())
+                        .updatedAt(s.getUpdatedAt())
+                        .build())
+                .toList();
+    }
+
+    // 세션 상세 조회. 세션 정보와 시간순 메시지 목록을 반환. 소유권 검증 실패 시 404 반환
+    @Transactional(readOnly = true)
+    public ChatSessionDetailResponse getSessionDetail(Long sessionId, Long userId, String sessionKey) {
+        ChatSession session = resolveSession(sessionId, userId, sessionKey);
+
+        List<ChatMessageResponse> messageResponses = chatMessageRepository
+                .findByChatSessionIdOrderByCreatedAtAsc(sessionId)
+                .stream()
+                .map(m -> ChatMessageResponse.builder()
+                        .messageId(m.getId())
+                        .question(m.getQuestion())
+                        .answer(m.getAnswer())
+                        .sources(deserializeSources(m.getSourceDocs()))
+                        .createdAt(m.getCreatedAt())
+                        .build())
+                .toList();
+
+        return ChatSessionDetailResponse.builder()
+                .sessionId(session.getId())
+                .title(session.getTitle())
+                .createdAt(session.getCreatedAt())
+                .messages(messageResponses)
+                .build();
+    }
+
+    // 세션 삭제. 메시지 → 세션 순서로 물리삭제. FK 위반 방지를 위해 순서가 중요
+    @Transactional
+    public void deleteSession(Long sessionId, Long userId, String sessionKey) {
+        resolveSession(sessionId, userId, sessionKey);
+        chatMessageRepository.deleteByChatSessionId(sessionId);
+        chatSessionRepository.deleteById(sessionId);
+    }
+
+    // sessionId + (userId 또는 sessionKey)로 소유권을 검증하고 세션을 반환.
+    // 세션 존재 여부 노출을 막기 위해 소유권 불일치도 CHAT_SESSION_NOT_FOUND로 처리한다.
+    private ChatSession resolveSession(Long sessionId, Long userId, String sessionKey) {
+        if (userId != null) {
+            return chatSessionRepository.findByIdAndUserId(sessionId, userId)
+                    .orElseThrow(() -> new CustomException(ErrorCode.CHAT_SESSION_NOT_FOUND));
+        }
+        if (sessionKey != null) {
+            return chatSessionRepository.findByIdAndSessionKey(sessionId, sessionKey)
+                    .orElseThrow(() -> new CustomException(ErrorCode.CHAT_SESSION_NOT_FOUND));
+        }
+        throw new CustomException(ErrorCode.CHAT_SESSION_NOT_FOUND);
+    }
+
+    // sourceDocs JSON 문자열을 역직렬화. null이거나 파싱 실패 시 빈 리스트로 폴백
+    private List<Map<String, Object>> deserializeSources(String sourceDocs) {
+        if (sourceDocs == null || sourceDocs.isBlank()) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(sourceDocs, new TypeReference<>() {});
+        } catch (JsonProcessingException e) {
+            log.error("sourceDocs 역직렬화 실패. 빈 리스트로 폴백합니다.", e);
+            return List.of();
+        }
     }
 
     // sessionKey로 기존 세션을 찾거나, 없으면 새 세션을 생성해 반환.
@@ -109,6 +202,8 @@ public class ChatService {
         ChatMessage message = ChatMessage.create(session, question);
         chatMessageRepository.save(message);
         Long messageId = message.getId();
+        // Reactor 스레드 람다에서 session 객체 전체를 참조하면 LazyInitializationException 위험이 있으므로 id만 캡처
+        Long sessionId = session.getId();
 
         // StringBuffer: onCompletion(서블릿 스레드)과 forwardToken(Reactor 스레드)이 동시 접근 가능
         StringBuffer answerBuffer = new StringBuffer();
@@ -119,7 +214,7 @@ public class ChatService {
                 .subscribe(
                         jsonData -> {
                             try {
-                                forwardToken(jsonData, messageId, answerBuffer, emitter, normallyCompleted);
+                                forwardToken(jsonData, messageId, sessionId, answerBuffer, emitter, normallyCompleted);
                             } catch (Exception e) {
                                 log.error("SSE 토큰 전송 오류", e);
                                 emitter.completeWithError(e);
@@ -148,7 +243,7 @@ public class ChatService {
     }
 
     // SSE data JSON을 파싱해 token이면 emitter에 forwarding, done이면 DB 저장 후 완료
-    private void forwardToken(String jsonData, Long messageId, StringBuffer answerBuffer, SseEmitter emitter, AtomicBoolean normallyCompleted) throws IOException {
+    private void forwardToken(String jsonData, Long messageId, Long sessionId, StringBuffer answerBuffer, SseEmitter emitter, AtomicBoolean normallyCompleted) throws IOException {
         JsonNode node = objectMapper.readTree(jsonData);
 
         if (node.has("token")) {
@@ -170,6 +265,10 @@ public class ChatService {
                 m.complete(finalAnswer, sourcesJson);
                 chatMessageRepository.save(m);
             });
+
+            // 세션의 마지막 활동 시각 갱신. @Transactional이 없는 Reactor 스레드에서 호출되므로
+            // Repository 메서드의 자체 @Transactional로 새 트랜잭션을 시작해 UPDATE 실행
+            chatSessionRepository.updateUpdatedAt(sessionId, LocalDateTime.now());
 
             emitter.send(SseEmitter.event().data(jsonData));
             // DB 저장과 SSE 전송이 모두 성공한 뒤에만 정상 완료로 표시.
