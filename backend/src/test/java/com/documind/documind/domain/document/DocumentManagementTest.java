@@ -132,6 +132,21 @@ class DocumentManagementTest {
     }
 
     @Test
+    @DisplayName("문서 삭제 - FastAPI 호출 실패 시 트랜잭션이 롤백되어 문서가 활성 상태를 유지한다")
+    void delete_fastApiFailureRollsBackDeactivation() {
+        // FastAPI 호출이 실패하면 @Transactional 롤백으로 document.deactivate()도 되돌아간다
+        doThrow(new RuntimeException("FastAPI unavailable"))
+                .when(fastApiClient).deleteDocument(anyLong());
+
+        assertThrows(RuntimeException.class,
+                () -> documentService.delete(activeDoc.getId()));
+
+        Document doc = documentRepository.findById(activeDoc.getId()).orElseThrow();
+        assertTrue(doc.getIsActive(),
+                "FastAPI 실패 시 @Transactional 롤백으로 isActive가 true를 유지해야 한다");
+    }
+
+    @Test
     @DisplayName("문서 삭제 - 존재하지 않는 ID는 DOCUMENT_NOT_FOUND 예외를 반환한다")
     void delete_notFoundThrowsException() {
         CustomException ex = assertThrows(CustomException.class,

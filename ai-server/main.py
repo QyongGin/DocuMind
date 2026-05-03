@@ -298,14 +298,21 @@ async def delete_document(document_id: int):
     ChromaDB에서 document_id에 해당하는 청크를 모두 삭제한다.
     Spring Boot 논리 삭제와 쌍으로 호출되어, RAG 검색에서 해당 문서가 제외되도록 한다.
     """
-    results = collection.get(
-        where={"document_id": str(document_id)},
-        include=[]  # IDs만 필요하므로 documents/embeddings/metadatas 제외
-    )
-    ids_to_delete = results["ids"]
-    if ids_to_delete:
-        collection.delete(ids=ids_to_delete)
-    return {"status": "success", "deleted_chunks": len(ids_to_delete)}
+    def _delete_from_chroma() -> int:
+        results = collection.get(
+            where={"document_id": str(document_id)},
+            include=[]  # IDs만 필요하므로 documents/embeddings/metadatas 제외
+        )
+        ids_to_delete = results["ids"]
+        if ids_to_delete:
+            collection.delete(ids=ids_to_delete)
+        return len(ids_to_delete)
+
+    # collection.get()/delete()는 동기 블로킹 호출이다.
+    # async 핸들러에서 직접 호출하면 이벤트 루프가 점유되어 다른 요청이 대기하므로
+    # /query 핸들러와 동일하게 asyncio.to_thread()로 별도 스레드에서 실행한다.
+    deleted_count = await asyncio.to_thread(_delete_from_chroma)
+    return {"status": "success", "deleted_chunks": deleted_count}
 
 
 @app.post("/query")

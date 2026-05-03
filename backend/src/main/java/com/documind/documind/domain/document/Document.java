@@ -63,7 +63,9 @@ public class Document {
     private String summary;
 
     // NOT NULL, updatable=false: 최초 저장 후 변경 불가
-    @Column(nullable = false, updatable = false)
+    // columnDefinition="datetime(6)": 마이크로초 정밀도 지정.
+    // 미지정 시 H2(MODE=MySQL)가 DATETIME을 초 단위로만 저장해 createdAt 정렬 테스트가 불안정해진다.
+    @Column(nullable = false, updatable = false, columnDefinition = "datetime(6)")
     private LocalDateTime createdAt;
 
     // DB에 INSERT 되기 직전에 자동 실행되는 메서드

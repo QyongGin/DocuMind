@@ -100,11 +100,12 @@ public class DocumentService {
      *
      * <p>DB 논리 삭제(is_active=false)와 ChromaDB 청크 삭제를 하나의 트랜잭션으로 처리한다.
      * FastAPI 호출이 실패하면 {@code CustomException}(RuntimeException)이 발생해
-     * {@code @Transactional}이 롤백되므로 DB도 활성 상태로 유지된다.
-     * 단, FastAPI 호출이 성공한 뒤 트랜잭션 커밋 직전 장애가 발생하면 ChromaDB에서는
-     * 청크가 삭제됐으나 DB는 활성 상태로 남는 불일치가 생길 수 있다.
-     * 이 경우 다음 삭제 요청 시 FastAPI가 이미 없는 청크 삭제를 시도하지만 ChromaDB는
-     * 존재하지 않는 ID 삭제를 무시하므로 재시도하면 정상 처리된다.</p>
+     * {@code @Transactional}이 롤백되므로 DB도 활성 상태로 유지된다.</p>
+     *
+     * <p>{@code @Transactional} 범위 내에서 HTTP 호출이 발생하므로 FastAPI 응답 지연 시
+     * DB 커넥션이 그 시간만큼 점유된다. ADMIN 전용 엔드포인트로 동시 호출 빈도가 낮고,
+     * FastAPI 클라이언트의 최대 대기 시간은 {@code fastapi.response-timeout} 프로퍼티로
+     * 외부화돼 있으므로 무한 점유는 발생하지 않는다.</p>
      *
      * @param documentId 삭제할 문서의 PK
      * @throws CustomException 문서를 찾을 수 없는 경우 DOCUMENT_NOT_FOUND
