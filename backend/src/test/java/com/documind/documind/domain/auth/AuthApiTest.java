@@ -30,14 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 // @SpringBootTest: 전체 애플리케이션 컨텍스트를 로드해 실제 DB(H2 인메모리) 기반으로 검증한다.
 // @AutoConfigureMockMvc: Spring Security 필터 체인을 포함한 MVC 요청 테스트를 활성화한다.
-@SpringBootTest(properties = {
-        "spring.datasource.url=jdbc:h2:mem:documind;MODE=MySQL;DB_CLOSE_DELAY=-1",
-        "spring.datasource.username=sa",
-        "spring.datasource.password=",
-        "spring.datasource.driver-class-name=org.h2.Driver",
-        "spring.jpa.hibernate.ddl-auto=create-drop",
-        "jwt.secret=test-jwt-secret-key-for-documind-32bytes"
-})
+@SpringBootTest
 @AutoConfigureMockMvc
 class AuthApiTest {
 
