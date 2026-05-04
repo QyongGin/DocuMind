@@ -11,6 +11,8 @@ spring:
   jpa:
     hibernate:
       ddl-auto: create-drop
+  flyway:
+    enabled: false
 
 fastapi:
   url: http://localhost:8000
