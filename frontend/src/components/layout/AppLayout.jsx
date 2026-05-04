@@ -1,9 +1,11 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { hasAccessToken } from '../../services/authStorage.js'
 import { logout } from '../../services/authApi.js'
 
 function AppLayout() {
   const navigate = useNavigate()
+  // 라우트 변경(로그인·로그아웃 후 navigate) 시 컴포넌트를 재렌더링해 isAdmin을 최신 값으로 읽는다
+  useLocation()
   const isAdmin = hasAccessToken()
 
   const handleLogout = async () => {

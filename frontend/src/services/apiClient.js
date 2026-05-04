@@ -22,7 +22,8 @@ export async function apiRequest(path, options = {}) {
     ...headers,
   }
 
-  if (body !== undefined) {
+  // FormData는 Content-Type(boundary 포함)을 브라우저가 자동 설정한다 — 직접 지정하면 boundary가 누락돼 서버 파싱 실패
+  if (body !== undefined && !(body instanceof FormData)) {
     requestHeaders['Content-Type'] = 'application/json'
   }
 
@@ -36,7 +37,7 @@ export async function apiRequest(path, options = {}) {
   const response = await fetch(createUrl(path), {
     ...fetchOptions,
     headers: requestHeaders,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : body instanceof FormData ? body : JSON.stringify(body),
   })
 
   const payload = await parseResponse(response)

@@ -20,17 +20,13 @@ export function openChatStream({ question, sessionKey, topK, onToken, onDone, on
 
       if (data.token) {
         onToken(data.token)
-      }
-
-      if (data.done) {
+      } else if (data.done) {
         onDone({
           answer: data.answer,
           sources: data.sources ?? [],
         })
         eventSource.close()
-      }
-
-      if (data.error) {
+      } else if (data.error) {
         onError(data.error)
         eventSource.close()
       }

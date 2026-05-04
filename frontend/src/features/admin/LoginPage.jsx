@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { login } from '../../services/authApi.js'
+import { hasAccessToken } from '../../services/authStorage.js'
 
 function LoginPage() {
   const navigate = useNavigate()
@@ -8,6 +9,10 @@ function LoginPage() {
   const [password, setPassword] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  if (hasAccessToken()) {
+    return <Navigate to="/admin" replace />
+  }
 
   const handleSubmit = async (event) => {
     event.preventDefault()
