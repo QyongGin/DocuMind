@@ -6,15 +6,10 @@ spring:
       # 512MB: MVP 개발 중 파일 크기 제한 없이 테스트. 운영 배포 시 정책에 맞게 조정
       max-file-size: 512MB
       max-request-size: 512MB
-  datasource:
-    url: jdbc:mysql://localhost:3306/documind
-    username: root
-    password: ritepa64
-    driver-class-name: com.mysql.cj.jdbc.Driver
-  jpa:
-    hibernate:
-      ddl-auto: update
-    show-sql: true
+  profiles:
+    # 기본은 로컬 개발 프로파일이다. Docker 배포에서는 SPRING_PROFILES_ACTIVE=prod로 오버라이드한다.
+    active: ${SPRING_PROFILES_ACTIVE:local}
+
 server:
   port: 8080
   tomcat:
@@ -25,22 +20,22 @@ server:
 
 fastapi:
   # FastAPI 서버 URL. Docker에서는 환경변수 FASTAPI_URL로 오버라이드
-  url: http://localhost:8000
+  url: ${FASTAPI_URL:http://localhost:8000}
   # FastAPI 연결 타임아웃. Docker 네트워크 장애나 서버 다운을 빠르게 감지
-  connect-timeout: 5s
+  connect-timeout: ${FASTAPI_CONNECT_TIMEOUT:5s}
   # FastAPI 응답 타임아웃. 모델 cold start와 첫 토큰 생성 시간을 고려해 설정
-  response-timeout: 180s
+  response-timeout: ${FASTAPI_RESPONSE_TIMEOUT:180s}
   # SSE 스트리밍 응답 타임아웃. 기본 5분, 더 긴 답변이 필요하면 환경변수 FASTAPI_STREAM_TIMEOUT으로 조정
-  stream-timeout: 5m
+  stream-timeout: ${FASTAPI_STREAM_TIMEOUT:5m}
 
 chat:
   # Spring MVC SseEmitter 타임아웃. 기본 5분, 더 긴 답변이 필요하면 환경변수 CHAT_SSE_EMITTER_TIMEOUT으로 조정
-  sse-emitter-timeout: 5m
+  sse-emitter-timeout: ${CHAT_SSE_EMITTER_TIMEOUT:5m}
 
 jwt:
-  # HS256 최소 256bit(32자 이상) 필요. 운영 환경에서는 환경변수로 교체
-  secret: documind-secret-key-please-change-in-production-env
+  # HS256 최소 256bit(32자 이상) 필요. 기본값 없이 환경변수로만 주입한다.
+  secret: ${JWT_SECRET}
   # Access Token 만료 시간 (ms). 86400000 = 24시간
-  expiration: 86400000
+  expiration: ${JWT_EXPIRATION:86400000}
   # Refresh Token 만료 시간 (ms). 604800000 = 7일
-  refresh-expiration: 604800000
+  refresh-expiration: ${JWT_REFRESH_EXPIRATION:604800000}
