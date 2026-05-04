@@ -66,7 +66,7 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.POST, "/api/auth/logout").authenticated()
 
                     // 공개 — USER 비로그인 허용
-                    .requestMatchers("/api/auth/login", "/api/auth/reissue").permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/auth/login", "/api/auth/reissue").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/categories").permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/chat").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/chat/stream").permitAll()

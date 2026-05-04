@@ -65,6 +65,10 @@ public class FastApiClient {
         } catch (WebClientRequestException e) {
             log.warn("FastAPI /documents 연결 실패. documentId={}", documentId, e);
             throw new CustomException(ErrorCode.FASTAPI_CONNECTION_FAILED);
+        } catch (IllegalStateException e) {
+            // .block(Duration) 타임아웃 시 Reactor가 IllegalStateException을 던진다
+            log.warn("FastAPI /documents 응답 타임아웃. documentId={}", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_TIMEOUT);
         } catch (RuntimeException e) {
             log.warn("FastAPI /documents 호출 실패. documentId={}", documentId, e);
             throw new CustomException(ErrorCode.FASTAPI_UPLOAD_FAILED);
@@ -94,6 +98,10 @@ public class FastApiClient {
         } catch (WebClientRequestException e) {
             log.warn("FastAPI /query 연결 실패. topK={}", topK, e);
             throw new CustomException(ErrorCode.FASTAPI_CONNECTION_FAILED);
+        } catch (IllegalStateException e) {
+            // .block(Duration) 타임아웃 시 Reactor가 IllegalStateException을 던진다
+            log.warn("FastAPI /query 응답 타임아웃. topK={}", topK, e);
+            throw new CustomException(ErrorCode.FASTAPI_TIMEOUT);
         } catch (RuntimeException e) {
             log.warn("FastAPI /query 호출 실패. topK={}", topK, e);
             throw new CustomException(ErrorCode.FASTAPI_QUERY_FAILED);
@@ -119,6 +127,10 @@ public class FastApiClient {
         } catch (WebClientRequestException e) {
             log.warn("FastAPI DELETE /documents/{} 연결 실패", documentId, e);
             throw new CustomException(ErrorCode.FASTAPI_CONNECTION_FAILED);
+        } catch (IllegalStateException e) {
+            // .block(Duration) 타임아웃 시 Reactor가 IllegalStateException을 던진다
+            log.warn("FastAPI DELETE /documents/{} 응답 타임아웃", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_TIMEOUT);
         } catch (RuntimeException e) {
             log.warn("FastAPI DELETE /documents/{} 호출 실패", documentId, e);
             throw new CustomException(ErrorCode.FASTAPI_DELETE_FAILED);
