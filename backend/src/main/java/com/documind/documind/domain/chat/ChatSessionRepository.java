@@ -25,7 +25,8 @@ public interface ChatSessionRepository extends JpaRepository<ChatSession, Long> 
     Optional<ChatSession> findByIdAndUserId(@Param("id") Long id, @Param("userId") Long userId);
 
     /** sessionId + sessionKey로 소유권을 검증하며 세션을 조회한다. 비로그인 사용자의 상세 조회·삭제에 사용한다. */
-    Optional<ChatSession> findByIdAndSessionKey(Long id, String sessionKey);
+    @Query("SELECT s FROM ChatSession s WHERE s.id = :id AND s.sessionKey = :sessionKey")
+    Optional<ChatSession> findByIdAndSessionKey(@Param("id") Long id, @Param("sessionKey") String sessionKey);
 
     /**
      * 메시지 저장 완료 시 세션의 마지막 활동 시각을 갱신한다. 사이드바 최신 활동 순 정렬 기준으로 사용한다.

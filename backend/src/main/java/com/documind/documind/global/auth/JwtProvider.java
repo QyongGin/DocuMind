@@ -8,9 +8,10 @@ import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Date;
 
-// JWT 토큰 생성, 파싱, 검증을 담당하는 컴포넌트
+/** JWT 토큰 생성, 파싱, 검증을 담당하는 컴포넌트 */
 // @Component: 스프링 빈으로 등록
 @Component
 public class JwtProvider {
@@ -19,12 +20,13 @@ public class JwtProvider {
     @Value("${jwt.secret}")
     private String secret;
 
-    // application.yaml의 jwt.expiration 값을 주입 (ms 단위)
-    @Value("${jwt.expiration}")
-    private long expiration;
+    // application.yaml의 jwt.access-token-expiration 값을 주입
+    @Value("${jwt.access-token-expiration}")
+    private Duration accessTokenExpiration;
 
-    @Value("${jwt.refresh-expiration}")
-    private long refreshExpiration;
+    // application.yaml의 jwt.refresh-token-expiration 값을 주입
+    @Value("${jwt.refresh-token-expiration}")
+    private Duration refreshTokenExpiration;
 
     private SecretKey key;
 
@@ -34,7 +36,7 @@ public class JwtProvider {
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 
-    // username, role, userId를 담아 JWT를 생성. userId는 채팅 세션 소유권 검증에 사용
+    /** username, role, userId를 담아 JWT를 생성한다. userId는 채팅 세션 소유권 검증에 사용한다. */
     public String generateToken(String username, String role, Long userId) {
         Date now = new Date();
         return Jwts.builder()
@@ -42,38 +44,38 @@ public class JwtProvider {
                 .claim("role", role)
                 .claim("userId", userId)
                 .issuedAt(now)
-                .expiration(new Date(now.getTime() + expiration))
+                .expiration(new Date(now.getTime() + accessTokenExpiration.toMillis()))
                 .signWith(key)
                 .compact();
     }
 
-    // username만 담아 Refresh Token을 생성. role 정보는 포함하지 않음
+    /** username만 담아 Refresh Token을 생성한다. role 정보는 포함하지 않는다. */
     public String generateRefreshToken(String username) {
         Date now = new Date();
         return Jwts.builder()
                 .subject(username)
                 .issuedAt(now)
-                .expiration(new Date(now.getTime() + refreshExpiration))
+                .expiration(new Date(now.getTime() + refreshTokenExpiration.toMillis()))
                 .signWith(key)
                 .compact();
     }
 
-    // JWT에서 username(subject)을 추출
+    /** JWT에서 username(subject)을 추출한다. */
     public String getUsername(String token) {
         return parseClaims(token).getSubject();
     }
 
-    // JWT에서 role 클레임을 추출
+    /** JWT에서 role 클레임을 추출한다. */
     public String getRole(String token) {
         return parseClaims(token).get("role", String.class);
     }
 
-    // JWT에서 userId 클레임을 추출. DB 조회 없이 채팅 세션 소유권 검증에 사용
+    /** JWT에서 userId 클레임을 추출한다. DB 조회 없이 채팅 세션 소유권 검증에 사용한다. */
     public Long getUserId(String token) {
         return parseClaims(token).get("userId", Long.class);
     }
 
-    // JWT 유효성 검증. 만료되거나 서명이 잘못된 경우 false 반환
+    /** JWT 유효성을 검증한다. 만료되거나 서명이 잘못된 경우 false를 반환한다. */
     public boolean validateToken(String token) {
         try {
             parseClaims(token);

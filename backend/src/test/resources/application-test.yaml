@@ -1,8 +1,6 @@
 spring:
   application:
     name: documind-test
-  profiles:
-    active: test
   datasource:
     url: jdbc:h2:mem:documind;MODE=MySQL;DB_CLOSE_DELAY=-1
     username: sa
@@ -25,5 +23,5 @@ chat:
 
 jwt:
   secret: test-jwt-secret-key-for-documind-32bytes
-  expiration: 86400000
-  refresh-expiration: 604800000
+  access-token-expiration: 24h
+  refresh-token-expiration: 7d

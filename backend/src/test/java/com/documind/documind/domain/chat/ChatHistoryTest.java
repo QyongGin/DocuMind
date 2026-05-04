@@ -10,6 +10,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.util.List;
 
@@ -18,9 +19,11 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * 채팅 이력 서비스 통합 테스트.
  * @SpringBootTest: 전체 애플리케이션 컨텍스트를 로드해 실제 DB(H2 인메모리) 기반으로 검증한다.
- * 테스트 공통 설정은 src/test/resources/application.yaml에서 관리한다.
+ * @ActiveProfiles: 테스트 전용 application-test.yaml 설정을 로드한다.
+ * 테스트 공통 설정은 src/test/resources/application-test.yaml에서 관리한다.
  */
 @SpringBootTest
+@ActiveProfiles("test")
 class ChatHistoryTest {
 
     @Autowired
