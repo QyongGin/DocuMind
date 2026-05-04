@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.util.List;
@@ -33,7 +34,9 @@ import static org.mockito.Mockito.*;
  * FastApiClient는 @MockitoBean으로 대체해 외부 HTTP 호출을 격리한다.
  */
 // @SpringBootTest: 전체 애플리케이션 컨텍스트를 로드해 실제 DB(H2 인메모리) 기반으로 검증한다.
+// @ActiveProfiles: 테스트 전용 application-test.yaml 설정을 로드한다.
 @SpringBootTest
+@ActiveProfiles("test")
 class DocumentManagementTest {
 
     @Autowired

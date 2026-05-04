@@ -15,6 +15,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -30,8 +31,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 // @SpringBootTest: 전체 애플리케이션 컨텍스트를 로드해 실제 DB(H2 인메모리) 기반으로 검증한다.
 // @AutoConfigureMockMvc: Spring Security 필터 체인을 포함한 MVC 요청 테스트를 활성화한다.
+// @ActiveProfiles: 테스트 전용 application-test.yaml 설정을 로드한다.
 @SpringBootTest
 @AutoConfigureMockMvc
+@ActiveProfiles("test")
 class AuthApiTest {
 
     @Autowired
