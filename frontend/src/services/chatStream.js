@@ -4,9 +4,11 @@ function createStreamUrl({ question, sessionKey, topK }) {
   const normalizedBase = env.apiBaseUrl.replace(/\/$/, '')
   const params = new URLSearchParams({
     question,
-    sessionKey,
     topK: String(topK ?? env.defaultTopK),
   })
+  if (sessionKey) {
+    params.set('sessionKey', sessionKey)
+  }
 
   return `${normalizedBase}/chat/stream?${params.toString()}`
 }

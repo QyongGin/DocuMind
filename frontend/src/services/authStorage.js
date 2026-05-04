@@ -10,12 +10,22 @@ export function getRefreshToken() {
 }
 
 export function hasAccessToken() {
-  return Boolean(getAccessToken())
+  const token = getAccessToken()
+  return typeof token === 'string' && token.trim() !== '' && token !== 'undefined' && token !== 'null'
 }
 
 export function saveTokens({ accessToken, refreshToken }) {
-  localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
-  localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+  if (typeof accessToken === 'string' && accessToken.trim() !== '') {
+    localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
+  } else {
+    localStorage.removeItem(ACCESS_TOKEN_KEY)
+  }
+
+  if (typeof refreshToken === 'string' && refreshToken.trim() !== '') {
+    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+  } else {
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
+  }
 }
 
 export function clearTokens() {

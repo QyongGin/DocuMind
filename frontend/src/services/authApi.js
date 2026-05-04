@@ -24,6 +24,11 @@ export async function logout() {
 
 export async function reissueAccessToken() {
   const refreshToken = getRefreshToken()
+  if (!refreshToken) {
+    clearTokens()
+    throw new Error('세션이 만료되었습니다. 다시 로그인해 주세요.')
+  }
+
   const accessToken = await apiRequest('/auth/reissue', {
     method: 'POST',
     headers: {

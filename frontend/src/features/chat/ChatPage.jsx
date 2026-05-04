@@ -68,6 +68,7 @@ function ChatPage() {
 
       <form className="question-form" onSubmit={startStream}>
         <textarea
+          aria-label="질문 입력"
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
           placeholder="문서 내용에 대해 질문하세요."
