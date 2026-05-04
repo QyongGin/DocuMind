@@ -1,5 +1,6 @@
 package com.documind.documind.domain.chat;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -60,8 +61,16 @@ class SseStreamingContext {
      * @param jsonData FastAPI가 보낸 SSE data JSON 문자열
      */
     void onToken(String jsonData) {
+        JsonNode node;
         try {
-            JsonNode node = objectMapper.readTree(jsonData);
+            node = objectMapper.readTree(jsonData);
+        } catch (JsonProcessingException e) {
+            log.error("SSE 토큰 JSON 파싱 오류", e);
+            sendSafeErrorAndComplete(STREAM_ERROR_CODE, STREAM_ERROR_MESSAGE);
+            return;
+        }
+
+        try {
             if (node.has("token")) {
                 handleTokenEvent(jsonData, node);
             } else if (node.has("done") && node.get("done").asBoolean()) {
@@ -69,6 +78,11 @@ class SseStreamingContext {
             } else if (node.has("error")) {
                 handleErrorEvent(jsonData, node);
             }
+        } catch (JsonProcessingException e) {
+            log.error("SSE 토큰 JSON 직렬화 오류", e);
+            sendSafeErrorAndComplete(STREAM_ERROR_CODE, STREAM_ERROR_MESSAGE);
+        } catch (IOException e) {
+            handleEmitterSendFailure(e);
         } catch (Exception e) {
             log.error("SSE 토큰 처리 오류", e);
             sendSafeErrorAndComplete(STREAM_ERROR_CODE, STREAM_ERROR_MESSAGE);
@@ -143,6 +157,12 @@ class SseStreamingContext {
     private void handleErrorEvent(String jsonData, JsonNode node) {
         log.error("FastAPI 오류 이벤트: {}", node.get("error").asText());
         sendSafeErrorAndComplete(UPSTREAM_ERROR_CODE, UPSTREAM_ERROR_MESSAGE);
+    }
+
+    private void handleEmitterSendFailure(IOException error) {
+        log.warn("SSE 이벤트 전송 실패. 클라이언트 연결 종료로 보고 부분 답변 저장을 시도합니다.", error);
+        onClientDisconnect();
+        emitter.complete();
     }
 
     private void sendSafeErrorAndComplete(String code, String message) {

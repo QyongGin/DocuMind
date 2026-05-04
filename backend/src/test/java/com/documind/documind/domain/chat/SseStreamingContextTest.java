@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
+import java.io.IOException;
+
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -55,6 +57,24 @@ class SseStreamingContextTest {
         verify(subscription).dispose();
         verify(persistenceService).savePartialAnswer(MESSAGE_ID, "부분답변");
         verify(persistenceService, never()).completeMessage(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("토큰 전송 실패 시 안전 오류 답변 대신 누적된 부분 답변을 저장함")
+    void onToken_withSendFailure_savesPartialAnswer() throws Exception {
+        Disposable subscription = mock(Disposable.class);
+        SseStreamingContext context = createContext();
+        context.attachSubscription(subscription);
+        doThrow(new IOException("broken pipe"))
+                .when(emitter)
+                .send(any(SseEmitter.SseEventBuilder.class));
+
+        context.onToken("{\"token\":\"부분\"}");
+
+        verify(subscription).dispose();
+        verify(persistenceService).savePartialAnswer(MESSAGE_ID, "부분");
+        verify(persistenceService, never()).completeMessage(any(), any(), any(), any());
+        verify(emitter).complete();
     }
 
     @Test
