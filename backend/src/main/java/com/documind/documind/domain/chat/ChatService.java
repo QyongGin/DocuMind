@@ -6,7 +6,6 @@ import com.documind.documind.global.infra.fastapi.FastApiClient;
 import com.documind.documind.global.infra.fastapi.FastApiQueryResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,12 +15,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
-import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 // 질의응답 비즈니스 로직. 세션 관리 → FastAPI 호출 → 메시지 저장을 담당
 // @RequiredArgsConstructor: final 필드를 인자로 받는 생성자를 자동 생성 (Lombok)
@@ -32,6 +29,7 @@ public class ChatService {
 
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
+    private final ChatStreamPersistenceService chatStreamPersistenceService;
     private final FastApiClient fastApiClient;
     // Spring Boot가 자동 설정한 ObjectMapper 빈을 주입해 Jackson 전역 설정을 공유
     private final ObjectMapper objectMapper;
@@ -187,98 +185,39 @@ public class ChatService {
         }
     }
 
-    // SSE 스트리밍 질의응답.
-    // 1) 세션 생성·조회 → 메시지(question만) DB 저장
-    // 2) FastAPI /query/stream 구독 → 토큰마다 SseEmitter로 forwarding
-    // 3) done 이벤트 수신 시 answer + sources를 DB에 저장 후 emitter 완료
-    // 4) 클라이언트 연결 종료(EventSource.close()) 시 onCompletion 콜백으로 구독 취소
+    /**
+     * SSE 스트리밍 질의응답을 시작한다.
+     *
+     * @param question 사용자 질문
+     * @param sessionKey 비로그인 사용자 세션 추적 키
+     * @param topK 검색에 사용할 문서 청크 개수
+     * @param emitter 브라우저로 SSE 이벤트를 전송할 Spring MVC emitter
+     */
     public void streamChat(String question, String sessionKey, Integer topK, SseEmitter emitter) {
         int resolvedTopK = topK != null ? topK : DEFAULT_TOP_K;
 
-        // 세션 조회 또는 생성
         ChatSession session = getOrCreateSession(question, sessionKey);
-
-        // question만 먼저 저장. answer는 스트리밍 완료 후 채움
         ChatMessage message = ChatMessage.create(session, question);
         chatMessageRepository.save(message);
-        Long messageId = message.getId();
-        // Reactor 스레드 람다에서 session 객체 전체를 참조하면 LazyInitializationException 위험이 있으므로 id만 캡처
-        Long sessionId = session.getId();
 
-        // StringBuffer: onCompletion(서블릿 스레드)과 forwardToken(Reactor 스레드)이 동시 접근 가능
-        StringBuffer answerBuffer = new StringBuffer();
-        // done 이벤트 수신 여부로 정상 완료와 중단을 구분. onCompletion은 두 케이스 모두에서 호출됨
-        AtomicBoolean normallyCompleted = new AtomicBoolean(false);
+        SseStreamingContext context = new SseStreamingContext(
+                emitter,
+                message.getId(),
+                session.getId(),
+                objectMapper,
+                chatStreamPersistenceService
+        );
 
-        Disposable subscription = fastApiClient.streamQuery(question, resolvedTopK)
-                .subscribe(
-                        jsonData -> {
-                            try {
-                                forwardToken(jsonData, messageId, sessionId, answerBuffer, emitter, normallyCompleted);
-                            } catch (Exception e) {
-                                log.error("SSE 토큰 전송 오류", e);
-                                emitter.completeWithError(e);
-                            }
-                        },
-                        error -> {
-                            log.error("FastAPI 스트리밍 오류", error);
-                            emitter.completeWithError(error);
-                        }
-                );
+        emitter.onCompletion(context::onClientDisconnect);
+        emitter.onTimeout(context::onTimeout);
+        emitter.onError(context::onEmitterError);
 
-        // 클라이언트 연결 종료·타임아웃 시:
-        // 1) FastAPI 구독 취소 (GPU 연산 중단)
-        // 2) 정상 완료가 아닌 경우에만 answerBuffer의 부분 답변을 DB에 저장
-        emitter.onCompletion(() -> {
-            subscription.dispose();
-            if (!normallyCompleted.get() && answerBuffer.length() > 0) {
-                chatMessageRepository.findById(messageId).ifPresent(m -> {
-                    m.complete(answerBuffer.toString(), "[]");
-                    chatMessageRepository.save(m);
-                });
-            }
-        });
-        emitter.onTimeout(subscription::dispose);
-        emitter.onError(t -> subscription.dispose());
-    }
-
-    // SSE data JSON을 파싱해 token이면 emitter에 forwarding, done이면 DB 저장 후 완료
-    private void forwardToken(String jsonData, Long messageId, Long sessionId, StringBuffer answerBuffer, SseEmitter emitter, AtomicBoolean normallyCompleted) throws IOException {
-        JsonNode node = objectMapper.readTree(jsonData);
-
-        if (node.has("token")) {
-            answerBuffer.append(node.get("token").asText());
-            // 원본 JSON을 그대로 전달해 React에서 추가 파싱 없이 사용 가능하도록 함
-            emitter.send(SseEmitter.event().data(jsonData));
-        } else if (node.has("done") && node.get("done").asBoolean()) {
-            String sourcesJson = node.has("sources")
-                    ? objectMapper.writeValueAsString(node.get("sources"))
-                    : "[]";
-
-            // done 이벤트에 answer가 직접 포함된 경우(빈 문서) answerBuffer 대신 사용
-            String finalAnswer = node.has("answer")
-                    ? node.get("answer").asText()
-                    : answerBuffer.toString();
-
-            // DB에 완성된 answer + sources 저장
-            chatMessageRepository.findById(messageId).ifPresent(m -> {
-                m.complete(finalAnswer, sourcesJson);
-                chatMessageRepository.save(m);
-            });
-
-            // 세션의 마지막 활동 시각 갱신. @Transactional이 없는 Reactor 스레드에서 호출되므로
-            // Repository 메서드의 자체 @Transactional로 새 트랜잭션을 시작해 UPDATE 실행
-            chatSessionRepository.updateUpdatedAt(sessionId, LocalDateTime.now());
-
-            emitter.send(SseEmitter.event().data(jsonData));
-            // DB 저장과 SSE 전송이 모두 성공한 뒤에만 정상 완료로 표시.
-            // 이전에 이 플래그를 먼저 올리면 그 사이 예외 발생 시 onCompletion 폴백이 건너뛰어진다.
-            normallyCompleted.set(true);
-            emitter.complete();
-        } else if (node.has("error")) {
-            log.error("FastAPI 오류 이벤트: {}", node.get("error").asText());
-            emitter.send(SseEmitter.event().data(jsonData));
-            emitter.complete();
+        try {
+            Disposable subscription = fastApiClient.streamQuery(question, resolvedTopK)
+                    .subscribe(context::onToken, context::onUpstreamError);
+            context.attachSubscription(subscription);
+        } catch (Exception e) {
+            context.onUpstreamError(e);
         }
     }
 }
