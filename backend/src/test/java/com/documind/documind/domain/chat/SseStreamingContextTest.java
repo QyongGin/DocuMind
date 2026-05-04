@@ -73,6 +73,48 @@ class SseStreamingContextTest {
         );
     }
 
+    @Test
+    @DisplayName("upstream 오류 발생 시 안전 오류 답변을 저장하고 스트림을 종료함")
+    void onUpstreamError_savesSafeErrorAnswerAndDisposesSubscription() throws Exception {
+        Disposable subscription = mock(Disposable.class);
+        SseStreamingContext context = createContext();
+        context.attachSubscription(subscription);
+
+        context.onUpstreamError(new RuntimeException("boom"));
+
+        verify(subscription).dispose();
+        verify(persistenceService).completeMessage(
+                MESSAGE_ID,
+                SESSION_ID,
+                SseStreamingContext.UPSTREAM_ERROR_MESSAGE,
+                "[]"
+        );
+        verify(persistenceService, never()).savePartialAnswer(any(), any());
+        verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
+        verify(emitter).complete();
+    }
+
+    @Test
+    @DisplayName("깨진 JSON 수신 시 안전 오류 답변을 저장하고 스트림을 종료함")
+    void onToken_withMalformedJson_savesSafeErrorAnswerAndDisposesSubscription() throws Exception {
+        Disposable subscription = mock(Disposable.class);
+        SseStreamingContext context = createContext();
+        context.attachSubscription(subscription);
+
+        context.onToken("{bad json");
+
+        verify(subscription).dispose();
+        verify(persistenceService).completeMessage(
+                MESSAGE_ID,
+                SESSION_ID,
+                SseStreamingContext.STREAM_ERROR_MESSAGE,
+                "[]"
+        );
+        verify(persistenceService, never()).savePartialAnswer(any(), any());
+        verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
+        verify(emitter).complete();
+    }
+
     private SseStreamingContext createContext() {
         return new SseStreamingContext(
                 emitter,

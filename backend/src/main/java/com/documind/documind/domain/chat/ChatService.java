@@ -208,12 +208,16 @@ public class ChatService {
                 chatStreamPersistenceService
         );
 
-        Disposable subscription = fastApiClient.streamQuery(question, resolvedTopK)
-                .subscribe(context::onToken, context::onUpstreamError);
-        context.attachSubscription(subscription);
-
         emitter.onCompletion(context::onClientDisconnect);
         emitter.onTimeout(context::onTimeout);
         emitter.onError(context::onEmitterError);
+
+        try {
+            Disposable subscription = fastApiClient.streamQuery(question, resolvedTopK)
+                    .subscribe(context::onToken, context::onUpstreamError);
+            context.attachSubscription(subscription);
+        } catch (Exception e) {
+            context.onUpstreamError(e);
+        }
     }
 }

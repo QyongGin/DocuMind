@@ -7,12 +7,18 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
 import java.io.IOException;
+import java.util.Map;
 
 /**
  * 단일 SSE 스트림의 상태와 FastAPI 이벤트 처리 로직을 캡슐화한다.
  */
 @Slf4j
 class SseStreamingContext {
+
+    static final String STREAM_ERROR_CODE = "STREAM_ERROR";
+    static final String STREAM_ERROR_MESSAGE = "스트리밍 처리 중 오류가 발생했습니다.";
+    static final String UPSTREAM_ERROR_CODE = "UPSTREAM_ERROR";
+    static final String UPSTREAM_ERROR_MESSAGE = "요청 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.";
 
     private final SseEmitter emitter;
     private final Long messageId;
@@ -39,12 +45,20 @@ class SseStreamingContext {
         this.persistenceService = persistenceService;
     }
 
-    // subscribe() 이후 반환되는 Disposable을 지연 주입해 클라이언트 중단 시 upstream 구독을 취소한다.
+    /**
+     * subscribe() 이후 반환되는 Disposable을 지연 주입해 클라이언트 중단 시 upstream 구독을 취소한다.
+     *
+     * @param subscription FastAPI SSE 스트림 구독 핸들
+     */
     void attachSubscription(Disposable subscription) {
         this.subscription = subscription;
     }
 
-    // FastAPI SSE data JSON 한 건을 파싱해 token/done/error 이벤트별로 처리한다.
+    /**
+     * FastAPI SSE data JSON 한 건을 파싱해 token/done/error 이벤트별로 처리한다.
+     *
+     * @param jsonData FastAPI가 보낸 SSE data JSON 문자열
+     */
     void onToken(String jsonData) {
         try {
             JsonNode node = objectMapper.readTree(jsonData);
@@ -57,11 +71,13 @@ class SseStreamingContext {
             }
         } catch (Exception e) {
             log.error("SSE 토큰 처리 오류", e);
-            emitter.completeWithError(e);
+            sendSafeErrorAndComplete(STREAM_ERROR_CODE, STREAM_ERROR_MESSAGE);
         }
     }
 
-    // 클라이언트 연결 종료 시 FastAPI 구독을 취소하고 정상 완료 전이면 부분 답변을 저장한다.
+    /**
+     * 클라이언트 연결 종료 시 FastAPI 구독을 취소하고 정상 완료 전이면 부분 답변을 저장한다.
+     */
     void onClientDisconnect() {
         disposeSubscription();
         synchronized (persistenceLock) {
@@ -73,20 +89,30 @@ class SseStreamingContext {
         }
     }
 
-    // Spring MVC SseEmitter timeout 시 FastAPI 구독을 취소한다.
+    /**
+     * Spring MVC SseEmitter timeout 시 FastAPI 구독을 취소한다.
+     */
     void onTimeout() {
         disposeSubscription();
     }
 
-    // Spring MVC SseEmitter error 시 FastAPI 구독을 취소한다.
+    /**
+     * Spring MVC SseEmitter error 시 FastAPI 구독을 취소한다.
+     *
+     * @param error emitter에서 발생한 오류
+     */
     void onEmitterError(Throwable error) {
         disposeSubscription();
     }
 
-    // FastAPI 스트림 자체에서 오류가 발생하면 브라우저 SSE 연결도 오류로 종료한다.
+    /**
+     * FastAPI 스트림 자체에서 오류가 발생하면 안전한 오류 이벤트를 전송하고 스트림을 종료한다.
+     *
+     * @param error upstream 스트림 오류
+     */
     void onUpstreamError(Throwable error) {
         log.error("FastAPI 스트리밍 오류", error);
-        emitter.completeWithError(error);
+        sendSafeErrorAndComplete(UPSTREAM_ERROR_CODE, UPSTREAM_ERROR_MESSAGE);
     }
 
     private void handleTokenEvent(String jsonData, JsonNode node) throws IOException {
@@ -114,10 +140,36 @@ class SseStreamingContext {
         emitter.complete();
     }
 
-    private void handleErrorEvent(String jsonData, JsonNode node) throws IOException {
+    private void handleErrorEvent(String jsonData, JsonNode node) {
         log.error("FastAPI 오류 이벤트: {}", node.get("error").asText());
-        emitter.send(SseEmitter.event().data(jsonData));
-        emitter.complete();
+        sendSafeErrorAndComplete(UPSTREAM_ERROR_CODE, UPSTREAM_ERROR_MESSAGE);
+    }
+
+    private void sendSafeErrorAndComplete(String code, String message) {
+        disposeSubscription();
+        persistSafeErrorAnswer(message);
+        try {
+            String payload = objectMapper.writeValueAsString(Map.of(
+                    "type", "error",
+                    "error", message,
+                    "code", code,
+                    "message", message
+            ));
+            emitter.send(SseEmitter.event().data(payload));
+        } catch (Exception sendError) {
+            log.error("SSE 안전 오류 이벤트 전송 실패", sendError);
+        } finally {
+            emitter.complete();
+        }
+    }
+
+    private void persistSafeErrorAnswer(String message) {
+        synchronized (persistenceLock) {
+            if (!answerStored) {
+                persistenceService.completeMessage(messageId, sessionId, message, "[]");
+                answerStored = true;
+            }
+        }
     }
 
     private void disposeSubscription() {
