@@ -33,13 +33,7 @@ import static org.mockito.Mockito.*;
  * FastApiClient는 @MockitoBean으로 대체해 외부 HTTP 호출을 격리한다.
  */
 // @SpringBootTest: 전체 애플리케이션 컨텍스트를 로드해 실제 DB(H2 인메모리) 기반으로 검증한다.
-@SpringBootTest(properties = {
-        "spring.datasource.url=jdbc:h2:mem:documind;MODE=MySQL;DB_CLOSE_DELAY=-1",
-        "spring.datasource.username=sa",
-        "spring.datasource.password=",
-        "spring.datasource.driver-class-name=org.h2.Driver",
-        "spring.jpa.hibernate.ddl-auto=create-drop"
-})
+@SpringBootTest
 class DocumentManagementTest {
 
     @Autowired

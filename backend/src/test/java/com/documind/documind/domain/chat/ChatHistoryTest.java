@@ -18,15 +18,9 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * 채팅 이력 서비스 통합 테스트.
  * @SpringBootTest: 전체 애플리케이션 컨텍스트를 로드해 실제 DB(H2 인메모리) 기반으로 검증한다.
- * properties: MySQL 대신 H2를 사용하도록 데이터소스를 오버라이드한다.
+ * 테스트 공통 설정은 src/test/resources/application.yaml에서 관리한다.
  */
-@SpringBootTest(properties = {
-        "spring.datasource.url=jdbc:h2:mem:documind;MODE=MySQL;DB_CLOSE_DELAY=-1",
-        "spring.datasource.username=sa",
-        "spring.datasource.password=",
-        "spring.datasource.driver-class-name=org.h2.Driver",
-        "spring.jpa.hibernate.ddl-auto=create-drop"
-})
+@SpringBootTest
 class ChatHistoryTest {
 
     @Autowired

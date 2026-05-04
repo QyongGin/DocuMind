@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: documind-test
+  profiles:
+    active: test
+  datasource:
+    url: jdbc:h2:mem:documind;MODE=MySQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+  flyway:
+    enabled: false
+
+fastapi:
+  url: http://localhost:8000
+  connect-timeout: 5s
+  response-timeout: 180s
+  stream-timeout: 5m
+
+chat:
+  sse-emitter-timeout: 5m
+
+jwt:
+  secret: test-jwt-secret-key-for-documind-32bytes
+  expiration: 86400000
+  refresh-expiration: 604800000
