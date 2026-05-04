@@ -13,6 +13,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
@@ -57,6 +59,12 @@ public class FastApiClient {
                     .bodyToMono(FastApiUploadResponse.class)
                     .block(responseTimeout);
             return Objects.requireNonNull(response, "FastAPI /documents 응답이 null입니다.");
+        } catch (WebClientResponseException.ServiceUnavailable e) {
+            log.warn("FastAPI /documents 서비스 불가. documentId={}", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_UNAVAILABLE);
+        } catch (WebClientRequestException e) {
+            log.warn("FastAPI /documents 연결 실패. documentId={}", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_CONNECTION_FAILED);
         } catch (RuntimeException e) {
             log.warn("FastAPI /documents 호출 실패. documentId={}", documentId, e);
             throw new CustomException(ErrorCode.FASTAPI_UPLOAD_FAILED);
@@ -80,6 +88,12 @@ public class FastApiClient {
                     .block(responseTimeout);
             // FastAPI 응답이 null인 경우 명시적 예외로 변환
             return Objects.requireNonNull(response, "FastAPI /query 응답이 null입니다.");
+        } catch (WebClientResponseException.ServiceUnavailable e) {
+            log.warn("FastAPI /query 서비스 불가. topK={}", topK, e);
+            throw new CustomException(ErrorCode.FASTAPI_UNAVAILABLE);
+        } catch (WebClientRequestException e) {
+            log.warn("FastAPI /query 연결 실패. topK={}", topK, e);
+            throw new CustomException(ErrorCode.FASTAPI_CONNECTION_FAILED);
         } catch (RuntimeException e) {
             log.warn("FastAPI /query 호출 실패. topK={}", topK, e);
             throw new CustomException(ErrorCode.FASTAPI_QUERY_FAILED);
@@ -99,6 +113,12 @@ public class FastApiClient {
                     .retrieve()
                     .bodyToMono(Void.class)
                     .block(responseTimeout);
+        } catch (WebClientResponseException.ServiceUnavailable e) {
+            log.warn("FastAPI DELETE /documents/{} 서비스 불가", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_UNAVAILABLE);
+        } catch (WebClientRequestException e) {
+            log.warn("FastAPI DELETE /documents/{} 연결 실패", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_CONNECTION_FAILED);
         } catch (RuntimeException e) {
             log.warn("FastAPI DELETE /documents/{} 호출 실패", documentId, e);
             throw new CustomException(ErrorCode.FASTAPI_DELETE_FAILED);
