@@ -51,24 +51,32 @@ public class SecurityConfig {
             // JWT 사용으로 세션이 필요 없으므로 STATELESS로 설정
             .sessionManagement(session ->
                     session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            // 경로별 접근 권한 설정
+            // 경로별 접근 권한 설정 — default-deny 정책: 명시하지 않은 경로는 자동 차단
             .authorizeHttpRequests(auth -> auth
-                    // 관리자 전용 경로: ADMIN 권한 필요
+                    // ADMIN 전용
                     .requestMatchers("/api/admin/**").hasRole("ADMIN")
-                    // 문서 업로드·목록·삭제는 ADMIN 전용
                     .requestMatchers(HttpMethod.GET, "/api/documents").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.POST, "/api/documents").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.DELETE, "/api/documents/**").hasRole("ADMIN")
-                    // 카테고리 생성은 ADMIN 전용, 목록 조회는 anyRequest().permitAll()로 허용
                     .requestMatchers(HttpMethod.POST, "/api/categories").hasRole("ADMIN")
-                    // 비밀번호 변경은 ADMIN 전용. 미설정 시 anyRequest().permitAll()에 걸려 비인증 요청이 서비스 레이어까지 도달한다
                     .requestMatchers(HttpMethod.POST, "/api/auth/password").hasRole("ADMIN")
+
+                    // 인증된 사용자 전용
                     // 로그아웃은 DB의 Refresh Token을 제거하므로 인증된 사용자만 호출할 수 있다
                     .requestMatchers(HttpMethod.POST, "/api/auth/logout").authenticated()
-                    // 로그인 엔드포인트: 인증 없이 접근 허용
-                    .requestMatchers("/api/auth/login").permitAll()
-                    // 나머지: USER는 로그인 불필요이므로 전체 허용
-                    .anyRequest().permitAll()
+
+                    // 공개 — USER 비로그인 허용
+                    .requestMatchers(HttpMethod.POST, "/api/auth/login", "/api/auth/reissue").permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/categories").permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/chat").permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/chat/stream").permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/chat/sessions").permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/chat/sessions/**").permitAll()
+                    .requestMatchers(HttpMethod.DELETE, "/api/chat/sessions/**").permitAll()
+                    .requestMatchers("/error", "/actuator/health").permitAll()
+
+                    // 명시되지 않은 모든 요청 차단 — 새 API 추가 시 반드시 위에 명시해야 한다
+                    .anyRequest().denyAll()
             )
             // 인증/권한 예외 처리 핸들러 등록
             .exceptionHandling(ex -> ex

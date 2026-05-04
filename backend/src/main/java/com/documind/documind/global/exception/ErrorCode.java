@@ -23,6 +23,14 @@ public enum ErrorCode {
     // 권한
     ACCESS_DENIED(HttpStatus.FORBIDDEN, "접근 권한이 없습니다."),
 
+    // FastAPI 서버 통신 오류 — 클라이언트가 재시도 가능 여부를 판단하도록 HTTP 상태코드로 구분한다
+    // 504: 타임아웃 (잠시 후 재시도 가능)
+    FASTAPI_TIMEOUT(HttpStatus.GATEWAY_TIMEOUT, "AI 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요."),
+    // 503: AI 서버가 올라와 있지 않거나 과부하 상태
+    FASTAPI_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "AI 서버가 일시적으로 사용 불가합니다."),
+    // 502: 네트워크 레벨 연결 실패 (DNS, 연결 거부 등)
+    FASTAPI_CONNECTION_FAILED(HttpStatus.BAD_GATEWAY, "AI 서버에 연결할 수 없습니다."),
+
     // 문서
     FILE_READ_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "파일을 읽는 중 오류가 발생했습니다."),
     FASTAPI_UPLOAD_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "AI 서버 문서 처리 중 오류가 발생했습니다."),

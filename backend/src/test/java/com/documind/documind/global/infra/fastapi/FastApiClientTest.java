@@ -131,7 +131,7 @@ class FastApiClientTest {
         CustomException exception = assertThrows(CustomException.class,
                 () -> shortTimeoutClient.uploadDocument(file, 7L));
 
-        assertEquals(ErrorCode.FASTAPI_UPLOAD_FAILED, exception.getErrorCode());
+        assertEquals(ErrorCode.FASTAPI_TIMEOUT, exception.getErrorCode());
     }
 
     @Test
@@ -158,7 +158,7 @@ class FastApiClientTest {
         CustomException exception = assertThrows(CustomException.class,
                 () -> shortTimeoutClient.query("질문", 5));
 
-        assertEquals(ErrorCode.FASTAPI_QUERY_FAILED, exception.getErrorCode());
+        assertEquals(ErrorCode.FASTAPI_TIMEOUT, exception.getErrorCode());
     }
 
     @Test
