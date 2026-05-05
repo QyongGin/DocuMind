@@ -57,6 +57,7 @@ public class SecurityConfig {
                     .requestMatchers("/api/admin/**").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.GET, "/api/auth/verify").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.GET, "/api/documents").hasRole("ADMIN")
+                    .requestMatchers(HttpMethod.GET, "/api/documents/*/chunks").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.POST, "/api/documents").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.DELETE, "/api/documents/**").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.POST, "/api/categories").hasRole("ADMIN")
@@ -93,7 +94,7 @@ public class SecurityConfig {
         return http.build();
     }
 
-    // Vite dev server(5173), Docker nginx(80), 운영 서버(192.168.35.168)에서의 브라우저 요청 허용
+    // Vite dev server(5173/5174), Docker nginx(80), 운영 서버(192.168.35.168)에서의 브라우저 요청 허용
     // allowCredentials(true)와 allowedOrigins("*") 조합은 Spring CORS에서 예외 발생 — origin 명시 필수
     @Bean
     CorsConfigurationSource corsConfigurationSource() {
@@ -101,6 +102,8 @@ public class SecurityConfig {
         config.setAllowedOrigins(List.of(
                 "http://localhost:5173",
                 "http://127.0.0.1:5173",
+                "http://localhost:5174",
+                "http://127.0.0.1:5174",
                 "http://localhost",
                 "http://192.168.35.168"  // 운영 서버 — HttpOnly cookie 및 SSE credentials 요청 허용
         ));

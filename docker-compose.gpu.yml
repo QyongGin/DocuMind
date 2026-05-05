@@ -1,0 +1,13 @@
+# 데스크탑(NVIDIA GPU) 전용 오버라이드 파일
+# 사용법: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+# 맥북에서는 사용하지 않는다 — docker compose up --build 그대로 사용
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

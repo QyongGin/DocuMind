@@ -28,9 +28,10 @@ public class DocumentController {
     @PostMapping
     public ResponseEntity<ApiResponse<DocumentUploadResponse>> upload(
             @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "categoryId", required = false) Long categoryId,
             @AuthenticationPrincipal String username
     ) {
-        DocumentUploadResponse response = documentService.upload(file, username);
+        DocumentUploadResponse response = documentService.upload(file, categoryId, username);
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
@@ -42,6 +43,17 @@ public class DocumentController {
     @GetMapping
     public ResponseEntity<ApiResponse<List<DocumentListResponse>>> list() {
         return ResponseEntity.ok(ApiResponse.success(documentService.list()));
+    }
+
+    /**
+     * GET /api/documents/{id}/chunks — 문서별 ChromaDB 청크 원문 조회 (ADMIN 전용).
+     *
+     * @param id 청크를 조회할 문서 PK
+     * @return 문서의 청크 목록
+     */
+    @GetMapping("/{id}/chunks")
+    public ResponseEntity<ApiResponse<List<DocumentChunkResponse>>> chunks(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.success(documentService.listChunks(id)));
     }
 
     /**

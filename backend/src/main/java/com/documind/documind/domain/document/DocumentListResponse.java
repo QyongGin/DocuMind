@@ -19,6 +19,8 @@ public class DocumentListResponse {
     private Long fileSize;
     private int chunkCount;
     /** 카테고리 미분류 문서는 null */
+    private Long categoryId;
+    /** 카테고리 미분류 문서는 null */
     private String categoryName;
     private LocalDateTime createdAt;
 
@@ -30,6 +32,7 @@ public class DocumentListResponse {
                 .mimeType(document.getMimeType())
                 .fileSize(document.getFileSize())
                 .chunkCount(document.getChunkCount())
+                .categoryId(document.getCategory() != null ? document.getCategory().getId() : null)
                 .categoryName(document.getCategory() != null ? document.getCategory().getName() : null)
                 .createdAt(document.getCreatedAt())
                 .build();

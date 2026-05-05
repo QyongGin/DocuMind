@@ -47,3 +47,10 @@ jwt:
 auth:
   # HTTPS 배포 시 true로 설정하면 refresh-token 쿠키에 Secure 속성을 추가한다.
   refresh-cookie-secure: ${AUTH_REFRESH_COOKIE_SECURE:false}
+
+documind:
+  admin:
+    bootstrap:
+      # 최초 관리자 계정 생성용. 운영에서는 환경변수로만 주입하고 코드에 비밀번호를 저장하지 않는다.
+      username: ${DOCUMIND_ADMIN_USERNAME:}
+      password: ${DOCUMIND_ADMIN_PASSWORD:}
