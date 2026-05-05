@@ -92,14 +92,19 @@ public class SecurityConfig {
         return http.build();
     }
 
-    // Vite dev server(5173), Docker nginx(80), nginx 기본 포트(80)에서의 브라우저 요청 허용
+    // Vite dev server(5173), Docker nginx(80), 운영 서버(192.168.35.168)에서의 브라우저 요청 허용
+    // allowCredentials(true)와 allowedOrigins("*") 조합은 Spring CORS에서 예외 발생 — origin 명시 필수
     @Bean
     CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of("http://localhost:5173", "http://localhost:80", "http://localhost"));
+        config.setAllowedOrigins(List.of(
+                "http://localhost:5173",
+                "http://localhost",
+                "http://192.168.35.168"  // 운영 서버 — HttpOnly cookie 및 SSE credentials 요청 허용
+        ));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
-        // EventSource(SSE) 쿠키 기반 세션 추적을 위해 credentials 허용
+        // HttpOnly cookie(refresh-token)와 SSE EventSource credentials 전송을 위해 true로 설정
         config.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
