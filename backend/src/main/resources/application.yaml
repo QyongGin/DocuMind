@@ -39,3 +39,7 @@ jwt:
   access-token-expiration: ${JWT_ACCESS_TOKEN_EXPIRATION:24h}
   # Refresh Token 만료 시간. 운영에서는 환경변수 JWT_REFRESH_TOKEN_EXPIRATION으로 조정한다.
   refresh-token-expiration: ${JWT_REFRESH_TOKEN_EXPIRATION:7d}
+
+auth:
+  # HTTPS 배포 시 true로 설정하면 refresh-token 쿠키에 Secure 속성을 추가한다.
+  refresh-cookie-secure: ${AUTH_REFRESH_COOKIE_SECURE:false}

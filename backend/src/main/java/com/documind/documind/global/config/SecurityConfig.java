@@ -61,12 +61,10 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.POST, "/api/categories").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.POST, "/api/auth/password").hasRole("ADMIN")
 
-                    // 인증된 사용자 전용
-                    // 로그아웃은 DB의 Refresh Token을 제거하므로 인증된 사용자만 호출할 수 있다
-                    .requestMatchers(HttpMethod.POST, "/api/auth/logout").authenticated()
-
                     // 공개 — USER 비로그인 허용
+                    // logout은 Access Token이 만료된 경우에도 HttpOnly refresh-token 쿠키 만료를 위해 허용한다
                     .requestMatchers(HttpMethod.POST, "/api/auth/login", "/api/auth/reissue").permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/auth/logout").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/categories").permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/chat").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/chat/stream").permitAll()
@@ -92,14 +90,20 @@ public class SecurityConfig {
         return http.build();
     }
 
-    // Vite dev server(5173), Docker nginx(80), nginx 기본 포트(80)에서의 브라우저 요청 허용
+    // Vite dev server(5173), Docker nginx(80), 운영 서버(192.168.35.168)에서의 브라우저 요청 허용
+    // allowCredentials(true)와 allowedOrigins("*") 조합은 Spring CORS에서 예외 발생 — origin 명시 필수
     @Bean
     CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of("http://localhost:5173", "http://localhost:80", "http://localhost"));
+        config.setAllowedOrigins(List.of(
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "http://localhost",
+                "http://192.168.35.168"  // 운영 서버 — HttpOnly cookie 및 SSE credentials 요청 허용
+        ));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
-        // EventSource(SSE) 쿠키 기반 세션 추적을 위해 credentials 허용
+        // HttpOnly cookie(refresh-token)와 SSE EventSource credentials 전송을 위해 true로 설정
         config.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);

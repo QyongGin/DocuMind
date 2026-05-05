@@ -84,7 +84,7 @@ public class ChatController {
     ) {
         Long userId = extractUserId(authentication);
         chatService.deleteSession(id, userId, sessionKey);
-        return ResponseEntity.ok(ApiResponse.success("채팅 세션이 삭제되었습니다."));
+        return ResponseEntity.ok(ApiResponse.successMessage("채팅 세션이 삭제되었습니다."));
     }
 
     /**
