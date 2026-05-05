@@ -23,6 +23,11 @@ export async function logout() {
   }
 }
 
+export async function verifyAccessToken() {
+  // 서버가 JWT 서명·만료·권한을 검증한다. 실패 시 apiRequest가 예외를 던진다.
+  await apiRequest('/auth/verify', { method: 'GET', auth: true })
+}
+
 export async function reissueAccessToken() {
   // refresh token은 HttpOnly 쿠키로 자동 전송된다 — 헤더에 직접 포함하지 않는다
   const accessToken = await apiRequest('/auth/reissue', { method: 'POST' })
