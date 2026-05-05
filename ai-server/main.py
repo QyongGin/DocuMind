@@ -25,9 +25,11 @@ app = FastAPI(title="DocuMind AI Server", version="1.0.0")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 # 환경변수로 LLM 모델명 분기. Docker: OLLAMA_LLM_MODEL=exaone3.5:7.8b
 OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "exaone3.5:7.8b")
+# 환경변수로 임베딩 모델명 분기. 배포 서버에서는 qwen3-embedding:8b 사용 가능
+OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:4b")
 
 embeddings = OllamaEmbeddings(
-    model="qwen3-embedding:4b",
+    model=OLLAMA_EMBEDDING_MODEL,
     base_url=OLLAMA_BASE_URL
 )
 
