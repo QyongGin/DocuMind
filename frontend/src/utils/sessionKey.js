@@ -1,8 +1,8 @@
 const SESSION_KEY_STORAGE = 'documind-session-key'
 
 function createSessionKey() {
-  if (crypto.randomUUID) {
-    return crypto.randomUUID()
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
   }
 
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`

@@ -1,28 +1,38 @@
 const ACCESS_TOKEN_KEY = 'documind-access-token'
 const REFRESH_TOKEN_KEY = 'documind-refresh-token'
 
+function normalizeToken(token) {
+  if (typeof token !== 'string') return null
+  const normalized = token.trim()
+  if (!normalized || normalized.toLowerCase() === 'undefined' || normalized.toLowerCase() === 'null') {
+    return null
+  }
+  return normalized
+}
+
 export function getAccessToken() {
-  return localStorage.getItem(ACCESS_TOKEN_KEY)
+  return normalizeToken(localStorage.getItem(ACCESS_TOKEN_KEY))
 }
 
 export function getRefreshToken() {
-  return localStorage.getItem(REFRESH_TOKEN_KEY)
+  return normalizeToken(localStorage.getItem(REFRESH_TOKEN_KEY))
 }
 
 export function hasAccessToken() {
-  const token = getAccessToken()
-  return typeof token === 'string' && token.trim() !== '' && token !== 'undefined' && token !== 'null'
+  return Boolean(getAccessToken())
 }
 
-export function saveTokens({ accessToken, refreshToken }) {
-  if (typeof accessToken === 'string' && accessToken.trim() !== '') {
-    localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
+export function saveTokens({ accessToken, refreshToken } = {}) {
+  const normalizedAccessToken = normalizeToken(accessToken)
+  if (normalizedAccessToken) {
+    localStorage.setItem(ACCESS_TOKEN_KEY, normalizedAccessToken)
   } else {
     localStorage.removeItem(ACCESS_TOKEN_KEY)
   }
 
-  if (typeof refreshToken === 'string' && refreshToken.trim() !== '') {
-    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+  const normalizedRefreshToken = normalizeToken(refreshToken)
+  if (normalizedRefreshToken) {
+    localStorage.setItem(REFRESH_TOKEN_KEY, normalizedRefreshToken)
   } else {
     localStorage.removeItem(REFRESH_TOKEN_KEY)
   }
