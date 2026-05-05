@@ -24,6 +24,7 @@ import java.util.Set;
 import jakarta.servlet.http.Cookie;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.hamcrest.Matchers.containsString;
@@ -290,6 +291,34 @@ class AuthApiTest {
                 () -> authService.changePassword(ADMIN_USERNAME, "wrongCurrent", "newPassword123"));
 
         assertEquals(ErrorCode.WRONG_PASSWORD, ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("토큰 검증 API - ADMIN 토큰으로 요청하면 200을 반환한다")
+    void verifyApi_adminToken_returns200() throws Exception {
+        User admin = userRepository.findByUsername(ADMIN_USERNAME).orElseThrow();
+        String adminToken = jwtProvider.generateToken(admin.getUsername(), admin.getRole().name(), admin.getId());
+
+        mockMvc.perform(get("/api/auth/verify")
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("토큰 검증 API - 토큰 없이 요청하면 401을 반환한다")
+    void verifyApi_noToken_returns401() throws Exception {
+        mockMvc.perform(get("/api/auth/verify"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("토큰 검증 API - USER 토큰으로 요청하면 403을 반환한다")
+    void verifyApi_userToken_returns403() throws Exception {
+        String userToken = jwtProvider.generateToken("user", User.Role.USER.name(), 999L);
+
+        mockMvc.perform(get("/api/auth/verify")
+                        .header("Authorization", bearer(userToken)))
+                .andExpect(status().isForbidden());
     }
 
     // Authorization 헤더에 사용할 Bearer Token 값을 생성한다
