@@ -37,6 +37,8 @@ export async function apiRequest(path, options = {}) {
   const response = await fetch(createUrl(path), {
     ...fetchOptions,
     headers: requestHeaders,
+    // HttpOnly 쿠키(refresh-token)를 cross-origin 요청에도 전송하기 위해 credentials 포함
+    credentials: 'include',
     body: body === undefined ? undefined : body instanceof FormData ? body : JSON.stringify(body),
   })
 

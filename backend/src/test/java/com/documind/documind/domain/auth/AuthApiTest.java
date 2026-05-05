@@ -21,9 +21,12 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Set;
 
+import jakarta.servlet.http.Cookie;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.hamcrest.Matchers.containsString;
 
 /**
  * 인증 API 서비스 레이어 통합 테스트.
@@ -82,17 +85,54 @@ class AuthApiTest {
     }
 
     @Test
-    @DisplayName("로그인 - 올바른 자격증명으로 Access Token과 Refresh Token을 반환한다")
+    @DisplayName("로그인 - Access Token을 발급하고 Refresh Token은 DB와 HttpOnly 쿠키로 관리한다")
     void login_success() {
         LoginResponse response = authService.login(ADMIN_USERNAME, RAW_PASSWORD);
 
         assertNotNull(response.getAccessToken());
+        // refreshToken은 JSON 직렬화 대상이 아니지만 서비스 레이어에서는 정상 생성된다
         assertNotNull(response.getRefreshToken());
 
         // DB에 Refresh Token이 저장됐는지 확인
         User saved = userRepository.findByUsername(ADMIN_USERNAME).orElseThrow();
         assertEquals(response.getRefreshToken(), saved.getRefreshToken());
         assertNotNull(saved.getLastLoginAt());
+    }
+
+    @Test
+    @DisplayName("로그인 API - 응답 body에 accessToken이 있고 Set-Cookie에 refresh-token이 존재한다")
+    void loginApi_setsRefreshTokenCookie() throws Exception {
+        String loginJson = String.format("""
+                { "username": "%s", "password": "%s" }
+                """, ADMIN_USERNAME, RAW_PASSWORD);
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginJson))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
+                // refreshToken은 body에 노출되지 않아야 한다
+                .andExpect(jsonPath("$.data.refreshToken").doesNotExist())
+                .andExpect(header().string("Set-Cookie", containsString("refresh-token=")))
+                .andExpect(header().string("Set-Cookie", containsString("HttpOnly")));
+    }
+
+    @Test
+    @DisplayName("토큰 재발급 API - refresh-token 쿠키로 새 Access Token을 발급한다")
+    void reissueApi_withCookie_returnsNewAccessToken() throws Exception {
+        LoginResponse loginResponse = authService.login(ADMIN_USERNAME, RAW_PASSWORD);
+
+        mockMvc.perform(post("/api/auth/reissue")
+                        .cookie(new Cookie("refresh-token", loginResponse.getRefreshToken())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isNotEmpty());
+    }
+
+    @Test
+    @DisplayName("토큰 재발급 API - refresh-token 쿠키 없이 요청하면 401을 반환한다")
+    void reissueApi_withoutCookie_returns401() throws Exception {
+        mockMvc.perform(post("/api/auth/reissue"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
