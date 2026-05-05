@@ -18,6 +18,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Objects;
 
 // FastAPI 서버와 통신하는 HTTP 클라이언트
@@ -134,6 +135,38 @@ public class FastApiClient {
         } catch (RuntimeException e) {
             log.warn("FastAPI DELETE /documents/{} 호출 실패", documentId, e);
             throw new CustomException(ErrorCode.FASTAPI_DELETE_FAILED);
+        }
+    }
+
+    /**
+     * ChromaDB에 저장된 특정 문서의 청크 목록을 FastAPI에서 조회한다.
+     *
+     * @param documentId 조회할 문서의 PK
+     * @return 청크 목록
+     */
+    public List<FastApiDocumentChunkResponse> listDocumentChunks(Long documentId) {
+        try {
+            FastApiDocumentChunksResponse response = blockingWebClient.get()
+                    .uri("/documents/{id}/chunks", documentId)
+                    .retrieve()
+                    .bodyToMono(FastApiDocumentChunksResponse.class)
+                    .block(responseTimeout);
+            List<FastApiDocumentChunkResponse> chunks =
+                    Objects.requireNonNull(response, "FastAPI /documents/{id}/chunks 응답이 null입니다.").getChunks();
+            return chunks != null ? chunks : List.of();
+        } catch (WebClientResponseException.ServiceUnavailable e) {
+            log.warn("FastAPI GET /documents/{}/chunks 서비스 불가", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_UNAVAILABLE);
+        } catch (WebClientRequestException e) {
+            log.warn("FastAPI GET /documents/{}/chunks 연결 실패", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_CONNECTION_FAILED);
+        } catch (IllegalStateException e) {
+            // .block(Duration) 타임아웃 시 Reactor가 IllegalStateException을 던진다
+            log.warn("FastAPI GET /documents/{}/chunks 응답 타임아웃", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_TIMEOUT);
+        } catch (RuntimeException e) {
+            log.warn("FastAPI GET /documents/{}/chunks 호출 실패", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_QUERY_FAILED);
         }
     }
 

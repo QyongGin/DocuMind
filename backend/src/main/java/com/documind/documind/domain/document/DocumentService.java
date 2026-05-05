@@ -2,6 +2,8 @@ package com.documind.documind.domain.document;
 
 import com.documind.documind.domain.auth.User;
 import com.documind.documind.domain.auth.UserRepository;
+import com.documind.documind.domain.category.Category;
+import com.documind.documind.domain.category.CategoryRepository;
 import com.documind.documind.global.exception.CustomException;
 import com.documind.documind.global.exception.ErrorCode;
 import com.documind.documind.global.infra.fastapi.FastApiClient;
@@ -23,6 +25,7 @@ public class DocumentService {
 
     private final DocumentRepository documentRepository;
     private final UserRepository userRepository;
+    private final CategoryRepository categoryRepository;
     private final FastApiClient fastApiClient;
 
     // 허용 MIME 타입 목록. FastAPI 파서가 지원하는 형식과 동기화
@@ -43,6 +46,20 @@ public class DocumentService {
      */
     @Transactional
     public DocumentUploadResponse upload(MultipartFile file, String username) {
+        return upload(file, null, username);
+    }
+
+    /**
+     * 문서를 업로드하고 선택한 카테고리를 함께 저장한다.
+     *
+     * @param file       업로드할 파일 (PDF/DOCX/PPTX/XLSX)
+     * @param categoryId 연결할 카테고리 PK. 미분류면 null
+     * @param username   업로드한 관리자 계정명
+     * @return 업로드 결과 (document_id, 파일명, 파일 크기, 청크 수)
+     * @throws CustomException 허용하지 않는 파일 형식, 사용자 없음, 카테고리 없음
+     */
+    @Transactional
+    public DocumentUploadResponse upload(MultipartFile file, Long categoryId, String username) {
         // 파일 형식 검증
         String mimeType = file.getContentType();
         if (mimeType == null || !ALLOWED_MIME_TYPES.contains(mimeType)) {
@@ -52,6 +69,12 @@ public class DocumentService {
         // 업로더 조회
         User uploader = userRepository.findByUsername(username)
                 .orElseThrow(() -> new CustomException(ErrorCode.USER_NOT_FOUND));
+
+        Category category = null;
+        if (categoryId != null) {
+            category = categoryRepository.findById(categoryId)
+                    .orElseThrow(() -> new CustomException(ErrorCode.CATEGORY_NOT_FOUND));
+        }
 
         // UUID 기반 서버 저장 파일명 생성 (확장자 유지)
         String originalName = file.getOriginalFilename();
@@ -63,7 +86,7 @@ public class DocumentService {
         // Document를 DB에 먼저 저장해 PK(document_id)를 확보
         // FastAPI 호출 시 document_id가 필요하므로 저장 후 호출 순서를 지킨다
         Document document = Document.create(
-                uploader, null, fileName, originalName,
+                uploader, category, fileName, originalName,
                 file.getSize(), mimeType
         );
         documentRepository.save(document);
@@ -92,6 +115,29 @@ public class DocumentService {
         return documentRepository.findAllByIsActiveTrueOrderByCreatedAtDesc()
                 .stream()
                 .map(DocumentListResponse::from)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 특정 문서의 ChromaDB 청크 원문을 조회한다.
+     *
+     * @param documentId 조회할 문서의 PK
+     * @return 청크 목록 (청크 순서 오름차순)
+     * @throws CustomException 문서를 찾을 수 없는 경우 DOCUMENT_NOT_FOUND
+     */
+    @Transactional(readOnly = true)
+    public List<DocumentChunkResponse> listChunks(Long documentId) {
+        documentRepository.findByIdAndIsActiveTrue(documentId)
+                .orElseThrow(() -> new CustomException(ErrorCode.DOCUMENT_NOT_FOUND));
+
+        return fastApiClient.listDocumentChunks(documentId)
+                .stream()
+                .map(chunk -> DocumentChunkResponse.builder()
+                        .id(chunk.getId())
+                        .chunkIndex(chunk.getChunkIndex())
+                        .content(chunk.getContent())
+                        .metadata(chunk.getMetadata())
+                        .build())
                 .collect(Collectors.toList());
     }
 

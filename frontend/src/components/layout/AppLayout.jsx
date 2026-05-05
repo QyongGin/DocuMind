@@ -23,7 +23,7 @@ function AppLayout() {
           <span className="brand-mark">D</span>
           <span>
             <strong>DocuMind</strong>
-            <small>On-premise RAG</small>
+            <small>인하공업전문대학 AI 안내</small>
           </span>
         </NavLink>
 

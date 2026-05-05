@@ -315,6 +315,38 @@ async def delete_document(document_id: int):
     return {"status": "success", "deleted_chunks": deleted_count}
 
 
+@app.get("/documents/{document_id}/chunks")
+async def list_document_chunks(document_id: int):
+    """
+    ChromaDB에서 document_id에 해당하는 청크 원문과 메타데이터를 조회한다.
+    관리자 문서 점검 화면에서 청킹 결과를 확인하기 위한 읽기 전용 엔드포인트다.
+    """
+    def _get_from_chroma() -> list[dict]:
+        results = collection.get(
+            where={"document_id": str(document_id)},
+            include=["documents", "metadatas"]
+        )
+        ids = results.get("ids", [])
+        documents = results.get("documents", [])
+        metadatas = results.get("metadatas", [])
+
+        chunks: list[dict] = []
+        for fallback_index, (chunk_id, content, metadata) in enumerate(zip(ids, documents, metadatas)):
+            suffix = str(chunk_id).rsplit("_", 1)[-1]
+            chunk_index = int(suffix) if suffix.isdigit() else fallback_index
+            chunks.append({
+                "id": chunk_id,
+                "chunk_index": chunk_index,
+                "content": content,
+                "metadata": metadata or {}
+            })
+
+        return sorted(chunks, key=lambda chunk: chunk["chunk_index"])
+
+    chunks = await asyncio.to_thread(_get_from_chroma)
+    return {"document_id": document_id, "chunks": chunks}
+
+
 @app.post("/query")
 async def query_document(request: QueryRequest):
     """
