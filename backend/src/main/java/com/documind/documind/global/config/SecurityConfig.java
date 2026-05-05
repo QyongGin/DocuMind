@@ -5,6 +5,7 @@ import com.documind.documind.global.auth.AuthEntryPoint;
 import com.documind.documind.global.auth.JwtAuthenticationFilter;
 import com.documind.documind.global.auth.JwtProvider;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -36,6 +37,9 @@ public class SecurityConfig {
     private final JwtProvider jwtProvider;
     private final AuthEntryPoint authEntryPoint;
     private final AccessDeniedHandlerImpl accessDeniedHandler;
+
+    @Value("${app.cors.allowed-origins}")
+    private List<String> allowedOrigins;
 
     /**
      * HTTP 보안 필터 체인을 구성한다.
@@ -99,14 +103,7 @@ public class SecurityConfig {
     @Bean
     CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of(
-                "http://localhost:5173",
-                "http://127.0.0.1:5173",
-                "http://localhost:5174",
-                "http://127.0.0.1:5174",
-                "http://localhost",
-                "http://192.168.35.168"  // 운영 서버 — HttpOnly cookie 및 SSE credentials 요청 허용
-        ));
+        config.setAllowedOrigins(allowedOrigins);
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         // HttpOnly cookie(refresh-token)와 SSE EventSource credentials 전송을 위해 true로 설정
