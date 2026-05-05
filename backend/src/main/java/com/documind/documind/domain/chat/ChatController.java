@@ -2,6 +2,8 @@ package com.documind.documind.domain.chat;
 
 import com.documind.documind.global.auth.JwtAuthenticationDetails;
 import com.documind.documind.global.common.ApiResponse;
+import com.documind.documind.global.exception.CustomException;
+import com.documind.documind.global.exception.ErrorCode;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -27,13 +29,16 @@ import java.util.List;
 public class ChatController {
 
     private final ChatService chatService;
+    private final StreamSessionStore streamSessionStore;
     private final Duration sseEmitterTimeout;
 
     public ChatController(
             ChatService chatService,
+            StreamSessionStore streamSessionStore,
             @Value("${chat.sse-emitter-timeout:0s}") Duration sseEmitterTimeout
     ) {
         this.chatService = chatService;
+        this.streamSessionStore = streamSessionStore;
         this.sseEmitterTimeout = sseEmitterTimeout;
     }
 
@@ -102,7 +107,35 @@ public class ChatController {
         return details instanceof JwtAuthenticationDetails jad ? jad.getUserId() : null;
     }
 
-    // SSE 스트리밍 질의응답. EventSource는 GET만 지원하므로 question을 query param으로 전달
+    /**
+     * POST /api/chat/stream/session — SSE 스트리밍 세션 사전 등록.
+     * 질문을 body로 받아 서버 메모리에 30초간 보관하고 단일 사용 streamId를 발급한다.
+     * 이후 GET /api/chat/stream/{streamId}로 SSE 연결 시 질문이 URL에 노출되지 않는다.
+     */
+    @PostMapping("/stream/session")
+    public ResponseEntity<ApiResponse<StreamSessionResponse>> createStreamSession(
+            @Valid @RequestBody StreamSessionRequest request) {
+        String streamId = streamSessionStore.save(request.question(), request.sessionKey(), request.topK());
+        return ResponseEntity.ok(ApiResponse.success(new StreamSessionResponse(streamId)));
+    }
+
+    /**
+     * GET /api/chat/stream/{streamId} — streamId 기반 SSE 스트리밍 질의응답.
+     * 서버에서 streamId에 해당하는 질문을 조회한 뒤 단일 소비(remove)하고 스트리밍을 시작한다.
+     * streamId가 없거나 30초 TTL이 초과된 경우 404를 반환한다.
+     */
+    @GetMapping(value = "/stream/{streamId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamById(@PathVariable String streamId) {
+        StreamSessionData data = streamSessionStore.consumeById(streamId)
+                .orElseThrow(() -> new CustomException(ErrorCode.STREAM_SESSION_NOT_FOUND));
+
+        SseEmitter emitter = new SseEmitter(sseEmitterTimeout.toMillis());
+        chatService.streamChat(data.question(), data.sessionKey(), data.topK(), emitter);
+        return emitter;
+    }
+
+    // SSE 스트리밍 질의응답 (레거시 — question이 URL에 노출됨, /stream/{streamId} 패턴으로 대체됨)
+    // EventSource는 GET만 지원하므로 question을 query param으로 전달
     // produces: 브라우저가 text/event-stream으로 수신 시 연결을 유지하는 SSE 프로토콜
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(

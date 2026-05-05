@@ -45,6 +45,8 @@ public enum ErrorCode {
 
     // 채팅
     CHAT_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "채팅 세션을 찾을 수 없습니다."),
+    // streamId가 만료되거나 이미 소비된 경우 — 클라이언트가 새 세션을 생성하도록 유도
+    STREAM_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "스트리밍 세션을 찾을 수 없거나 만료되었습니다."),
 
     // 서버
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "서버 내부 오류가 발생했습니다.");
