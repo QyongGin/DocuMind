@@ -7,6 +7,7 @@ import com.documind.documind.global.exception.ErrorCode;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -16,6 +17,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 
@@ -29,6 +31,7 @@ import java.util.List;
 @RequestMapping("/api/chat")
 // @Validated: @RequestParam에 붙은 @Min, @Max 등 제약 어노테이션 활성화
 @Validated
+@Slf4j
 public class ChatController {
 
     private final ChatService chatService;
@@ -125,7 +128,8 @@ public class ChatController {
     public ResponseEntity<ApiResponse<StreamSessionResponse>> createStreamSession(
             @Valid @RequestBody StreamSessionRequest request) {
         int topK = request.topK() == null ? 5 : request.topK();
-        String streamId = streamSessionStore.save(request.question(), request.sessionKey(), topK);
+        String streamId = streamSessionStore.save(request.question(), request.sessionKey(), topK)
+                .orElseThrow(() -> new CustomException(ErrorCode.STREAM_SESSION_LIMIT_EXCEEDED));
         return ResponseEntity.ok(ApiResponse.success(new StreamSessionResponse(streamId)));
     }
 
@@ -136,11 +140,17 @@ public class ChatController {
      */
     @GetMapping(value = "/stream/{streamId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamById(@PathVariable String streamId) {
-        StreamSessionData data = streamSessionStore.consumeById(streamId)
-                .orElseThrow(() -> new CustomException(ErrorCode.STREAM_SESSION_NOT_FOUND));
-
         SseEmitter emitter = new SseEmitter(sseEmitterTimeout.toMillis());
-        chatService.streamChat(data.question(), data.sessionKey(), data.topK(), emitter);
+        try {
+            StreamSessionData data = streamSessionStore.consumeById(streamId)
+                    .orElseThrow(() -> new CustomException(ErrorCode.STREAM_SESSION_NOT_FOUND));
+            chatService.streamChat(data.question(), data.sessionKey(), data.topK(), emitter);
+        } catch (CustomException e) {
+            sendStreamErrorAndComplete(emitter, e.getErrorCode());
+        } catch (Exception e) {
+            log.error("streamId 기반 SSE 스트리밍 시작 오류", e);
+            sendStreamErrorAndComplete(emitter, ErrorCode.INTERNAL_SERVER_ERROR);
+        }
         return emitter;
     }
 
@@ -159,5 +169,19 @@ public class ChatController {
         SseEmitter emitter = new SseEmitter(sseEmitterTimeout.toMillis());
         chatService.streamChat(question, sessionKey, topK, emitter);
         return emitter;
+    }
+
+    private void sendStreamErrorAndComplete(SseEmitter emitter, ErrorCode errorCode) {
+        String message = errorCode.getMessage();
+        String payload = """
+                {"type":"error","error":"%s","code":"%s","message":"%s"}
+                """.formatted(message, errorCode.name(), message);
+        try {
+            emitter.send(SseEmitter.event().name("error").data(payload));
+        } catch (IOException e) {
+            log.warn("SSE 오류 이벤트 전송 실패", e);
+        } finally {
+            emitter.complete();
+        }
     }
 }

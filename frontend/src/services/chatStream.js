@@ -33,6 +33,11 @@ export function openChatStream({ question, sessionKey, topK, onToken, onDone, on
   let eventSource = null
   let cancelled = false
 
+  function closeStream() {
+    cancelled = true
+    eventSource?.close()
+  }
+
   createStreamSession({ question, sessionKey, topK })
     .then((streamId) => {
       if (cancelled) return
@@ -43,6 +48,8 @@ export function openChatStream({ question, sessionKey, topK, onToken, onDone, on
       })
 
       eventSource.onmessage = (message) => {
+        if (cancelled) return
+
         try {
           const data = JSON.parse(message.data)
 
@@ -53,20 +60,33 @@ export function openChatStream({ question, sessionKey, topK, onToken, onDone, on
               answer: data.answer,
               sources: data.sources ?? [],
             })
-            eventSource.close()
+            closeStream()
           } else if (data.error) {
             onError(data.error)
-            eventSource.close()
+            closeStream()
           }
         } catch {
           onError('스트리밍 응답을 처리하지 못했습니다.')
-          eventSource.close()
+          closeStream()
         }
       }
 
-      eventSource.onerror = () => {
+      eventSource.onerror = (event) => {
+        if (cancelled) return
+
+        if (typeof event.data === 'string') {
+          try {
+            const data = JSON.parse(event.data)
+            onError(data.error ?? '스트리밍 응답을 처리하지 못했습니다.')
+          } catch {
+            onError('스트리밍 응답을 처리하지 못했습니다.')
+          }
+          closeStream()
+          return
+        }
+
         onError('서버 연결이 끊어졌습니다.')
-        eventSource.close()
+        closeStream()
       }
     })
     .catch(() => {
@@ -77,8 +97,7 @@ export function openChatStream({ question, sessionKey, topK, onToken, onDone, on
 
   return {
     close() {
-      cancelled = true
-      eventSource?.close()
+      closeStream()
     },
   }
 }

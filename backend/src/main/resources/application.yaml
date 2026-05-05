@@ -31,6 +31,10 @@ fastapi:
 chat:
   # Spring MVC SseEmitter 타임아웃. 기본 5분, 더 긴 답변이 필요하면 환경변수 CHAT_SSE_EMITTER_TIMEOUT으로 조정
   sse-emitter-timeout: ${CHAT_SSE_EMITTER_TIMEOUT:5m}
+  # SSE streamId 임시 저장 TTL. GET EventSource 연결이 지연되면 만료된다.
+  stream-session-ttl: ${CHAT_STREAM_SESSION_TTL:30s}
+  # SSE streamId 임시 저장 최대 건수. 외부 gateway/IP rate limit과 함께 메모리 보호 장치로 사용한다.
+  stream-session-max-entries: ${CHAT_STREAM_SESSION_MAX_ENTRIES:1000}
 
 jwt:
   # HS256 최소 256bit(32자 이상) 필요. 기본값 없이 환경변수로만 주입한다.
