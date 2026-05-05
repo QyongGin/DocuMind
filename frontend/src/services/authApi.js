@@ -22,6 +22,11 @@ export async function logout() {
   }
 }
 
+export async function verifyAccessToken() {
+  // 서버가 JWT 서명·만료·권한을 검증한다. 실패 시 apiRequest가 예외를 던진다.
+  await apiRequest('/auth/verify', { method: 'GET', auth: true })
+}
+
 export async function reissueAccessToken() {
   const refreshToken = getRefreshToken()
   if (!refreshToken) {

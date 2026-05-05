@@ -55,6 +55,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                     // ADMIN 전용
                     .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                    .requestMatchers(HttpMethod.GET, "/api/auth/verify").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.GET, "/api/documents").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.POST, "/api/documents").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.DELETE, "/api/documents/**").hasRole("ADMIN")

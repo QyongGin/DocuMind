@@ -54,6 +54,16 @@ public class AuthController {
     }
 
     /**
+     * GET /api/auth/verify — Access Token 유효성 검증 (ADMIN 전용).
+     * JwtAuthenticationFilter가 JWT 서명·만료를 검증하므로 여기까지 도달하면 토큰이 유효하다.
+     * 프론트엔드 RequireAdmin이 마운트 시 이 API를 호출해 토큰의 서버 수준 유효성을 확인한다.
+     */
+    @GetMapping("/verify")
+    public ResponseEntity<ApiResponse<Void>> verify() {
+        return ResponseEntity.ok(ApiResponse.success(null));
+    }
+
+    /**
      * POST /api/auth/password — 비밀번호 변경 (ADMIN 전용).
      * currentPassword 재확인으로 세션 탈취 공격자가 비밀번호를 교체하는 것을 방지한다.
      */
