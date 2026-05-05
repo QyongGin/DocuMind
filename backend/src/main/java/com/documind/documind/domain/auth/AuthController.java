@@ -30,6 +30,10 @@ public class AuthController {
     @Value("${jwt.refresh-token-expiration}")
     private Duration refreshTokenExpiration;
 
+    // 운영 환경에서 HTTPS를 적용하면 true로 전환해 Secure 쿠키로 발급한다
+    @Value("${auth.refresh-cookie-secure:false}")
+    private boolean refreshCookieSecure;
+
     // 쿠키 이름을 한 곳에서 관리해 오타 위험을 제거한다
     private static final String REFRESH_COOKIE_NAME = "refresh-token";
 
@@ -88,12 +92,12 @@ public class AuthController {
 
     /**
      * refresh-token HttpOnly 쿠키를 Set-Cookie 헤더에 추가한다.
-     * Secure 속성은 HTTPS 도입 이후 true로 변경해야 한다.
+     * Secure 속성은 환경변수로 제어해 HTTP 로컬 개발과 HTTPS 운영 배포를 분리한다.
      */
     private void setRefreshTokenCookie(HttpServletResponse response, String refreshToken) {
         ResponseCookie cookie = ResponseCookie.from(REFRESH_COOKIE_NAME, refreshToken)
                 .httpOnly(true)
-                .secure(false) // HTTPS 환경으로 전환 시 true로 변경
+                .secure(refreshCookieSecure)
                 .sameSite("Strict")
                 .path("/api/auth")
                 .maxAge(refreshTokenExpiration)
@@ -105,7 +109,7 @@ public class AuthController {
     private void expireRefreshTokenCookie(HttpServletResponse response) {
         ResponseCookie cookie = ResponseCookie.from(REFRESH_COOKIE_NAME, "")
                 .httpOnly(true)
-                .secure(false)
+                .secure(refreshCookieSecure)
                 .sameSite("Strict")
                 .path("/api/auth")
                 .maxAge(0)

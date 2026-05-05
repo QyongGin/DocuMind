@@ -99,6 +99,7 @@ public class SecurityConfig {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(List.of(
                 "http://localhost:5173",
+                "http://127.0.0.1:5173",
                 "http://localhost",
                 "http://192.168.35.168"  // 운영 서버 — HttpOnly cookie 및 SSE credentials 요청 허용
         ));

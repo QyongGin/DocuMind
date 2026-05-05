@@ -1,6 +1,8 @@
 import { env } from '../config/env.js'
 import { getAccessToken } from './authStorage.js'
 
+const DEFAULT_TIMEOUT_MS = 30000
+
 function createUrl(path) {
   const normalizedBase = env.apiBaseUrl.replace(/\/$/, '')
   const normalizedPath = path.startsWith('/') ? path : `/${path}`
@@ -13,11 +15,15 @@ async function parseResponse(response) {
     return null
   }
 
-  return response.json()
+  try {
+    return await response.json()
+  } catch {
+    return null
+  }
 }
 
 export async function apiRequest(path, options = {}) {
-  const { body, headers = {}, auth = false, ...fetchOptions } = options
+  const { body, headers = {}, auth = false, timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options
   const requestHeaders = {
     ...headers,
   }
@@ -34,13 +40,32 @@ export async function apiRequest(path, options = {}) {
     }
   }
 
-  const response = await fetch(createUrl(path), {
-    ...fetchOptions,
-    headers: requestHeaders,
-    // HttpOnly 쿠키(refresh-token)를 cross-origin 요청에도 전송하기 위해 credentials 포함
-    credentials: 'include',
-    body: body === undefined ? undefined : body instanceof FormData ? body : JSON.stringify(body),
-  })
+  const controller = new AbortController()
+  const shouldApplyTimeout = !fetchOptions.signal && Number.isFinite(timeoutMs) && timeoutMs > 0
+  const timeoutId = shouldApplyTimeout
+    ? window.setTimeout(() => controller.abort(), timeoutMs)
+    : null
+
+  let response
+  try {
+    response = await fetch(createUrl(path), {
+      ...fetchOptions,
+      headers: requestHeaders,
+      // HttpOnly 쿠키(refresh-token)를 cross-origin 요청에도 전송하기 위해 credentials 포함
+      credentials: 'include',
+      signal: fetchOptions.signal ?? controller.signal,
+      body: body === undefined ? undefined : body instanceof FormData ? body : JSON.stringify(body),
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('요청 시간이 초과되었습니다.')
+    }
+    throw new Error('서버와 통신하지 못했습니다.')
+  } finally {
+    if (timeoutId) {
+      window.clearTimeout(timeoutId)
+    }
+  }
 
   const payload = await parseResponse(response)
   if (!response.ok || payload?.success === false) {

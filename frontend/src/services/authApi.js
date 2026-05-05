@@ -24,8 +24,14 @@ export async function logout() {
 }
 
 export async function reissueAccessToken() {
-  // refresh token은 HttpOnly 쿠키로 자동 전송된다 — 헤더에 직접 포함하지 않는다
-  const accessToken = await apiRequest('/auth/reissue', { method: 'POST' })
+  let accessToken
+  try {
+    // refresh token은 HttpOnly 쿠키로 자동 전송된다 — 헤더에 직접 포함하지 않는다
+    accessToken = await apiRequest('/auth/reissue', { method: 'POST' })
+  } catch (error) {
+    clearTokens()
+    throw error
+  }
 
   if (typeof accessToken !== 'string' || !accessToken) {
     clearTokens()

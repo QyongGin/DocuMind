@@ -114,7 +114,9 @@ class AuthApiTest {
                 // refreshToken은 body에 노출되지 않아야 한다
                 .andExpect(jsonPath("$.data.refreshToken").doesNotExist())
                 .andExpect(header().string("Set-Cookie", containsString("refresh-token=")))
-                .andExpect(header().string("Set-Cookie", containsString("HttpOnly")));
+                .andExpect(header().string("Set-Cookie", containsString("HttpOnly")))
+                .andExpect(header().string("Set-Cookie", containsString("SameSite=Strict")))
+                .andExpect(header().string("Set-Cookie", containsString("Path=/api/auth")));
     }
 
     @Test
