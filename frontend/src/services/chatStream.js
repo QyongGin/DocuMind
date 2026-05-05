@@ -1,47 +1,84 @@
 import { env } from '../config/env.js'
 
-function createStreamUrl({ question, sessionKey, topK }) {
+async function createStreamSession({ question, sessionKey, topK }) {
   const normalizedBase = env.apiBaseUrl.replace(/\/$/, '')
-  const params = new URLSearchParams({
-    question,
-    topK: String(topK ?? env.defaultTopK),
-  })
+  const body = { question, topK: topK ?? env.defaultTopK }
   if (sessionKey) {
-    params.set('sessionKey', sessionKey)
+    body.sessionKey = sessionKey
   }
 
-  return `${normalizedBase}/chat/stream?${params.toString()}`
+  const response = await fetch(`${normalizedBase}/chat/stream/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(body),
+  })
+
+  if (!response.ok) {
+    throw new Error('스트리밍 세션을 생성하지 못했습니다.')
+  }
+
+  const payload = await response.json()
+  return payload.data.streamId
 }
 
+/**
+ * SSE 스트리밍 채팅을 시작한다.
+ * 먼저 POST /chat/stream/session으로 streamId를 발급받고,
+ * EventSource(/chat/stream/{streamId})로 연결해 질문을 URL에 노출하지 않는다.
+ *
+ * @returns {{ close: Function }} 스트림 중단 함수를 포함한 객체
+ */
 export function openChatStream({ question, sessionKey, topK, onToken, onDone, onError }) {
-  const eventSource = new EventSource(createStreamUrl({ question, sessionKey, topK }))
+  let eventSource = null
+  let cancelled = false
 
-  eventSource.onmessage = (message) => {
-    try {
-      const data = JSON.parse(message.data)
+  createStreamSession({ question, sessionKey, topK })
+    .then((streamId) => {
+      if (cancelled) return
 
-      if (data.token) {
-        onToken(data.token)
-      } else if (data.done) {
-        onDone({
-          answer: data.answer,
-          sources: data.sources ?? [],
-        })
-        eventSource.close()
-      } else if (data.error) {
-        onError(data.error)
+      const normalizedBase = env.apiBaseUrl.replace(/\/$/, '')
+      eventSource = new EventSource(`${normalizedBase}/chat/stream/${streamId}`, {
+        withCredentials: true,
+      })
+
+      eventSource.onmessage = (message) => {
+        try {
+          const data = JSON.parse(message.data)
+
+          if (data.token) {
+            onToken(data.token)
+          } else if (data.done) {
+            onDone({
+              answer: data.answer,
+              sources: data.sources ?? [],
+            })
+            eventSource.close()
+          } else if (data.error) {
+            onError(data.error)
+            eventSource.close()
+          }
+        } catch {
+          onError('스트리밍 응답을 처리하지 못했습니다.')
+          eventSource.close()
+        }
+      }
+
+      eventSource.onerror = () => {
+        onError('서버 연결이 끊어졌습니다.')
         eventSource.close()
       }
-    } catch {
-      onError('스트리밍 응답을 처리하지 못했습니다.')
-      eventSource.close()
-    }
-  }
+    })
+    .catch(() => {
+      if (!cancelled) {
+        onError('스트리밍 세션을 생성하지 못했습니다.')
+      }
+    })
 
-  eventSource.onerror = () => {
-    onError('서버 연결이 끊어졌습니다.')
-    eventSource.close()
+  return {
+    close() {
+      cancelled = true
+      eventSource?.close()
+    },
   }
-
-  return eventSource
 }
