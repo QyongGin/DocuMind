@@ -61,12 +61,10 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.POST, "/api/categories").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.POST, "/api/auth/password").hasRole("ADMIN")
 
-                    // 인증된 사용자 전용
-                    // 로그아웃은 DB의 Refresh Token을 제거하므로 인증된 사용자만 호출할 수 있다
-                    .requestMatchers(HttpMethod.POST, "/api/auth/logout").authenticated()
-
                     // 공개 — USER 비로그인 허용
+                    // logout은 Access Token이 만료된 경우에도 HttpOnly refresh-token 쿠키 만료를 위해 허용한다
                     .requestMatchers(HttpMethod.POST, "/api/auth/login", "/api/auth/reissue").permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/auth/logout").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/categories").permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/chat").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/chat/stream").permitAll()

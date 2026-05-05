@@ -167,6 +167,31 @@ class AuthApiTest {
     }
 
     @Test
+    @DisplayName("로그아웃 API - Access Token 없이 refresh-token 쿠키만 있어도 DB 토큰 제거와 쿠키 만료를 수행한다")
+    void logoutApi_withRefreshCookieOnly_clearsRefreshTokenAndExpiresCookie() throws Exception {
+        LoginResponse loginResponse = authService.login(ADMIN_USERNAME, RAW_PASSWORD);
+
+        mockMvc.perform(post("/api/auth/logout")
+                        .cookie(new Cookie("refresh-token", loginResponse.getRefreshToken())))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Set-Cookie", containsString("refresh-token=")))
+                .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")))
+                .andExpect(header().string("Set-Cookie", containsString("Path=/api/auth")));
+
+        User saved = userRepository.findByUsername(ADMIN_USERNAME).orElseThrow();
+        assertNull(saved.getRefreshToken());
+    }
+
+    @Test
+    @DisplayName("로그아웃 API - 토큰이 없어도 HttpOnly 쿠키 만료 응답은 반환한다")
+    void logoutApi_withoutTokens_returnsCookieExpiration() throws Exception {
+        mockMvc.perform(post("/api/auth/logout"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Set-Cookie", containsString("refresh-token=")))
+                .andExpect(header().string("Set-Cookie", containsString("Max-Age=0")));
+    }
+
+    @Test
     @DisplayName("토큰 재발급 - 유효한 Refresh Token으로 새 Access Token을 반환한다")
     void reissue_success() {
         LoginResponse loginResponse = authService.login(ADMIN_USERNAME, RAW_PASSWORD);

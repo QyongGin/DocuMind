@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 /**
  * 로그인, 로그아웃, 토큰 재발급, 비밀번호 변경 비즈니스 로직을 담당한다.
@@ -58,6 +59,19 @@ public class AuthService {
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new CustomException(ErrorCode.USER_NOT_FOUND));
         user.logout();
+    }
+
+    /**
+     * Refresh Token 문자열로 사용자를 찾아 로그아웃한다.
+     * Access Token이 만료된 사용자가 HttpOnly 쿠키를 서버에 맡겨 제거할 때 사용한다.
+     */
+    @Transactional
+    public void logoutByRefreshToken(String refreshToken) {
+        if (!StringUtils.hasText(refreshToken)) {
+            return;
+        }
+        userRepository.findByRefreshToken(refreshToken)
+                .ifPresent(User::logout);
     }
 
     /**

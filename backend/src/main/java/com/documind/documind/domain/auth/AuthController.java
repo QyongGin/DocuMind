@@ -8,6 +8,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -54,13 +56,21 @@ public class AuthController {
     /**
      * POST /api/auth/logout — 로그아웃.
      * DB의 Refresh Token을 NULL로 초기화하고, 브라우저의 refresh-token 쿠키를 만료시킨다.
+     * Access Token이 만료된 경우에도 HttpOnly 쿠키는 클라이언트가 직접 삭제할 수 없으므로 refresh-token 쿠키만으로도 로그아웃을 허용한다.
      */
-    // @AuthenticationPrincipal: SecurityContext에 저장된 principal을 주입. 필터에서 String(username)으로 저장했으므로 String으로 받는다
+    // Authentication: 익명 인증 객체와 실제 JWT 인증 객체를 구분하기 위해 직접 받는다.
+    // @CookieValue(required = false): Access Token 없이도 refresh-token 쿠키 기반 로그아웃을 처리한다.
     @PostMapping("/logout")
     public ResponseEntity<ApiResponse<Void>> logout(
-            @AuthenticationPrincipal String username,
+            Authentication authentication,
+            @CookieValue(name = REFRESH_COOKIE_NAME, required = false) String refreshToken,
             HttpServletResponse response) {
-        authService.logout(username);
+        String username = extractAuthenticatedUsername(authentication);
+        if (username != null) {
+            authService.logout(username);
+        } else {
+            authService.logoutByRefreshToken(refreshToken);
+        }
         expireRefreshTokenCookie(response);
         return ResponseEntity.ok(ApiResponse.successMessage("로그아웃 되었습니다."));
     }
@@ -115,5 +125,16 @@ public class AuthController {
                 .maxAge(0)
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+    }
+
+    // 익명 요청이면 null을 반환하고, JWT 인증 요청이면 username principal을 반환한다
+    private String extractAuthenticatedUsername(Authentication authentication) {
+        if (authentication == null
+                || authentication instanceof AnonymousAuthenticationToken
+                || !authentication.isAuthenticated()
+                || !(authentication.getPrincipal() instanceof String username)) {
+            return null;
+        }
+        return username;
     }
 }
