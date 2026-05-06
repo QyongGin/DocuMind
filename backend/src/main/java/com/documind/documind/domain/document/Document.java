@@ -54,6 +54,10 @@ public class Document {
     @Column(nullable = false)
     private Integer chunkCount = 0;
 
+    // 업로드 요청에서 FastAPI 청킹·임베딩·ChromaDB 저장 완료까지 걸린 시간(ms). 처리 전에는 null
+    @Column
+    private Long processingDurationMs;
+
     // 논리삭제 플래그. 물리삭제 대신 is_active=false로 비활성화해 FK 무결성 보존
     @Column(nullable = false)
     private Boolean isActive = true;
@@ -91,12 +95,14 @@ public class Document {
     }
 
     /**
-     * FastAPI 처리 완료 후 청크 수를 업데이트한다.
+     * FastAPI 처리 완료 후 청크 수와 처리 시간을 업데이트한다.
      *
-     * @param chunkCount ChromaDB에 저장된 청크 수
+     * @param chunkCount           ChromaDB에 저장된 청크 수
+     * @param processingDurationMs 업로드 처리에 걸린 시간(ms)
      */
-    public void updateChunkCount(int chunkCount) {
+    public void completeProcessing(int chunkCount, long processingDurationMs) {
         this.chunkCount = chunkCount;
+        this.processingDurationMs = processingDurationMs;
     }
 
     /**

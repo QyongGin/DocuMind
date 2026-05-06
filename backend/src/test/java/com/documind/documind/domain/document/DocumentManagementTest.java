@@ -177,6 +177,12 @@ class DocumentManagementTest {
 
         assertEquals(7, response.getChunkCount());
         assertEquals("report.pdf", response.getOriginalName());
+        assertNotNull(response.getProcessingDurationMs());
+        assertTrue(response.getProcessingDurationMs() >= 0);
+
+        Document uploaded = documentRepository.findById(response.getDocumentId()).orElseThrow();
+        assertEquals(7, uploaded.getChunkCount());
+        assertNotNull(uploaded.getProcessingDurationMs());
     }
 
     @Test

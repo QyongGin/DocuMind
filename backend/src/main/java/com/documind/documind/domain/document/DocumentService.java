@@ -16,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 // 문서 업로드 비즈니스 로직을 담당
@@ -60,6 +61,8 @@ public class DocumentService {
      */
     @Transactional
     public DocumentUploadResponse upload(MultipartFile file, Long categoryId, String username) {
+        long processingStartNanos = System.nanoTime();
+
         // 파일 형식 검증
         String mimeType = file.getContentType();
         if (mimeType == null || !ALLOWED_MIME_TYPES.contains(mimeType)) {
@@ -94,14 +97,17 @@ public class DocumentService {
         // FastAPI에 파일 전송 → 청킹·임베딩·ChromaDB 저장 요청
         FastApiUploadResponse fastApiResponse = fastApiClient.uploadDocument(file, document.getId());
 
-        // FastAPI 처리 완료 후 청크 수 업데이트
-        document.updateChunkCount(fastApiResponse.getChunks());
+        long processingDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - processingStartNanos);
+
+        // FastAPI 처리 완료 후 청크 수와 처리 시간을 업데이트
+        document.completeProcessing(fastApiResponse.getChunks(), processingDurationMs);
 
         return DocumentUploadResponse.builder()
                 .documentId(document.getId())
                 .originalName(document.getOriginalName())
                 .fileSize(document.getFileSize())
                 .chunkCount(document.getChunkCount())
+                .processingDurationMs(document.getProcessingDurationMs())
                 .build();
     }
 

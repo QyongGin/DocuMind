@@ -21,6 +21,18 @@ function formatDate(value) {
   }).format(date)
 }
 
+function formatDuration(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs < 0) return null
+  if (durationMs < 1000) return `${durationMs}ms`
+
+  const totalSeconds = durationMs / 1000
+  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)}초`
+
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = Math.round(totalSeconds % 60).toString().padStart(2, '0')
+  return `${minutes}분 ${seconds}초`
+}
+
 function AdminDashboardPage() {
   const [documents, setDocuments] = useState([])
   const [categories, setCategories] = useState([])
@@ -30,6 +42,7 @@ function AdminDashboardPage() {
   const [categoryName, setCategoryName] = useState('')
   const [message, setMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
+  const [lastUploadDurationMs, setLastUploadDurationMs] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isUploading, setIsUploading] = useState(false)
   const [isRailCollapsed, setIsRailCollapsed] = useState(false)
@@ -76,10 +89,12 @@ function AdminDashboardPage() {
     setIsUploading(true)
     setMessage('')
     setErrorMessage('')
+    setLastUploadDurationMs(null)
 
     try {
-      await uploadDocument(selectedFile, { categoryId: selectedUploadCategoryId })
+      const uploadResult = await uploadDocument(selectedFile, { categoryId: selectedUploadCategoryId })
       setSelectedFile(null)
+      setLastUploadDurationMs(uploadResult?.processingDurationMs ?? null)
       setMessage('문서를 업로드했습니다.')
       await loadDashboard()
     } catch (error) {
@@ -96,6 +111,7 @@ function AdminDashboardPage() {
 
     setMessage('')
     setErrorMessage('')
+    setLastUploadDurationMs(null)
 
     try {
       await createCategory(trimmedName)
@@ -112,6 +128,7 @@ function AdminDashboardPage() {
 
     setMessage('')
     setErrorMessage('')
+    setLastUploadDurationMs(null)
 
     try {
       await deleteDocument(deleteTarget.id)
@@ -142,6 +159,7 @@ function AdminDashboardPage() {
   const handleCloseNotice = () => {
     setMessage('')
     setErrorMessage('')
+    setLastUploadDurationMs(null)
   }
 
   return (
@@ -300,6 +318,7 @@ function AdminDashboardPage() {
                         <strong>{document.originalName}</strong>
                         <small>
                           {document.categoryName || '미분류'} · {formatFileSize(document.fileSize)} · {document.chunkCount} chunks
+                          {formatDuration(document.processingDurationMs) && ` · 처리 ${formatDuration(document.processingDurationMs)}`}
                         </small>
                       </span>
                     </button>
@@ -350,6 +369,9 @@ function AdminDashboardPage() {
           >
             <p>{errorMessage ? '처리할 수 없습니다' : '완료'}</p>
             <h2 id="admin-notice-title">{errorMessage || message}</h2>
+            {!errorMessage && formatDuration(lastUploadDurationMs) && (
+              <span>처리 시간 {formatDuration(lastUploadDurationMs)}</span>
+            )}
             <button type="button" className="admin-primary-button" onClick={handleCloseNotice}>
               확인
             </button>
