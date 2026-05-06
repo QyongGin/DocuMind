@@ -22,6 +22,8 @@ public class DocumentListResponse {
     private Long categoryId;
     /** 카테고리 미분류 문서는 null */
     private String categoryName;
+    /** 문서 처리 완료까지 걸린 시간(ms). 기존 데이터나 처리 전 문서는 null */
+    private Long processingDurationMs;
     private LocalDateTime createdAt;
 
     /** Document Entity를 DTO로 변환한다. */
@@ -34,6 +36,7 @@ public class DocumentListResponse {
                 .chunkCount(document.getChunkCount())
                 .categoryId(document.getCategory() != null ? document.getCategory().getId() : null)
                 .categoryName(document.getCategory() != null ? document.getCategory().getName() : null)
+                .processingDurationMs(document.getProcessingDurationMs())
                 .createdAt(document.getCreatedAt())
                 .build();
     }

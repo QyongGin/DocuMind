@@ -12,4 +12,5 @@ public class DocumentUploadResponse {
     private String originalName;
     private Long fileSize;
     private int chunkCount;
+    private Long processingDurationMs;
 }
