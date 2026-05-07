@@ -144,7 +144,10 @@ function ChatPage() {
     setHistoryError('')
 
     try {
-      const sessions = await listChatSessions({ sessionKey: isLoggedIn ? undefined : getSessionKey() })
+      const sessions = await listChatSessions({
+        auth: isLoggedIn,
+        sessionKey: isLoggedIn ? undefined : getSessionKey(),
+      })
       setHistorySessions(Array.isArray(sessions) ? sessions : [])
     } catch (error) {
       setHistoryError(error.message)
@@ -161,7 +164,10 @@ function ChatPage() {
     setActiveSourceIndex(null)
 
     try {
-      const detail = await getChatSession(sessionId, { sessionKey: isLoggedIn ? undefined : getSessionKey() })
+      const detail = await getChatSession(sessionId, {
+        auth: isLoggedIn,
+        sessionKey: isLoggedIn ? undefined : getSessionKey(),
+      })
       const messages = Array.isArray(detail?.messages) ? detail.messages : []
       const lastMessage = [...messages].reverse().find((message) => message.question || message.answer)
       if (!lastMessage) return
@@ -179,7 +185,10 @@ function ChatPage() {
     if (!sessionId || isStreaming) return
 
     try {
-      await deleteChatSession(sessionId, { sessionKey: isLoggedIn ? undefined : getSessionKey() })
+      await deleteChatSession(sessionId, {
+        auth: isLoggedIn,
+        sessionKey: isLoggedIn ? undefined : getSessionKey(),
+      })
       setHistorySessions((prevSessions) => prevSessions.filter((session) => session.sessionId !== sessionId))
     } catch (error) {
       setHistoryError(error.message)
@@ -206,7 +215,8 @@ function ChatPage() {
 
     eventSourceRef.current = openChatStream({
       question: trimmedQuestion,
-      sessionKey: getSessionKey(),
+      auth: isLoggedIn,
+      sessionKey: isLoggedIn ? undefined : getSessionKey(),
       topK: env.defaultTopK,
       onToken: (token) => setAnswer((prev) => prev + token),
       onDone: ({ answer: completedAnswer, sources: nextSources }) => {
