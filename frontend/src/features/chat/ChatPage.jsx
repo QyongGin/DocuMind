@@ -523,7 +523,6 @@ function ChatPage() {
                   <article className="answer-card">
                     <div className="answer-card__header">
                       <strong>인하공전 AI 답변</strong>
-                      {isStreaming && <span className="stream-dot" aria-label="답변 생성 중" />}
                     </div>
                     {answer ? (
                       <p>

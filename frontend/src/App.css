@@ -711,13 +711,6 @@ button:disabled {
   white-space: pre-wrap;
 }
 
-.stream-dot {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: var(--action-blue);
-}
-
 .typing-caret {
   display: inline-block;
   width: 8px;
