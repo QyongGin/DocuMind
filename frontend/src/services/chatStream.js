@@ -1,15 +1,21 @@
 import { env } from '../config/env.js'
+import { getAccessToken } from './authStorage.js'
 
-async function createStreamSession({ question, sessionKey, topK }) {
+async function createStreamSession({ question, sessionKey, topK, auth = false }) {
   const normalizedBase = env.apiBaseUrl.replace(/\/$/, '')
   const body = { question, topK: topK ?? env.defaultTopK }
   if (sessionKey) {
     body.sessionKey = sessionKey
   }
+  const headers = { 'Content-Type': 'application/json' }
+  const accessToken = auth ? getAccessToken() : null
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`
+  }
 
   const response = await fetch(`${normalizedBase}/chat/stream/session`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     credentials: 'include',
     body: JSON.stringify(body),
   })
@@ -29,7 +35,7 @@ async function createStreamSession({ question, sessionKey, topK }) {
  *
  * @returns {{ close: Function }} 스트림 중단 함수를 포함한 객체
  */
-export function openChatStream({ question, sessionKey, topK, onToken, onDone, onError }) {
+export function openChatStream({ question, sessionKey, topK, auth = false, onToken, onDone, onError }) {
   let eventSource = null
   let cancelled = false
 
@@ -38,7 +44,7 @@ export function openChatStream({ question, sessionKey, topK, onToken, onDone, on
     eventSource?.close()
   }
 
-  createStreamSession({ question, sessionKey, topK })
+  createStreamSession({ question, sessionKey, topK, auth })
     .then((streamId) => {
       if (cancelled) return
 

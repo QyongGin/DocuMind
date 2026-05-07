@@ -24,10 +24,11 @@ class StreamSessionStoreTest {
                 100
         );
 
-        String streamId = store.save("질문", "session-key", 5).orElseThrow();
+        String streamId = store.save(new StreamSessionSaveCommand("질문", 10L, "session-key", 5)).orElseThrow();
 
         StreamSessionData data = store.consumeById(streamId).orElseThrow();
         assertEquals("질문", data.question());
+        assertEquals(10L, data.userId());
         assertEquals("session-key", data.sessionKey());
         assertEquals(5, data.topK());
         assertTrue(store.consumeById(streamId).isEmpty());
@@ -46,7 +47,7 @@ class StreamSessionStoreTest {
     void consumeById_afterTtl_returnsEmpty() {
         MutableClock clock = new MutableClock(Instant.parse("2026-05-05T00:00:00Z"));
         StreamSessionStore store = new StreamSessionStore(clock, Duration.ofSeconds(30), 100);
-        String streamId = store.save("질문", "session-key", 5).orElseThrow();
+        String streamId = store.save(new StreamSessionSaveCommand("질문", null, "session-key", 5)).orElseThrow();
 
         clock.advance(Duration.ofSeconds(31));
 
@@ -62,8 +63,8 @@ class StreamSessionStoreTest {
                 1
         );
 
-        assertTrue(store.save("첫 질문", "session-key", 5).isPresent());
-        assertTrue(store.save("두 번째 질문", "session-key", 5).isEmpty());
+        assertTrue(store.save(new StreamSessionSaveCommand("첫 질문", null, "session-key", 5)).isPresent());
+        assertTrue(store.save(new StreamSessionSaveCommand("두 번째 질문", null, "session-key", 5)).isEmpty());
     }
 
     private static class MutableClock extends Clock {
