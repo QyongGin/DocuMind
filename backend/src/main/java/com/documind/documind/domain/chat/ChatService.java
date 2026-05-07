@@ -32,6 +32,8 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class ChatService {
 
+    private static final int SESSION_TITLE_MAX_LENGTH = 50;
+
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
     private final ChatStreamPersistenceService chatStreamPersistenceService;
@@ -179,8 +181,9 @@ public class ChatService {
     // 동일 sessionKey 동시 요청 시 unique 충돌이 발생할 수 있으므로
     // DataIntegrityViolationException을 잡아 먼저 저장된 세션을 재조회한다.
     private ChatSession getOrCreateSession(String question, Long userId, String sessionKey) {
+        String title = createSessionTitle(question);
+
         if (userId != null) {
-            String title = question.length() > 50 ? question.substring(0, 50) : question;
             User user = entityManager.getReference(User.class, userId);
             return chatSessionRepository.save(ChatSession.create(user, null, title));
         }
@@ -191,7 +194,6 @@ public class ChatService {
                 return existing.get();
             }
         }
-        String title = question.length() > 50 ? question.substring(0, 50) : question;
         try {
             return chatSessionRepository.save(ChatSession.create(null, sessionKey, title));
         } catch (DataIntegrityViolationException e) {
@@ -199,6 +201,15 @@ public class ChatService {
             return chatSessionRepository.findBySessionKey(sessionKey)
                     .orElseThrow(() -> e);
         }
+    }
+
+    // 질문 원문을 세션 목록에 표시할 짧은 제목으로 변환한다.
+    private String createSessionTitle(String question) {
+        String trimmedQuestion = question.trim();
+        if (trimmedQuestion.length() <= SESSION_TITLE_MAX_LENGTH) {
+            return trimmedQuestion;
+        }
+        return trimmedQuestion.substring(0, SESSION_TITLE_MAX_LENGTH);
     }
 
     // sources 리스트를 JSON 문자열로 변환. 직렬화 실패 시 빈 배열 문자열로 폴백

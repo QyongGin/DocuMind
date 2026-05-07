@@ -14,7 +14,13 @@ export function getAccessToken() {
 }
 
 export function hasAccessToken() {
-  return Boolean(getAccessToken())
+  const accessToken = getAccessToken()
+  if (!accessToken) return false
+
+  const claims = parseTokenClaims(accessToken)
+  if (!claims?.exp) return true
+
+  return claims.exp * 1000 > Date.now()
 }
 
 function decodeBase64Url(value) {
@@ -28,15 +34,24 @@ function decodeBase64Url(value) {
   )
 }
 
-export function getAuthProfile() {
-  const accessToken = getAccessToken()
+function parseTokenClaims(accessToken) {
   if (!accessToken) return null
 
   try {
     const [, payload] = accessToken.split('.')
     if (!payload) return null
 
-    const claims = JSON.parse(decodeBase64Url(payload))
+    return JSON.parse(decodeBase64Url(payload))
+  } catch {
+    return null
+  }
+}
+
+export function getAuthProfile() {
+  const claims = parseTokenClaims(getAccessToken())
+  if (!claims) return null
+
+  try {
     return {
       id: claims.userId,
       username: claims.sub,

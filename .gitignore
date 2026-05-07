@@ -2,6 +2,9 @@
 # 에이전트 지시어 / 동적 상태 (로컬 전용)
 # ───────────────────────────────────────
 AGENTS.md
+!backend/AGENTS.md
+!frontend/AGENTS.md
+!ai-server/AGENTS.md
 CLAUDE.md
 memory-bank/
 .claude/

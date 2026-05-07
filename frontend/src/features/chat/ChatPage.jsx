@@ -111,6 +111,9 @@ function getIdentifierLabel(role) {
 function ChatPage() {
   const eventSourceRef = useRef(null)
   const transcriptRef = useRef(null)
+  const profileMenuRef = useRef(null)
+  const deleteModalRef = useRef(null)
+  const previousFocusRef = useRef(null)
   const [isLoggedIn, setIsLoggedIn] = useState(() => hasAccessToken())
   const [isProfileOpen, setIsProfileOpen] = useState(false)
   const [isSidebarOpen, setIsSidebarOpen] = useState(() =>
@@ -167,7 +170,7 @@ function ChatPage() {
     try {
       const sessions = await listChatSessions({
         auth: isLoggedIn,
-        sessionKey: isLoggedIn ? undefined : getSessionKey(),
+        sessionKey: getSessionKey(),
       })
       setHistorySessions(Array.isArray(sessions) ? sessions : [])
     } catch (error) {
@@ -187,7 +190,7 @@ function ChatPage() {
     try {
       const detail = await getChatSession(sessionId, {
         auth: isLoggedIn,
-        sessionKey: isLoggedIn ? undefined : getSessionKey(),
+        sessionKey: getSessionKey(),
       })
       const messages = Array.isArray(detail?.messages) ? detail.messages : []
       const lastMessage = [...messages].reverse().find((message) => message.question || message.answer)
@@ -211,13 +214,62 @@ function ChatPage() {
     setDeleteTarget(null)
   }
 
+  useEffect(() => {
+    if (!isProfileOpen) return
+
+    const handlePointerDown = (event) => {
+      if (!profileMenuRef.current?.contains(event.target)) {
+        setIsProfileOpen(false)
+      }
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setIsProfileOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isProfileOpen])
+
+  useEffect(() => {
+    if (!deleteTarget) return
+
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+
+    window.setTimeout(() => {
+      const firstButton = deleteModalRef.current?.querySelector('button')
+      ;(firstButton ?? deleteModalRef.current)?.focus()
+    }, 0)
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        cancelHistoryDelete()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      previousFocusRef.current?.focus()
+      previousFocusRef.current = null
+    }
+  }, [deleteTarget])
+
   const confirmHistoryDelete = async () => {
     if (!deleteTarget?.sessionId || isStreaming) return
 
     try {
       await deleteChatSession(deleteTarget.sessionId, {
         auth: isLoggedIn,
-        sessionKey: isLoggedIn ? undefined : getSessionKey(),
+        sessionKey: getSessionKey(),
       })
       setHistorySessions((prevSessions) =>
         prevSessions.filter((session) => session.sessionId !== deleteTarget.sessionId)
@@ -237,6 +289,7 @@ function ChatPage() {
     }
 
     eventSourceRef.current?.close()
+    const sessionKey = getSessionKey()
     setSubmittedQuestion(trimmedQuestion)
     setQuestion('')
     setAnswer('')
@@ -249,7 +302,7 @@ function ChatPage() {
     eventSourceRef.current = openChatStream({
       question: trimmedQuestion,
       auth: isLoggedIn,
-      sessionKey: isLoggedIn ? undefined : getSessionKey(),
+      sessionKey,
       topK: env.defaultTopK,
       onToken: (token) => setAnswer((prev) => prev + token),
       onDone: ({ answer: completedAnswer, sources: nextSources }) => {
@@ -450,7 +503,7 @@ function ChatPage() {
             <strong>인하공업전문대학 AI 안내</strong>
           </div>
           {isLoggedIn ? (
-            <div className="profile-menu">
+            <div className="profile-menu" ref={profileMenuRef}>
               <button
                 type="button"
                 className="chat-topbar__auth"
@@ -464,7 +517,7 @@ function ChatPage() {
                 <section className="profile-popover" aria-label="사용자 정보">
                   <header>
                     <span>{getRoleLabel(authProfile?.role)}</span>
-                    <strong>{authProfile?.username || 'admin'}</strong>
+                    <strong>{authProfile?.username || '-'}</strong>
                   </header>
                   <dl>
                     <div>
@@ -594,8 +647,23 @@ function ChatPage() {
       </section>
 
       {deleteTarget && (
-        <div className="chat-modal-backdrop" role="presentation">
-          <section className="chat-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-history-title">
+        <div
+          className="chat-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              cancelHistoryDelete()
+            }
+          }}
+        >
+          <section
+            ref={deleteModalRef}
+            className="chat-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-history-title"
+            tabIndex={-1}
+          >
             <h2 id="delete-history-title">질문 기록을 삭제할까요?</h2>
             <p>삭제한 질문 기록은 다시 불러올 수 없습니다.</p>
             <div className="chat-confirm-modal__actions">
