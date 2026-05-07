@@ -19,7 +19,9 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-// 문서 업로드 비즈니스 로직을 담당
+/**
+ * 문서 업로드, 목록 조회, 청크 조회, 논리 삭제를 담당하는 서비스이다.
+ */
 @Service
 @RequiredArgsConstructor
 public class DocumentService {

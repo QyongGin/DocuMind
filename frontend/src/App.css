@@ -2570,6 +2570,12 @@ button:disabled {
   background: #be123c;
 }
 
+.admin-text-button:disabled,
+.admin-danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 .document-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
@@ -2598,7 +2604,20 @@ button:disabled {
   border-radius: 16px;
   color: var(--ink);
   background: #fafafa;
+  cursor: pointer;
   text-align: center;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.upload-drop:hover,
+.upload-drop--active {
+  border-color: rgba(31, 63, 147, 0.28);
+  background: #f8fafc;
+}
+
+.upload-drop--disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .upload-drop input {
@@ -2764,6 +2783,11 @@ button:disabled {
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.admin-modal__hint {
+  color: var(--chat-muted);
+  font-size: 13px;
 }
 
 .admin-modal--error h2,

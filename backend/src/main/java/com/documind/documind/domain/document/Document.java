@@ -6,7 +6,9 @@ import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
 
-// DB의 documents 테이블과 매핑되는 Entity 클래스임을 선언
+/**
+ * 업로드된 문서 메타데이터와 처리 상태를 저장하는 Entity이다.
+ */
 @Entity
 // 매핑할 테이블 이름 지정
 @Table(name = "documents")
@@ -72,13 +74,25 @@ public class Document {
     @Column(nullable = false, updatable = false, columnDefinition = "datetime(6)")
     private LocalDateTime createdAt;
 
-    // DB에 INSERT 되기 직전에 자동 실행되는 메서드
+    /**
+     * DB에 INSERT 되기 직전 생성 시각을 기록한다.
+     */
     @PrePersist
     protected void onCreate() {
         this.createdAt = LocalDateTime.now();
     }
 
-    // 정적 팩토리 메서드. 외부에서 new Document() 대신 이 메서드로 생성
+    /**
+     * 업로드 문서 Entity를 생성한다.
+     *
+     * @param uploadedBy   문서를 업로드한 관리자
+     * @param category     문서 카테고리. 미분류면 null
+     * @param fileName     서버에 저장할 파일명
+     * @param originalName 사용자가 업로드한 원본 파일명
+     * @param fileSize     파일 크기(bytes)
+     * @param mimeType     파일 MIME 타입
+     * @return 초기 처리 상태의 문서 Entity
+     */
     public static Document create(User uploadedBy, Category category,
                                   String fileName, String originalName,
                                   Long fileSize, String mimeType) {

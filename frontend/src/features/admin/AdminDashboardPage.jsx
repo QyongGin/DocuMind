@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { createCategory, listCategories } from '../../services/categoryApi.js'
 import { deleteDocument, listDocumentChunks, listDocuments, uploadDocument } from '../../services/documentApi.js'
@@ -34,6 +34,7 @@ function formatDuration(durationMs) {
 }
 
 function AdminDashboardPage() {
+  const fileInputRef = useRef(null)
   const [documents, setDocuments] = useState([])
   const [categories, setCategories] = useState([])
   const [selectedCategory, setSelectedCategory] = useState('전체')
@@ -45,6 +46,8 @@ function AdminDashboardPage() {
   const [lastUploadDurationMs, setLastUploadDurationMs] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isUploading, setIsUploading] = useState(false)
+  const [isUploadDragActive, setIsUploadDragActive] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
   const [isRailCollapsed, setIsRailCollapsed] = useState(false)
   const [activeSection, setActiveSection] = useState('dashboard')
   const [deleteTarget, setDeleteTarget] = useState(null)
@@ -82,6 +85,63 @@ function AdminDashboardPage() {
     loadDashboard()
   }, [])
 
+  const resetSelectedFile = () => {
+    setSelectedFile(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  const handleSelectFile = (file) => {
+    if (!file || isUploading) return
+
+    setSelectedFile(file)
+    setMessage('')
+    setErrorMessage('')
+    setLastUploadDurationMs(null)
+  }
+
+  const handleFileInputChange = (event) => {
+    handleSelectFile(event.target.files?.[0] ?? null)
+  }
+
+  const handleUploadDragEnter = (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!isUploading) {
+      setIsUploadDragActive(true)
+    }
+  }
+
+  const handleUploadDragOver = (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = isUploading ? 'none' : 'copy'
+    }
+    if (!isUploading) {
+      setIsUploadDragActive(true)
+    }
+  }
+
+  const handleUploadDragLeave = (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const nextTarget = event.relatedTarget
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return
+    setIsUploadDragActive(false)
+  }
+
+  const handleUploadDrop = (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setIsUploadDragActive(false)
+
+    if (isUploading) return
+    handleSelectFile(event.dataTransfer.files?.[0] ?? null)
+  }
+
   const handleUpload = async (event) => {
     event.preventDefault()
     if (!selectedFile || isUploading) return
@@ -93,7 +153,7 @@ function AdminDashboardPage() {
 
     try {
       const uploadResult = await uploadDocument(selectedFile, { categoryId: selectedUploadCategoryId })
-      setSelectedFile(null)
+      resetSelectedFile()
       setLastUploadDurationMs(uploadResult?.processingDurationMs ?? null)
       setMessage('문서를 업로드했습니다.')
       await loadDashboard()
@@ -124,11 +184,12 @@ function AdminDashboardPage() {
   }
 
   const handleConfirmDeleteDocument = async () => {
-    if (!deleteTarget) return
+    if (!deleteTarget || isUploading || isDeleting) return
 
     setMessage('')
     setErrorMessage('')
     setLastUploadDurationMs(null)
+    setIsDeleting(true)
 
     try {
       await deleteDocument(deleteTarget.id)
@@ -137,6 +198,8 @@ function AdminDashboardPage() {
       setDeleteTarget(null)
     } catch (error) {
       setErrorMessage(error.message)
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -258,11 +321,22 @@ function AdminDashboardPage() {
 
             <div className="document-grid">
               <form className="upload-panel" onSubmit={handleUpload}>
-                <label className="upload-drop">
+                <label
+                  className={[
+                    'upload-drop',
+                    isUploadDragActive ? 'upload-drop--active' : '',
+                    isUploading ? 'upload-drop--disabled' : '',
+                  ].filter(Boolean).join(' ')}
+                  onDragEnter={handleUploadDragEnter}
+                  onDragOver={handleUploadDragOver}
+                  onDragLeave={handleUploadDragLeave}
+                  onDrop={handleUploadDrop}
+                >
                   <input
+                    ref={fileInputRef}
                     type="file"
                     accept=".pdf,.docx,.pptx,.xlsx"
-                    onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+                    onChange={handleFileInputChange}
                     disabled={isUploading}
                   />
                   <span>{selectedFile ? selectedFile.name : 'PDF, DOCX, PPTX, XLSX 업로드'}</span>
@@ -323,7 +397,12 @@ function AdminDashboardPage() {
                       </span>
                     </button>
                     <time>{formatDate(document.createdAt)}</time>
-                    <button type="button" className="admin-text-button" onClick={() => setDeleteTarget(document)}>
+                    <button
+                      type="button"
+                      className="admin-text-button"
+                      onClick={() => setDeleteTarget(document)}
+                      disabled={isUploading || isDeleting}
+                    >
                       삭제
                     </button>
                   </article>
@@ -369,7 +448,7 @@ function AdminDashboardPage() {
           >
             <p>{errorMessage ? '처리할 수 없습니다' : '완료'}</p>
             <h2 id="admin-notice-title">{errorMessage || message}</h2>
-            {!errorMessage && formatDuration(lastUploadDurationMs) && (
+            {!errorMessage && message === '문서를 업로드했습니다.' && formatDuration(lastUploadDurationMs) && (
               <span>처리 시간 {formatDuration(lastUploadDurationMs)}</span>
             )}
             <button type="button" className="admin-primary-button" onClick={handleCloseNotice}>
@@ -390,12 +469,18 @@ function AdminDashboardPage() {
             <p>문서 삭제</p>
             <h2 id="admin-delete-title">정말 삭제할까요?</h2>
             <span>{deleteTarget.originalName}</span>
+            {isUploading && <small className="admin-modal__hint">업로드 중에는 삭제할 수 없습니다.</small>}
             <div className="admin-modal__actions">
               <button type="button" className="admin-ghost-button" onClick={() => setDeleteTarget(null)}>
                 취소
               </button>
-              <button type="button" className="admin-danger-button" onClick={handleConfirmDeleteDocument}>
-                삭제
+              <button
+                type="button"
+                className="admin-danger-button"
+                onClick={handleConfirmDeleteDocument}
+                disabled={isUploading || isDeleting}
+              >
+                {isDeleting ? '삭제 중' : '삭제'}
               </button>
             </div>
           </section>
