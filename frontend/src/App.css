@@ -1605,6 +1605,83 @@ button:disabled {
   color: var(--danger);
 }
 
+.chat-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.22);
+}
+
+.chat-confirm-modal {
+  display: grid;
+  gap: 14px;
+  width: min(360px, 100%);
+  padding: 24px;
+  border: 1px solid var(--chat-border);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.16);
+}
+
+.chat-confirm-modal h2,
+.chat-confirm-modal p {
+  margin: 0;
+}
+
+.chat-confirm-modal h2 {
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.chat-confirm-modal p {
+  color: var(--chat-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.chat-confirm-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.chat-modal-secondary,
+.chat-modal-danger {
+  min-width: 70px;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.chat-modal-secondary {
+  color: var(--ink);
+  border-color: transparent;
+  background: #f3f4f6;
+}
+
+.chat-modal-secondary:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: transparent;
+  background: #e5e7eb;
+}
+
+.chat-modal-danger {
+  color: #ffffff;
+  border-color: #dc2626;
+  background: #dc2626;
+}
+
+.chat-modal-danger:hover:not(:disabled) {
+  border-color: #b91c1c;
+  background: #b91c1c;
+}
+
 .chat-shell--sidebar-collapsed .chat-sidebar {
   align-content: start;
   justify-items: center;

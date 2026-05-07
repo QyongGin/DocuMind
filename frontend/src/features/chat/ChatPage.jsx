@@ -9,12 +9,6 @@ import { deleteChatSession, getChatSession, listChatSessions } from '../../servi
 import { getSessionKey } from '../../utils/sessionKey.js'
 import inhaBadgeUrl from '../../images/inha-badge.svg'
 
-const RECENT_QUESTIONS = [
-  { title: '입학전형 일정', date: '2026년 3월 30일' },
-  { title: '휴학·복학 신청 방법', date: '2026년 3월 29일' },
-  { title: '장학금 수혜 기준', date: '2026년 3월 28일' },
-]
-
 function NewChatIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
@@ -133,6 +127,7 @@ function ChatPage() {
   const [isHistoryLoading, setIsHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const [activeSourceIndex, setActiveSourceIndex] = useState(null)
+  const [deleteTarget, setDeleteTarget] = useState(null)
   const authProfile = isLoggedIn ? getAuthProfile() : null
 
   useEffect(() => {
@@ -206,15 +201,28 @@ function ChatPage() {
     }
   }
 
-  const removeHistorySession = async (sessionId) => {
-    if (!sessionId || isStreaming) return
+  const requestHistoryDelete = (session) => {
+    if (!session?.sessionId || isStreaming) return
+
+    setDeleteTarget(session)
+  }
+
+  const cancelHistoryDelete = () => {
+    setDeleteTarget(null)
+  }
+
+  const confirmHistoryDelete = async () => {
+    if (!deleteTarget?.sessionId || isStreaming) return
 
     try {
-      await deleteChatSession(sessionId, {
+      await deleteChatSession(deleteTarget.sessionId, {
         auth: isLoggedIn,
         sessionKey: isLoggedIn ? undefined : getSessionKey(),
       })
-      setHistorySessions((prevSessions) => prevSessions.filter((session) => session.sessionId !== sessionId))
+      setHistorySessions((prevSessions) =>
+        prevSessions.filter((session) => session.sessionId !== deleteTarget.sessionId)
+      )
+      setDeleteTarget(null)
     } catch (error) {
       setHistoryError(error.message)
     }
@@ -264,12 +272,6 @@ function ChatPage() {
     setIsStreaming(false)
   }
 
-  const selectExample = (nextQuestion) => {
-    if (!isStreaming) {
-      setQuestion(nextQuestion)
-    }
-  }
-
   const handleFeedback = (nextFeedback) => {
     setFeedback((prevFeedback) => (prevFeedback === nextFeedback ? null : nextFeedback))
   }
@@ -306,6 +308,7 @@ function ChatPage() {
     setActiveSourceIndex(null)
     setIsStreaming(false)
     setIsProfileOpen(false)
+    setDeleteTarget(null)
   }
 
   const handleLogout = async () => {
@@ -352,7 +355,7 @@ function ChatPage() {
             <button
               type="button"
               className="history-delete"
-              onClick={() => removeHistorySession(session.sessionId)}
+              onClick={() => requestHistoryDelete(session)}
               disabled={isStreaming}
               aria-label={`${session.title || '대화'} 삭제`}
             >
@@ -363,19 +366,7 @@ function ChatPage() {
       ))
     }
 
-    return RECENT_QUESTIONS.map((item) => (
-      <button
-        key={item.title}
-        type="button"
-        className={compact ? 'history-link' : 'history-card'}
-        onClick={() => {
-          selectExample(item.title)
-        }}
-        disabled={isStreaming}
-      >
-        <strong>{item.title}</strong>
-      </button>
-    ))
+    return <p className="history-state">최근 질문이 없습니다.</p>
   }
 
   const renderComposer = (home = false) => (
@@ -601,6 +592,23 @@ function ChatPage() {
 
         {hasConversation && renderComposer()}
       </section>
+
+      {deleteTarget && (
+        <div className="chat-modal-backdrop" role="presentation">
+          <section className="chat-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-history-title">
+            <h2 id="delete-history-title">질문 기록을 삭제할까요?</h2>
+            <p>삭제한 질문 기록은 다시 불러올 수 없습니다.</p>
+            <div className="chat-confirm-modal__actions">
+              <button type="button" className="chat-modal-secondary" onClick={cancelHistoryDelete}>
+                취소
+              </button>
+              <button type="button" className="chat-modal-danger" onClick={confirmHistoryDelete} disabled={isStreaming}>
+                삭제
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   )
 }
