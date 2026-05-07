@@ -133,6 +133,18 @@ function ChatPage() {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const authProfile = isLoggedIn ? getAuthProfile() : null
 
+  const refreshLoginState = () => {
+    const nextIsLoggedIn = hasAccessToken()
+    if (nextIsLoggedIn !== isLoggedIn) {
+      setIsLoggedIn(nextIsLoggedIn)
+      if (!nextIsLoggedIn) {
+        setIsProfileOpen(false)
+        setHistorySessions([])
+      }
+    }
+    return nextIsLoggedIn
+  }
+
   useEffect(() => {
     return () => {
       eventSourceRef.current?.close()
@@ -164,12 +176,13 @@ function ChatPage() {
   }, [question])
 
   const loadHistory = async () => {
+    const shouldUseAuth = refreshLoginState()
     setIsHistoryLoading(true)
     setHistoryError('')
 
     try {
       const sessions = await listChatSessions({
-        auth: isLoggedIn,
+        auth: shouldUseAuth,
         sessionKey: getSessionKey(),
       })
       setHistorySessions(Array.isArray(sessions) ? sessions : [])
@@ -183,13 +196,14 @@ function ChatPage() {
   const openHistorySession = async (sessionId) => {
     if (!sessionId || isStreaming) return
 
+    const shouldUseAuth = refreshLoginState()
     setErrorMessage('')
     setFeedback(null)
     setActiveSourceIndex(null)
 
     try {
       const detail = await getChatSession(sessionId, {
-        auth: isLoggedIn,
+        auth: shouldUseAuth,
         sessionKey: getSessionKey(),
       })
       const messages = Array.isArray(detail?.messages) ? detail.messages : []
@@ -266,9 +280,10 @@ function ChatPage() {
   const confirmHistoryDelete = async () => {
     if (!deleteTarget?.sessionId || isStreaming) return
 
+    const shouldUseAuth = refreshLoginState()
     try {
       await deleteChatSession(deleteTarget.sessionId, {
-        auth: isLoggedIn,
+        auth: shouldUseAuth,
         sessionKey: getSessionKey(),
       })
       setHistorySessions((prevSessions) =>
@@ -290,6 +305,7 @@ function ChatPage() {
 
     eventSourceRef.current?.close()
     const sessionKey = getSessionKey()
+    const shouldUseAuth = refreshLoginState()
     setSubmittedQuestion(trimmedQuestion)
     setQuestion('')
     setAnswer('')
@@ -301,7 +317,7 @@ function ChatPage() {
 
     eventSourceRef.current = openChatStream({
       question: trimmedQuestion,
-      auth: isLoggedIn,
+      auth: shouldUseAuth,
       sessionKey,
       topK: env.defaultTopK,
       onToken: (token) => setAnswer((prev) => prev + token),
