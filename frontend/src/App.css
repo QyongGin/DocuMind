@@ -1186,11 +1186,105 @@ button:disabled {
   border-radius: 10px;
   color: var(--ink);
   text-decoration: none;
+  border: 0;
+  background: transparent;
 }
 
 .chat-topbar__auth:hover {
   color: var(--college-blue);
   background: var(--chat-subtle);
+}
+
+.profile-menu {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  margin-right: 0;
+}
+
+.chat-topbar > .profile-menu {
+  display: inline-grid;
+  gap: 0;
+  margin-right: 0;
+}
+
+.profile-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 55;
+  display: grid;
+  gap: 14px;
+  width: min(260px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--chat-border);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.14);
+}
+
+.profile-popover header {
+  display: grid;
+  gap: 4px;
+}
+
+.profile-popover header span {
+  color: var(--college-blue);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.profile-popover header strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.profile-popover dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.profile-popover dl div {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-popover dt {
+  color: var(--chat-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.profile-popover dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-logout {
+  min-height: 38px;
+  padding: 9px 14px;
+  border: 1px solid var(--chat-border);
+  border-radius: 10px;
+  color: var(--ink);
+  background: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.profile-logout:hover:not(:disabled) {
+  color: #ffffff;
+  background: var(--college-blue);
+  border-color: var(--college-blue);
 }
 
 .history-scrim {
@@ -1485,6 +1579,16 @@ button:disabled {
   background: transparent;
   font-size: 17px;
   font-weight: 300;
+}
+
+.history-delete svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .history-delete:hover:not(:disabled) {

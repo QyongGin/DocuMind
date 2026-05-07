@@ -62,13 +62,19 @@ public class StreamSessionStore {
      * 호출마다 만료된 항목을 제거해 메모리 누수를 방지한다.
      * 저장소가 가득 찬 경우 빈 Optional을 반환해 호출자가 429로 응답하도록 한다.
      */
-    public synchronized Optional<String> save(String question, String sessionKey, int topK) {
+    public synchronized Optional<String> save(StreamSessionSaveCommand command) {
         evictStale();
         if (store.size() >= maxEntries) {
             return Optional.empty();
         }
         String streamId = UUID.randomUUID().toString();
-        store.put(streamId, new StreamSessionData(question, sessionKey, topK, clock.instant()));
+        store.put(streamId, new StreamSessionData(
+                command.question(),
+                command.userId(),
+                command.sessionKey(),
+                command.topK(),
+                clock.instant()
+        ));
         return Optional.of(streamId);
     }
 

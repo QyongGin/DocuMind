@@ -4,6 +4,8 @@ import com.documind.documind.domain.auth.User;
 import com.documind.documind.domain.auth.UserRepository;
 import com.documind.documind.global.exception.CustomException;
 import com.documind.documind.global.exception.ErrorCode;
+import com.documind.documind.global.infra.fastapi.FastApiClient;
+import com.documind.documind.global.infra.fastapi.FastApiQueryResponse;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -11,10 +13,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.when;
 
 /**
  * 채팅 이력 서비스 통합 테스트.
@@ -37,6 +43,10 @@ class ChatHistoryTest {
 
     @Autowired
     private UserRepository userRepository;
+
+    // @MockitoBean: 질의응답 저장 테스트에서 FastAPI 외부 호출을 Mock으로 대체한다.
+    @MockitoBean
+    private FastApiClient fastApiClient;
 
     // 비로그인 플로우용
     private ChatSession session;
@@ -66,14 +76,9 @@ class ChatHistoryTest {
     // 각 테스트 실행 후 생성된 데이터를 정리해 테스트 간 간섭을 방지
     @AfterEach
     void tearDown() {
-        chatMessageRepository.deleteByChatSessionId(session.getId());
-        // deleteById는 존재하지 않으면 EmptyResultDataAccessException을 던지므로 존재 확인 후 삭제
-        chatSessionRepository.findById(session.getId()).ifPresent(chatSessionRepository::delete);
-
-        // 로그인 플로우 정리. deleteSession 테스트 실행 후 이미 삭제됐을 수 있으므로 존재 확인 필수
-        chatMessageRepository.deleteByChatSessionId(userSession.getId());
-        chatSessionRepository.findById(userSession.getId()).ifPresent(chatSessionRepository::delete);
-        userRepository.findById(testUser.getId()).ifPresent(userRepository::delete);
+        chatMessageRepository.deleteAll();
+        chatSessionRepository.deleteAll();
+        userRepository.deleteAll();
     }
 
     // ── 비로그인(sessionKey 기반) 플로우 ──────────────────────────────────
@@ -219,5 +224,40 @@ class ChatHistoryTest {
                 () -> chatService.getSessionDetail(userSession.getId(), testUser.getId(), null));
         assertEquals(ErrorCode.CHAT_SESSION_NOT_FOUND, ex.getErrorCode());
         assertTrue(chatMessageRepository.findByChatSessionIdOrderByCreatedAtAsc(userSession.getId()).isEmpty());
+    }
+
+    @Test
+    @DisplayName("로그인 사용자 질문 저장 시 sessionKey가 아니라 userId 소유 세션으로 저장")
+    void chat_withUserId_createsUserOwnedSession() {
+        when(fastApiClient.query("로그인 새 질문", 5))
+                .thenReturn(queryResponse("로그인 새 답변"));
+
+        ChatResponse response = chatService.chat(chatRequest("로그인 새 질문", "guest-key"), testUser.getId());
+
+        ChatSessionDetailResponse userOwnedSession = chatService.getSessionDetail(
+                response.getSessionId(),
+                testUser.getId(),
+                null
+        );
+        assertEquals("로그인 새 질문", userOwnedSession.getTitle());
+        assertEquals("로그인 새 답변", userOwnedSession.getMessages().get(0).getAnswer());
+
+        CustomException ex = assertThrows(CustomException.class,
+                () -> chatService.getSessionDetail(response.getSessionId(), null, "guest-key"));
+        assertEquals(ErrorCode.CHAT_SESSION_NOT_FOUND, ex.getErrorCode());
+    }
+
+    private ChatRequest chatRequest(String question, String sessionKey) {
+        ChatRequest request = new ChatRequest();
+        ReflectionTestUtils.setField(request, "question", question);
+        ReflectionTestUtils.setField(request, "sessionKey", sessionKey);
+        return request;
+    }
+
+    private FastApiQueryResponse queryResponse(String answer) {
+        FastApiQueryResponse response = new FastApiQueryResponse();
+        ReflectionTestUtils.setField(response, "answer", answer);
+        ReflectionTestUtils.setField(response, "sources", List.of(Map.of("source", "test.pdf")));
+        return response;
     }
 }

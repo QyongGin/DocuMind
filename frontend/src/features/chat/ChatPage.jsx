@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import StatusBadge from '../../components/common/StatusBadge.jsx'
 import { env } from '../../config/env.js'
+import { logout } from '../../services/authApi.js'
 import { openChatStream } from '../../services/chatStream.js'
-import { hasAccessToken } from '../../services/authStorage.js'
+import { getAuthProfile, hasAccessToken } from '../../services/authStorage.js'
 import { deleteChatSession, getChatSession, listChatSessions } from '../../services/chatHistoryApi.js'
 import { getSessionKey } from '../../utils/sessionKey.js'
 import inhaBadgeUrl from '../../images/inha-badge.svg'
@@ -47,6 +48,17 @@ function StopIcon() {
   )
 }
 
+function DeleteIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+      <path d="M5 7h14" />
+      <path d="M10 11v6M14 11v6" />
+      <path d="M8 7l.8 12h6.4L16 7" />
+      <path d="M9.5 7l.8-2h3.4l.8 2" />
+    </svg>
+  )
+}
+
 function LoadingDots() {
   return (
     <span className="loading-dots" aria-hidden="true">
@@ -62,6 +74,15 @@ function LoginIcon() {
     <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
       <path d="M15 3.8h3.2A1.8 1.8 0 0 1 20 5.6v12.8a1.8 1.8 0 0 1-1.8 1.8H15" />
       <path d="m10 8 4 4-4 4M14 12H4" />
+    </svg>
+  )
+}
+
+function ProfileIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+      <path d="M12 12.5a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />
+      <path d="M4.8 20a7.2 7.2 0 0 1 14.4 0" />
     </svg>
   )
 }
@@ -89,10 +110,23 @@ function getSourceSnippet(source) {
   return source.content || source.text || source.page_content || '출처 본문이 응답에 포함되지 않았습니다.'
 }
 
+function getRoleLabel(role) {
+  if (role === 'ADMIN') return '관리자'
+  if (role === 'STAFF') return '교직원'
+  return '학생'
+}
+
+function getIdentifierLabel(role) {
+  if (role === 'ADMIN') return '관리자 번호'
+  if (role === 'STAFF') return '교번'
+  return '학번'
+}
+
 function ChatPage() {
   const eventSourceRef = useRef(null)
   const transcriptRef = useRef(null)
-  const isLoggedIn = hasAccessToken()
+  const [isLoggedIn, setIsLoggedIn] = useState(() => hasAccessToken())
+  const [isProfileOpen, setIsProfileOpen] = useState(false)
   const [isSidebarOpen, setIsSidebarOpen] = useState(() =>
     typeof window === 'undefined' ? true : window.matchMedia('(min-width: 834px)').matches
   )
@@ -108,6 +142,7 @@ function ChatPage() {
   const [isHistoryLoading, setIsHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const [activeSourceIndex, setActiveSourceIndex] = useState(null)
+  const authProfile = isLoggedIn ? getAuthProfile() : null
 
   useEffect(() => {
     return () => {
@@ -144,7 +179,10 @@ function ChatPage() {
     setHistoryError('')
 
     try {
-      const sessions = await listChatSessions({ sessionKey: isLoggedIn ? undefined : getSessionKey() })
+      const sessions = await listChatSessions({
+        auth: isLoggedIn,
+        sessionKey: isLoggedIn ? undefined : getSessionKey(),
+      })
       setHistorySessions(Array.isArray(sessions) ? sessions : [])
     } catch (error) {
       setHistoryError(error.message)
@@ -161,7 +199,10 @@ function ChatPage() {
     setActiveSourceIndex(null)
 
     try {
-      const detail = await getChatSession(sessionId, { sessionKey: isLoggedIn ? undefined : getSessionKey() })
+      const detail = await getChatSession(sessionId, {
+        auth: isLoggedIn,
+        sessionKey: isLoggedIn ? undefined : getSessionKey(),
+      })
       const messages = Array.isArray(detail?.messages) ? detail.messages : []
       const lastMessage = [...messages].reverse().find((message) => message.question || message.answer)
       if (!lastMessage) return
@@ -179,7 +220,10 @@ function ChatPage() {
     if (!sessionId || isStreaming) return
 
     try {
-      await deleteChatSession(sessionId, { sessionKey: isLoggedIn ? undefined : getSessionKey() })
+      await deleteChatSession(sessionId, {
+        auth: isLoggedIn,
+        sessionKey: isLoggedIn ? undefined : getSessionKey(),
+      })
       setHistorySessions((prevSessions) => prevSessions.filter((session) => session.sessionId !== sessionId))
     } catch (error) {
       setHistoryError(error.message)
@@ -206,7 +250,8 @@ function ChatPage() {
 
     eventSourceRef.current = openChatStream({
       question: trimmedQuestion,
-      sessionKey: getSessionKey(),
+      auth: isLoggedIn,
+      sessionKey: isLoggedIn ? undefined : getSessionKey(),
       topK: env.defaultTopK,
       onToken: (token) => setAnswer((prev) => prev + token),
       onDone: ({ answer: completedAnswer, sources: nextSources }) => {
@@ -271,9 +316,30 @@ function ChatPage() {
     setActiveSourceIndex(null)
     setIsStreaming(false)
     setIsGuestHistoryOpen(false)
+    setIsProfileOpen(false)
   }
 
-  const renderHistoryContent = (compact = false) => {
+  const handleLogout = async () => {
+    try {
+      await logout()
+    } finally {
+      eventSourceRef.current?.close()
+      setIsLoggedIn(false)
+      setIsSidebarOpen(false)
+      setIsProfileOpen(false)
+      setHistorySessions([])
+      setHistoryError('')
+      setSubmittedQuestion('')
+      setAnswer('')
+      setSources([])
+      setFeedback(null)
+      setErrorMessage('')
+      setActiveSourceIndex(null)
+      setIsStreaming(false)
+    }
+  }
+
+  const renderHistoryContent = (compact = false, allowDelete = !compact) => {
     if (isHistoryLoading) {
       return <p className="history-state">불러오는 중</p>
     }
@@ -293,7 +359,7 @@ function ChatPage() {
           >
             <strong>{session.title || '새 대화'}</strong>
           </button>
-          {!compact && (
+          {allowDelete && (
             <button
               type="button"
               className="history-delete"
@@ -301,7 +367,7 @@ function ChatPage() {
               disabled={isStreaming}
               aria-label={`${session.title || '대화'} 삭제`}
             >
-              ×
+              <DeleteIcon />
             </button>
           )}
         </div>
@@ -415,7 +481,7 @@ function ChatPage() {
 
                 <section className="history-group" aria-label="최근 질문">
                   <h2>최근</h2>
-                  {renderHistoryContent(true)}
+                  {renderHistoryContent(true, true)}
                 </section>
 
                 <p className="history-drawer__note">
@@ -466,9 +532,44 @@ function ChatPage() {
             <span>Inha Technical College</span>
             <strong>인하공업전문대학 AI 안내</strong>
           </div>
-          <Link className="chat-topbar__auth" to={isLoggedIn ? '/admin' : '/admin/login'} aria-label={isLoggedIn ? '관리자 화면' : '로그인'}>
-            <LoginIcon />
-          </Link>
+          {isLoggedIn ? (
+            <div className="profile-menu">
+              <button
+                type="button"
+                className="chat-topbar__auth"
+                onClick={() => setIsProfileOpen((prev) => !prev)}
+                aria-label="프로필"
+                aria-expanded={isProfileOpen}
+              >
+                <ProfileIcon />
+              </button>
+              {isProfileOpen && (
+                <section className="profile-popover" aria-label="사용자 정보">
+                  <header>
+                    <span>{getRoleLabel(authProfile?.role)}</span>
+                    <strong>{authProfile?.username || 'admin'}</strong>
+                  </header>
+                  <dl>
+                    <div>
+                      <dt>{getIdentifierLabel(authProfile?.role)}</dt>
+                      <dd>{authProfile?.id ?? '-'}</dd>
+                    </div>
+                    <div>
+                      <dt>계정</dt>
+                      <dd>{authProfile?.username || '-'}</dd>
+                    </div>
+                  </dl>
+                  <button type="button" className="profile-logout" onClick={handleLogout}>
+                    로그아웃
+                  </button>
+                </section>
+              )}
+            </div>
+          ) : (
+            <Link className="chat-topbar__auth" to="/admin/login" aria-label="로그인">
+              <LoginIcon />
+            </Link>
+          )}
           <StatusBadge active={isStreaming}>
             {isStreaming ? (
               <span className="status-badge__loading">

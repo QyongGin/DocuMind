@@ -56,8 +56,11 @@ public class ChatController {
      * USER는 로그인 불필요이므로 인증 없이 호출할 수 있다.
      */
     @PostMapping
-    public ResponseEntity<ApiResponse<ChatResponse>> chat(@Valid @RequestBody ChatRequest request) {
-        ChatResponse response = chatService.chat(request);
+    public ResponseEntity<ApiResponse<ChatResponse>> chat(
+            @Valid @RequestBody ChatRequest request,
+            Authentication authentication
+    ) {
+        ChatResponse response = chatService.chat(request, extractUserId(authentication));
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
@@ -126,9 +129,18 @@ public class ChatController {
      */
     @PostMapping("/stream/session")
     public ResponseEntity<ApiResponse<StreamSessionResponse>> createStreamSession(
-            @Valid @RequestBody StreamSessionRequest request) {
+            @Valid @RequestBody StreamSessionRequest request,
+            Authentication authentication
+    ) {
         int topK = request.topK() == null ? 5 : request.topK();
-        String streamId = streamSessionStore.save(request.question(), request.sessionKey(), topK)
+        Long userId = extractUserId(authentication);
+        StreamSessionSaveCommand command = new StreamSessionSaveCommand(
+                request.question(),
+                userId,
+                request.sessionKey(),
+                topK
+        );
+        String streamId = streamSessionStore.save(command)
                 .orElseThrow(() -> new CustomException(ErrorCode.STREAM_SESSION_LIMIT_EXCEEDED));
         return ResponseEntity.ok(ApiResponse.success(new StreamSessionResponse(streamId)));
     }
@@ -144,7 +156,13 @@ public class ChatController {
         try {
             StreamSessionData data = streamSessionStore.consumeById(streamId)
                     .orElseThrow(() -> new CustomException(ErrorCode.STREAM_SESSION_NOT_FOUND));
-            chatService.streamChat(data.question(), data.sessionKey(), data.topK(), emitter);
+            chatService.streamChat(new ChatStreamCommand(
+                    data.question(),
+                    data.userId(),
+                    data.sessionKey(),
+                    data.topK(),
+                    emitter
+            ));
         } catch (CustomException e) {
             sendStreamErrorAndComplete(emitter, e.getErrorCode());
         } catch (Exception e) {
@@ -167,7 +185,7 @@ public class ChatController {
     ) {
         // SseEmitter timeout 0L: 서버가 정상 스트리밍 중인 연결을 임의로 끊지 않음
         SseEmitter emitter = new SseEmitter(sseEmitterTimeout.toMillis());
-        chatService.streamChat(question, sessionKey, topK, emitter);
+        chatService.streamChat(new ChatStreamCommand(question, null, sessionKey, topK, emitter));
         return emitter;
     }
 
