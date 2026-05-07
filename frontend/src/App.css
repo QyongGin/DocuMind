@@ -2609,8 +2609,8 @@ button:disabled {
   transition: background-color 120ms ease, border-color 120ms ease;
 }
 
-.upload-drop:hover,
-.upload-drop--active {
+.upload-drop:not(.upload-drop--disabled):hover,
+.upload-drop:not(.upload-drop--disabled).upload-drop--active {
   border-color: rgba(31, 63, 147, 0.28);
   background: #f8fafc;
 }

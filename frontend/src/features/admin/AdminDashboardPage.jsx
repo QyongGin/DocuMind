@@ -108,7 +108,7 @@ function AdminDashboardPage() {
   const handleUploadDragEnter = (event) => {
     event.preventDefault()
     event.stopPropagation()
-    if (!isUploading) {
+    if (!isUploading && !isUploadDragActive) {
       setIsUploadDragActive(true)
     }
   }
@@ -119,7 +119,7 @@ function AdminDashboardPage() {
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = isUploading ? 'none' : 'copy'
     }
-    if (!isUploading) {
+    if (!isUploading && !isUploadDragActive) {
       setIsUploadDragActive(true)
     }
   }
