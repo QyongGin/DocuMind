@@ -23,14 +23,6 @@ function NewChatIcon() {
   )
 }
 
-function SearchIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
-      <path d="m20 20-4.2-4.2M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" />
-    </svg>
-  )
-}
-
 function SidebarIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
@@ -137,7 +129,6 @@ function ChatPage() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [feedback, setFeedback] = useState(null)
-  const [isGuestHistoryOpen, setIsGuestHistoryOpen] = useState(false)
   const [historySessions, setHistorySessions] = useState([])
   const [isHistoryLoading, setIsHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
@@ -158,11 +149,11 @@ function ChatPage() {
   }, [answer, errorMessage])
 
   useEffect(() => {
-    if (isLoggedIn || isGuestHistoryOpen) {
+    if (isLoggedIn) {
       loadHistory()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGuestHistoryOpen, isLoggedIn])
+  }, [isLoggedIn])
 
   useEffect(() => {
     if (question) return
@@ -210,7 +201,6 @@ function ChatPage() {
       setSubmittedQuestion(lastMessage.question ?? detail.title ?? '')
       setAnswer(lastMessage.answer ?? '')
       setSources(Array.isArray(lastMessage.sources) ? lastMessage.sources : [])
-      setIsGuestHistoryOpen(false)
     } catch (error) {
       setHistoryError(error.message)
     }
@@ -315,7 +305,6 @@ function ChatPage() {
     setFeedback(null)
     setActiveSourceIndex(null)
     setIsStreaming(false)
-    setIsGuestHistoryOpen(false)
     setIsProfileOpen(false)
   }
 
@@ -381,7 +370,6 @@ function ChatPage() {
         className={compact ? 'history-link' : 'history-card'}
         onClick={() => {
           selectExample(item.title)
-          setIsGuestHistoryOpen(false)
         }}
         disabled={isStreaming}
       >
@@ -423,74 +411,12 @@ function ChatPage() {
         'chat-shell',
         isLoggedIn ? 'chat-shell--logged-in' : 'chat-shell--guest',
         isLoggedIn && !isSidebarOpen ? 'chat-shell--sidebar-collapsed' : '',
-        !isLoggedIn && isGuestHistoryOpen ? 'chat-shell--guest-history-open' : '',
       ].filter(Boolean).join(' ')}
     >
       {!isLoggedIn && (
-        <aside className="chat-rail" aria-label="빠른 메뉴">
-          <BadgeButton
-            className="badge-button--rail"
-            onClick={() => setIsGuestHistoryOpen(true)}
-            label="대화 내역 열기"
-          />
-          <button type="button" className="rail-button" onClick={resetChat} aria-label="새 질문">
-            <NewChatIcon />
-          </button>
-        </aside>
-      )}
-
-      {!isLoggedIn && (
-        <>
-          <Link className="login-shortcut" to="/admin/login" aria-label="로그인">
-            <LoginIcon />
-          </Link>
-          {isGuestHistoryOpen && (
-            <>
-              <button
-                type="button"
-                className="history-scrim history-scrim--open"
-                onClick={() => setIsGuestHistoryOpen(false)}
-                aria-label="대화 내역 닫기"
-              />
-              <aside className="history-drawer history-drawer--open" aria-label="대화 내역">
-                <header className="history-drawer__header">
-                  <div>
-                    <strong>인하공전 AI</strong>
-                    <small>홈페이지 안내</small>
-                  </div>
-                  <button
-                    type="button"
-                    className="drawer-icon-button"
-                    onClick={() => setIsGuestHistoryOpen(false)}
-                    aria-label="사이드바 닫기"
-                  >
-                    <SidebarIcon />
-                  </button>
-                </header>
-
-                <nav className="drawer-menu" aria-label="대화 작업">
-                  <button type="button" className="drawer-menu__item drawer-menu__item--active" onClick={resetChat}>
-                    <NewChatIcon />
-                    <span>새 질문</span>
-                  </button>
-                  <button type="button" className="drawer-menu__item" disabled>
-                    <SearchIcon />
-                    <span>질문 검색</span>
-                  </button>
-                </nav>
-
-                <section className="history-group" aria-label="최근 질문">
-                  <h2>최근</h2>
-                  {renderHistoryContent(true, true)}
-                </section>
-
-                <p className="history-drawer__note">
-                  비로그인 질문 기록은 공개 홈페이지 방문 흐름에 맞춰 임시 항목으로만 표시합니다.
-                </p>
-              </aside>
-            </>
-          )}
-        </>
+        <Link className="login-shortcut" to="/admin/login" aria-label="로그인">
+          <LoginIcon />
+        </Link>
       )}
 
       {isLoggedIn && (
