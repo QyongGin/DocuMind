@@ -45,6 +45,15 @@ function DeleteIcon() {
   )
 }
 
+function SettingsIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+      <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2.05 2.05 0 0 1-2.9 2.9l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2.05 2.05 0 0 1-4.1 0v-.08A1.7 1.7 0 0 0 8.9 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2.05 2.05 0 0 1-2.9-2.9l.06-.06A1.7 1.7 0 0 0 4.46 15 1.7 1.7 0 0 0 2.9 13.97H2.8a2.05 2.05 0 0 1 0-4.1h.08A1.7 1.7 0 0 0 4.44 8.9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2.05 2.05 0 0 1 2.9-2.9l.06.06A1.7 1.7 0 0 0 8.88 4.46 1.7 1.7 0 0 0 9.91 2.9V2.8a2.05 2.05 0 0 1 4.1 0v.08a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06a2.05 2.05 0 0 1 2.9 2.9l-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.56 1.03h.08a2.05 2.05 0 0 1 0 4.1h-.08A1.7 1.7 0 0 0 19.4 15Z" />
+    </svg>
+  )
+}
+
 function LoadingDots() {
   return (
     <span className="loading-dots" aria-hidden="true">
@@ -447,6 +456,7 @@ function ChatPage() {
   const hasConversation = submittedQuestion || answer || errorMessage
   const canGiveFeedback = Boolean(answer) && !isStreaming && !errorMessage
   const sourceGroups = groupSourcesByDocument(sources)
+  const isAdmin = authProfile?.role === 'ADMIN'
 
   const resetChat = () => {
     eventSourceRef.current?.close()
@@ -591,6 +601,12 @@ function ChatPage() {
               {renderHistoryContent()}
             </div>
           </div>
+
+          {isAdmin && (
+            <Link className="admin-home-link" to="/admin" aria-label="관리자 홈" title="관리자 홈">
+              <SettingsIcon />
+            </Link>
+          )}
         </aside>
       )}
 

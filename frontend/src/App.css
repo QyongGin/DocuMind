@@ -1175,6 +1175,7 @@ button:disabled {
 .drawer-icon-button svg,
 .drawer-menu__item svg,
 .new-chat-button svg,
+.admin-home-link svg,
 .composer-plus svg,
 .composer-icon-button svg,
 .menu-button svg,
@@ -1596,6 +1597,27 @@ button:disabled {
   font-size: 12px;
 }
 
+.admin-home-link {
+  display: inline-grid;
+  place-items: center;
+  align-self: end;
+  justify-self: start;
+  min-width: 42px;
+  width: 42px;
+  min-height: 42px;
+  height: 42px;
+  margin: 0 0 2px 4px;
+  border-radius: 12px;
+  color: var(--chat-muted);
+  background: transparent;
+  text-decoration: none;
+}
+
+.admin-home-link:hover {
+  color: var(--college-blue);
+  background: var(--chat-subtle);
+}
+
 .history-list {
   gap: 4px;
 }
@@ -1779,6 +1801,11 @@ button:disabled {
 .chat-shell--sidebar-collapsed .new-chat-button,
 .chat-shell--sidebar-collapsed .sidebar-section {
   display: none;
+}
+
+.chat-shell--sidebar-collapsed .admin-home-link {
+  justify-self: center;
+  margin: 0;
 }
 
 .sidebar-toggle--inside {
