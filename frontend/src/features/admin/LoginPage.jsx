@@ -2,8 +2,7 @@ import { useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { login } from '../../services/authApi.js'
 import { hasAccessToken } from '../../services/authStorage.js'
-import inqSymbolUrl from '../../images/inq-symbol.png'
-import inqWordmarkUrl from '../../images/inq-wordmark.png'
+import inqLogoUrl from '../../images/inq-logo.png'
 
 function LoginPage() {
   const navigate = useNavigate()
@@ -55,8 +54,7 @@ function LoginPage() {
     <section className="portal-login">
       <header className="portal-brand">
         <Link className="portal-home-link" to="/" aria-label="챗봇 홈으로 이동">
-          <img className="portal-home-link__symbol" src={inqSymbolUrl} alt="" />
-          <img className="portal-home-link__wordmark" src={inqWordmarkUrl} alt="InQ" />
+          <img src={inqLogoUrl} alt="InQ" />
         </Link>
       </header>
 

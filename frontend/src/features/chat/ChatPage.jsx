@@ -6,8 +6,8 @@ import { openChatStream } from '../../services/chatStream.js'
 import { getAuthProfile, hasAccessToken } from '../../services/authStorage.js'
 import { deleteChatSession, getChatSession, listChatSessions } from '../../services/chatHistoryApi.js'
 import { getSessionKey } from '../../utils/sessionKey.js'
+import inqLogoUrl from '../../images/inq-logo.png'
 import inqSymbolUrl from '../../images/inq-symbol.png'
-import inqWordmarkUrl from '../../images/inq-wordmark.png'
 
 function NewChatIcon() {
   return (
@@ -571,8 +571,7 @@ function ChatPage() {
       {!isLoggedIn && (
         <>
           <Link className="guest-brand-link" to="/" aria-label="챗봇 홈">
-            <img className="guest-brand-link__symbol" src={inqSymbolUrl} alt="" />
-            <img className="guest-brand-link__wordmark" src={inqWordmarkUrl} alt="InQ" />
+            <img src={inqLogoUrl} alt="InQ" />
           </Link>
           <Link className="login-shortcut" to="/admin/login" aria-label="로그인">
             <LoginIcon />
