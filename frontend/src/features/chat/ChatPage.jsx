@@ -212,6 +212,28 @@ function scoreFromFeedback(feedback) {
   return feedback === 'positive' ? 1 : -1
 }
 
+function renderMarkdownInline(text) {
+  return String(text)
+    .split(/(\*\*[^*]+\*\*)/g)
+    .map((part, index) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return <strong key={`${part}-${index}`}>{part.slice(2, -2)}</strong>
+      }
+      return part
+    })
+}
+
+function renderAnswerText(text) {
+  return String(text)
+    .split('\n')
+    .map((line, index, lines) => (
+      <span key={`${line}-${index}`}>
+        {renderMarkdownInline(line)}
+        {index < lines.length - 1 && <br />}
+      </span>
+    ))
+}
+
 function ChatPage() {
   const eventSourceRef = useRef(null)
   const transcriptRef = useRef(null)
@@ -719,7 +741,7 @@ function ChatPage() {
                     </div>
                     {answer ? (
                       <p>
-                        {answer}
+                        {renderAnswerText(answer)}
                         {isStreaming && <span className="typing-caret" aria-hidden="true" />}
                       </p>
                     ) : (

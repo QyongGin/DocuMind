@@ -398,18 +398,6 @@ function AdminDashboardPage() {
                 <span>카테고리</span>
                 <strong>{categories.length}</strong>
               </article>
-              <article>
-                <span>좋아요</span>
-                <strong>{feedbackStats.positiveCount}</strong>
-              </article>
-              <article>
-                <span>싫어요</span>
-                <strong>{feedbackStats.negativeCount}</strong>
-              </article>
-              <article>
-                <span>긍정 비율</span>
-                <strong>{formatPercent(feedbackStats.positiveRate)}</strong>
-              </article>
             </section>
 
             <section className="feedback-summary" aria-label="답변 피드백 요약">
