@@ -108,6 +108,22 @@ public class ChatController {
     }
 
     /**
+     * 답변 메시지 피드백을 등록하거나 수정한다.
+     * 로그인 사용자는 JWT userId, 비로그인 사용자는 X-Session-Key로 메시지 소유권을 검증한다.
+     */
+    @PutMapping("/messages/{messageId}/feedback")
+    public ResponseEntity<ApiResponse<ChatFeedbackResponse>> updateFeedback(
+            @PathVariable Long messageId,
+            @Valid @RequestBody ChatFeedbackRequest request,
+            Authentication authentication,
+            @RequestHeader(value = "X-Session-Key", required = false) String sessionKey
+    ) {
+        Long userId = extractUserId(authentication);
+        ChatFeedbackResponse response = chatService.updateFeedback(messageId, userId, sessionKey, request);
+        return ResponseEntity.ok(ApiResponse.success(response));
+    }
+
+    /**
      * Authentication 객체에서 userId를 추출한다.
      * AnonymousAuthenticationToken.isAuthenticated()는 true를 반환하므로 instanceof로 명시적으로 구분한다.
      * 비로그인이거나 details가 JwtAuthenticationDetails가 아니면 null을 반환해 sessionKey 분기로 처리한다.

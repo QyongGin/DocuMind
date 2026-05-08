@@ -851,6 +851,7 @@ button:disabled {
 
 .feedback-bar {
   display: flex;
+  align-items: center;
   gap: 12px;
   width: min(820px, calc(100% - 58px));
   margin-left: 58px;
@@ -872,6 +873,15 @@ button:disabled {
   color: var(--action-blue);
   background: var(--action-blue-soft);
   border-color: rgba(0, 91, 172, 0.16);
+}
+
+.feedback-status {
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.feedback-status--error {
+  color: #b42318;
 }
 
 .chat-composer {

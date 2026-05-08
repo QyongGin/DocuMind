@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { env } from '../../config/env.js'
 import { logout } from '../../services/authApi.js'
+import { updateChatFeedback } from '../../services/chatFeedbackApi.js'
 import { openChatStream } from '../../services/chatStream.js'
 import { getAuthProfile, hasAccessToken } from '../../services/authStorage.js'
 import { deleteChatSession, getChatSession, listChatSessions } from '../../services/chatHistoryApi.js'
@@ -201,6 +202,16 @@ function getIdentifierLabel(role) {
   return '학번'
 }
 
+function feedbackFromScore(score) {
+  if (Number(score) === 1) return 'positive'
+  if (Number(score) === -1) return 'negative'
+  return null
+}
+
+function scoreFromFeedback(feedback) {
+  return feedback === 'positive' ? 1 : -1
+}
+
 function ChatPage() {
   const eventSourceRef = useRef(null)
   const transcriptRef = useRef(null)
@@ -214,11 +225,14 @@ function ChatPage() {
   )
   const [question, setQuestion] = useState('')
   const [submittedQuestion, setSubmittedQuestion] = useState('')
+  const [messageId, setMessageId] = useState(null)
   const [answer, setAnswer] = useState('')
   const [sources, setSources] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [feedback, setFeedback] = useState(null)
+  const [isFeedbackSaving, setIsFeedbackSaving] = useState(false)
+  const [feedbackError, setFeedbackError] = useState('')
   const [historySessions, setHistorySessions] = useState([])
   const [isHistoryLoading, setIsHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
@@ -292,6 +306,7 @@ function ChatPage() {
     const shouldUseAuth = refreshLoginState()
     setErrorMessage('')
     setFeedback(null)
+    setFeedbackError('')
     setActiveSourceIndex(null)
 
     try {
@@ -304,8 +319,10 @@ function ChatPage() {
       if (!lastMessage) return
 
       setSubmittedQuestion(lastMessage.question ?? detail.title ?? '')
+      setMessageId(lastMessage.messageId ?? null)
       setAnswer(lastMessage.answer ?? '')
       setSources(Array.isArray(lastMessage.sources) ? lastMessage.sources : [])
+      setFeedback(feedbackFromScore(lastMessage.feedbackScore))
     } catch (error) {
       setHistoryError(error.message)
     }
@@ -400,11 +417,13 @@ function ChatPage() {
     const sessionKey = getSessionKey()
     const shouldUseAuth = refreshLoginState()
     setSubmittedQuestion(trimmedQuestion)
+    setMessageId(null)
     setQuestion('')
     setAnswer('')
     setSources([])
     setErrorMessage('')
     setFeedback(null)
+    setFeedbackError('')
     setActiveSourceIndex(null)
     setIsStreaming(true)
 
@@ -414,10 +433,11 @@ function ChatPage() {
       sessionKey,
       topK: env.defaultTopK,
       onToken: (token) => setAnswer((prev) => prev + token),
-      onDone: ({ answer: completedAnswer, sources: nextSources }) => {
+      onDone: ({ answer: completedAnswer, messageId: completedMessageId, sources: nextSources }) => {
         if (completedAnswer) {
           setAnswer(completedAnswer)
         }
+        setMessageId(completedMessageId ?? null)
         setSources(nextSources)
         setIsStreaming(false)
         loadHistory()
@@ -434,8 +454,24 @@ function ChatPage() {
     setIsStreaming(false)
   }
 
-  const handleFeedback = (nextFeedback) => {
-    setFeedback((prevFeedback) => (prevFeedback === nextFeedback ? null : nextFeedback))
+  const handleFeedback = async (nextFeedback) => {
+    if (!messageId || isFeedbackSaving || feedback === nextFeedback) return
+
+    const shouldUseAuth = refreshLoginState()
+    setFeedbackError('')
+    setIsFeedbackSaving(true)
+
+    try {
+      const response = await updateChatFeedback(messageId, scoreFromFeedback(nextFeedback), {
+        auth: shouldUseAuth,
+        sessionKey: getSessionKey(),
+      })
+      setFeedback(feedbackFromScore(response?.score) ?? nextFeedback)
+    } catch (error) {
+      setFeedbackError(error.message)
+    } finally {
+      setIsFeedbackSaving(false)
+    }
   }
 
   const resizeComposer = (target) => {
@@ -457,7 +493,7 @@ function ChatPage() {
 
   const canSend = question.trim().length > 0 && !isStreaming
   const hasConversation = submittedQuestion || answer || errorMessage
-  const canGiveFeedback = Boolean(answer) && !isStreaming && !errorMessage
+  const canGiveFeedback = Boolean(answer) && Boolean(messageId) && !isStreaming && !errorMessage && !isFeedbackSaving
   const sourceGroups = groupSourcesByDocument(sources)
   const isAdmin = authProfile?.role === 'ADMIN'
 
@@ -465,10 +501,12 @@ function ChatPage() {
     eventSourceRef.current?.close()
     setQuestion('')
     setSubmittedQuestion('')
+    setMessageId(null)
     setAnswer('')
     setSources([])
     setErrorMessage('')
     setFeedback(null)
+    setFeedbackError('')
     setActiveSourceIndex(null)
     setIsStreaming(false)
     setIsProfileOpen(false)
@@ -486,9 +524,11 @@ function ChatPage() {
       setHistorySessions([])
       setHistoryError('')
       setSubmittedQuestion('')
+      setMessageId(null)
       setAnswer('')
       setSources([])
       setFeedback(null)
+      setFeedbackError('')
       setErrorMessage('')
       setActiveSourceIndex(null)
       setIsStreaming(false)
@@ -752,6 +792,7 @@ function ChatPage() {
                     className={feedback === 'positive' ? 'icon-action icon-action--selected' : 'icon-action'}
                     onClick={() => handleFeedback('positive')}
                     disabled={!canGiveFeedback}
+                    aria-pressed={feedback === 'positive'}
                     aria-label="좋아요"
                     title="좋아요"
                   >
@@ -762,11 +803,17 @@ function ChatPage() {
                     className={feedback === 'negative' ? 'icon-action icon-action--selected' : 'icon-action'}
                     onClick={() => handleFeedback('negative')}
                     disabled={!canGiveFeedback}
+                    aria-pressed={feedback === 'negative'}
                     aria-label="싫어요"
                     title="싫어요"
                   >
                     싫어요
                   </button>
+                  {(isFeedbackSaving || feedbackError) && (
+                    <span className={feedbackError ? 'feedback-status feedback-status--error' : 'feedback-status'}>
+                      {feedbackError || '저장 중'}
+                    </span>
+                  )}
                 </div>
               </>
             ) : (

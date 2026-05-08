@@ -64,6 +64,7 @@ export function openChatStream({ question, sessionKey, topK, auth = false, onTok
           } else if (data.done) {
             onDone({
               answer: data.answer,
+              messageId: data.messageId,
               sources: data.sources ?? [],
             })
             closeStream()

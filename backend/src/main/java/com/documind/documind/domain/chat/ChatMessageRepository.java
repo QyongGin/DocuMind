@@ -7,12 +7,24 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Optional;
 
 /** chat_messages 테이블 CRUD를 담당하는 JPA Repository */
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
 
     /** 특정 세션에 속한 메시지를 시간순으로 조회한다. 세션 상세 조회 시 대화 흐름 재현에 사용한다. */
     List<ChatMessage> findByChatSessionIdOrderByCreatedAtAsc(Long sessionId);
+
+    /** messageId + userId로 소유권을 검증하며 메시지를 조회한다. 로그인 사용자의 피드백 저장에 사용한다. */
+    @Query("SELECT m FROM ChatMessage m WHERE m.id = :messageId AND m.chatSession.user.id = :userId")
+    Optional<ChatMessage> findByIdAndUserId(@Param("messageId") Long messageId, @Param("userId") Long userId);
+
+    /** messageId + sessionKey로 소유권을 검증하며 메시지를 조회한다. 비로그인 사용자의 피드백 저장에 사용한다. */
+    @Query("SELECT m FROM ChatMessage m WHERE m.id = :messageId AND m.chatSession.sessionKey = :sessionKey")
+    Optional<ChatMessage> findByIdAndSessionKey(
+            @Param("messageId") Long messageId,
+            @Param("sessionKey") String sessionKey
+    );
 
     /**
      * 세션의 메시지를 JPQL로 일괄 삭제한다.

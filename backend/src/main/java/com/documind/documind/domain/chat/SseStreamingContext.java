@@ -176,6 +176,7 @@ class SseStreamingContext {
 
         ObjectNode outbound = (ObjectNode) node.deepCopy();
         outbound.set("sources", objectMapper.valueToTree(sources));
+        outbound.put("messageId", messageId);
         return objectMapper.writeValueAsString(outbound);
     }
 

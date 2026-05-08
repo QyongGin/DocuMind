@@ -37,6 +37,7 @@ public class ChatService {
 
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
+    private final ChatFeedbackRepository chatFeedbackRepository;
     private final ChatStreamPersistenceService chatStreamPersistenceService;
     private final SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher;
     private final PromptConfigService promptConfigService;
@@ -123,14 +124,17 @@ public class ChatService {
     public ChatSessionDetailResponse getSessionDetail(Long sessionId, Long userId, String sessionKey) {
         ChatSession session = resolveSession(sessionId, userId, sessionKey);
 
-        List<ChatMessageResponse> messageResponses = chatMessageRepository
-                .findByChatSessionIdOrderByCreatedAtAsc(sessionId)
+        List<ChatMessage> messages = chatMessageRepository.findByChatSessionIdOrderByCreatedAtAsc(sessionId);
+        Map<Long, Byte> feedbackScores = loadFeedbackScores(messages);
+
+        List<ChatMessageResponse> messageResponses = messages
                 .stream()
                 .map(m -> ChatMessageResponse.builder()
                         .messageId(m.getId())
                         .question(m.getQuestion())
                         .answer(m.getAnswer())
                         .sources(deserializeSources(m.getSourceDocs()))
+                        .feedbackScore(feedbackScores.get(m.getId()))
                         .createdAt(m.getCreatedAt())
                         .build())
                 .toList();
@@ -150,8 +154,39 @@ public class ChatService {
     @Transactional
     public void deleteSession(Long sessionId, Long userId, String sessionKey) {
         resolveSession(sessionId, userId, sessionKey);
+        chatFeedbackRepository.deleteByChatSessionId(sessionId);
         chatMessageRepository.deleteByChatSessionId(sessionId);
         chatSessionRepository.deleteById(sessionId);
+    }
+
+    /**
+     * 답변 메시지에 대한 피드백을 등록하거나 수정한다.
+     * 로그인 사용자는 userId로, 비로그인 사용자는 sessionKey로 메시지 소유권을 검증한다.
+     *
+     * @param messageId 피드백 대상 메시지 ID
+     * @param userId 로그인 사용자 ID. 비로그인이면 null
+     * @param sessionKey 비로그인 세션 키
+     * @param request 피드백 점수 요청
+     * @return 저장된 피드백 정보
+     */
+    @Transactional
+    public ChatFeedbackResponse updateFeedback(
+            Long messageId,
+            Long userId,
+            String sessionKey,
+            ChatFeedbackRequest request
+    ) {
+        ChatMessage message = resolveMessage(messageId, userId, sessionKey);
+        byte score = request.normalizedScore();
+
+        ChatFeedback feedback = chatFeedbackRepository.findByChatMessageId(messageId)
+                .map(existingFeedback -> {
+                    existingFeedback.updateScore(score);
+                    return existingFeedback;
+                })
+                .orElseGet(() -> chatFeedbackRepository.save(ChatFeedback.create(message, score)));
+
+        return ChatFeedbackResponse.from(feedback);
     }
 
     // sessionId + (userId 또는 sessionKey)로 소유권을 검증하고 세션을 반환.
@@ -166,6 +201,35 @@ public class ChatService {
                     .orElseThrow(() -> new CustomException(ErrorCode.CHAT_SESSION_NOT_FOUND));
         }
         throw new CustomException(ErrorCode.CHAT_SESSION_NOT_FOUND);
+    }
+
+    // messageId + (userId 또는 sessionKey)로 소유권을 검증하고 메시지를 반환.
+    private ChatMessage resolveMessage(Long messageId, Long userId, String sessionKey) {
+        if (userId != null) {
+            return chatMessageRepository.findByIdAndUserId(messageId, userId)
+                    .orElseThrow(() -> new CustomException(ErrorCode.CHAT_MESSAGE_NOT_FOUND));
+        }
+        if (sessionKey != null) {
+            return chatMessageRepository.findByIdAndSessionKey(messageId, sessionKey)
+                    .orElseThrow(() -> new CustomException(ErrorCode.CHAT_MESSAGE_NOT_FOUND));
+        }
+        throw new CustomException(ErrorCode.CHAT_MESSAGE_NOT_FOUND);
+    }
+
+    // 세션 상세 메시지 목록에 붙일 피드백 점수를 messageId 기준 Map으로 변환한다.
+    private Map<Long, Byte> loadFeedbackScores(List<ChatMessage> messages) {
+        List<Long> messageIds = messages.stream()
+                .map(ChatMessage::getId)
+                .toList();
+        if (messageIds.isEmpty()) {
+            return Map.of();
+        }
+        return chatFeedbackRepository.findByChatMessageIdIn(messageIds)
+                .stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        feedback -> feedback.getChatMessage().getId(),
+                        ChatFeedback::getScore
+                ));
     }
 
     // sourceDocs JSON 문자열을 역직렬화. null이거나 파싱 실패 시 빈 리스트로 폴백
