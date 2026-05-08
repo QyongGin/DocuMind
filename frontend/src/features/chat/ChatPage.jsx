@@ -92,6 +92,10 @@ function getSourcePath(source) {
     .join(' · ')
 }
 
+function getSectionLabel(path) {
+  return path ? `섹션 ${path}` : ''
+}
+
 function toSourcePageNumber(value) {
   if (value === null || value === undefined || value === '') return null
 
@@ -108,38 +112,35 @@ function getSourcePageLabel(source) {
   return `${startPage}페이지`
 }
 
-function getSourceDetailMeta(source, index) {
+function getSourceDetailMeta(source) {
+  const sourcePath = getSourcePath(source)
+
   return [
     getSourcePageLabel(source),
-    getSourcePath(source),
-    getChunkIdLabel(source, index),
-    source.document_id ? `문서 ID ${source.document_id}` : '',
-    `출처 ${index + 1}`,
+    getSectionLabel(sourcePath),
+    getChunkPositionLabel(source),
   ].filter(Boolean)
 }
 
 function getDocumentInfoMeta(group) {
   return [
-    group.primaryPath,
+    getSectionLabel(group.primaryPath),
     group.documentId ? `문서 ID ${group.documentId}` : '',
     group.uploadedAt ? `업로드 ${formatSourceDateTime(group.uploadedAt)}` : '',
   ].filter(Boolean)
 }
 
-function getChunkIdLabel(source, index) {
+function getChunkPositionLabel(source) {
   if (source.chunk_index === null || source.chunk_index === undefined) {
-    return `청크 ${index + 1}`
+    return ''
   }
 
   const chunkNumber = Number(source.chunk_index)
   if (!Number.isFinite(chunkNumber)) {
-    return `청크 ${index + 1}`
+    return ''
   }
 
-  if (source.document_id) {
-    return `청크 ID ${source.document_id}_${chunkNumber}`
-  }
-  return `청크 ${chunkNumber + 1}`
+  return `문서 내 ${chunkNumber + 1}번째 청크`
 }
 
 function getSourceSnippet(source) {
@@ -707,10 +708,6 @@ function ChatPage() {
                               onClick={() => setActiveSourceIndex((prevIndex) => (prevIndex === index ? null : index))}
                             >
                               <strong>{group.title}</strong>
-                              <span className="source-trigger__meta">
-                                {group.primaryPath && <span className="source-path">{group.primaryPath}</span>}
-                                <span className="source-path">{group.chunks.length}개 청크</span>
-                              </span>
                             </button>
                             {activeSourceIndex === index && (
                               <div id={`source-detail-${index}`} className="source-detail">
@@ -723,10 +720,10 @@ function ChatPage() {
                                   ))}
                                 </dl>
                                 <div className="source-chunk-list" aria-label={`${group.title} 검색 청크 목록`}>
-                                  {group.chunks.map(({ source, originalIndex }, chunkIndex) => (
+                                  {group.chunks.map(({ source, originalIndex }) => (
                                     <section className="source-chunk" key={`${group.key}-${originalIndex}`}>
                                       <dl className="source-detail__meta" aria-label="청크 상세 정보">
-                                        {getSourceDetailMeta(source, chunkIndex).map((item) => (
+                                        {getSourceDetailMeta(source).map((item) => (
                                           <div key={item}>
                                             <dt className="sr-only">청크 정보</dt>
                                             <dd>{item}</dd>
