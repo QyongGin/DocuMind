@@ -150,6 +150,16 @@ class ChatFeedbackTest {
     }
 
     @Test
+    @DisplayName("관리자 대시보드용 좋아요와 싫어요 개수를 집계한다")
+    void countByScore_returnsFeedbackCounts() {
+        chatService.updateFeedback(message.getId(), null, SESSION_KEY, feedbackRequest(1));
+        chatService.updateFeedback(userMessage.getId(), user.getId(), null, feedbackRequest(-1));
+
+        assertEquals(1, chatFeedbackRepository.countByScore((byte) 1));
+        assertEquals(1, chatFeedbackRepository.countByScore((byte) -1));
+    }
+
+    @Test
     @DisplayName("세션 삭제 시 피드백을 먼저 삭제해 FK 오류가 발생하지 않는다")
     void deleteSession_withFeedback_deletesFeedbackAndSession() {
         chatService.updateFeedback(message.getId(), null, SESSION_KEY, feedbackRequest(1));

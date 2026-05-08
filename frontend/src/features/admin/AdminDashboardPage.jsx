@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { logout } from '../../services/authApi.js'
 import { createCategory, listCategories } from '../../services/categoryApi.js'
 import { deleteDocument, listDocumentChunks, listDocuments, uploadDocument } from '../../services/documentApi.js'
+import { getFeedbackStats } from '../../services/feedbackStatsApi.js'
 import { getPromptConfig, updatePromptConfig } from '../../services/promptApi.js'
 import inqLogoUrl from '../../images/inq-logo.png'
 import inqSymbolUrl from '../../images/inq-symbol.png'
@@ -49,11 +50,23 @@ function formatDuration(durationMs) {
   return `${minutes}분 ${seconds}초`
 }
 
+function formatPercent(rate) {
+  const percent = Number(rate) * 100
+  if (!Number.isFinite(percent)) return '0%'
+  return `${Math.round(percent)}%`
+}
+
 function AdminDashboardPage() {
   const navigate = useNavigate()
   const fileInputRef = useRef(null)
   const [documents, setDocuments] = useState([])
   const [categories, setCategories] = useState([])
+  const [feedbackStats, setFeedbackStats] = useState({
+    totalCount: 0,
+    positiveCount: 0,
+    negativeCount: 0,
+    positiveRate: 0,
+  })
   const [selectedCategory, setSelectedCategory] = useState('전체')
   const [selectedFile, setSelectedFile] = useState(null)
   const [selectedUploadCategoryId, setSelectedUploadCategoryId] = useState('')
@@ -93,12 +106,19 @@ function AdminDashboardPage() {
     setErrorMessage('')
 
     try {
-      const [nextDocuments, nextCategories] = await Promise.all([
+      const [nextDocuments, nextCategories, nextFeedbackStats] = await Promise.all([
         listDocuments(),
         listCategories(),
+        getFeedbackStats(),
       ])
       setDocuments(Array.isArray(nextDocuments) ? nextDocuments : [])
       setCategories(Array.isArray(nextCategories) ? nextCategories : [])
+      setFeedbackStats(nextFeedbackStats ?? {
+        totalCount: 0,
+        positiveCount: 0,
+        negativeCount: 0,
+        positiveRate: 0,
+      })
     } catch (error) {
       setErrorMessage(error.message)
     } finally {
@@ -377,6 +397,18 @@ function AdminDashboardPage() {
               <article>
                 <span>카테고리</span>
                 <strong>{categories.length}</strong>
+              </article>
+              <article>
+                <span>좋아요</span>
+                <strong>{feedbackStats.positiveCount}</strong>
+              </article>
+              <article>
+                <span>싫어요</span>
+                <strong>{feedbackStats.negativeCount}</strong>
+              </article>
+              <article>
+                <span>긍정 비율</span>
+                <strong>{formatPercent(feedbackStats.positiveRate)}</strong>
               </article>
             </section>
           </section>
