@@ -6,7 +6,8 @@ import { openChatStream } from '../../services/chatStream.js'
 import { getAuthProfile, hasAccessToken } from '../../services/authStorage.js'
 import { deleteChatSession, getChatSession, listChatSessions } from '../../services/chatHistoryApi.js'
 import { getSessionKey } from '../../utils/sessionKey.js'
-import inhaBadgeUrl from '../../images/inha-badge.svg'
+import inqSymbolUrl from '../../images/inq-symbol.png'
+import inqWordmarkUrl from '../../images/inq-wordmark.png'
 
 function NewChatIcon() {
   return (
@@ -84,7 +85,7 @@ function ProfileIcon() {
 function BadgeButton({ className = '', onClick, label }) {
   return (
     <button type="button" className={`badge-button ${className}`} onClick={onClick} aria-label={label}>
-      <img src={inhaBadgeUrl} alt="" />
+      <img src={inqSymbolUrl} alt="" />
     </button>
   )
 }
@@ -568,9 +569,15 @@ function ChatPage() {
       ].filter(Boolean).join(' ')}
     >
       {!isLoggedIn && (
-        <Link className="login-shortcut" to="/admin/login" aria-label="로그인">
-          <LoginIcon />
-        </Link>
+        <>
+          <Link className="guest-brand-link" to="/" aria-label="챗봇 홈">
+            <img className="guest-brand-link__symbol" src={inqSymbolUrl} alt="" />
+            <img className="guest-brand-link__wordmark" src={inqWordmarkUrl} alt="InQ" />
+          </Link>
+          <Link className="login-shortcut" to="/admin/login" aria-label="로그인">
+            <LoginIcon />
+          </Link>
+        </>
       )}
 
       {isLoggedIn && (
@@ -670,7 +677,7 @@ function ChatPage() {
 
                 <div className="assistant-cluster">
                   <span className="avatar avatar--assistant" aria-hidden="true">
-                    <img src={inhaBadgeUrl} alt="" />
+                    <img src={inqSymbolUrl} alt="" />
                   </span>
                   <article className="answer-card">
                     <div className="answer-card__header">

@@ -4,7 +4,7 @@ import { logout } from '../../services/authApi.js'
 import { createCategory, listCategories } from '../../services/categoryApi.js'
 import { deleteDocument, listDocumentChunks, listDocuments, uploadDocument } from '../../services/documentApi.js'
 import { getPromptConfig, updatePromptConfig } from '../../services/promptApi.js'
-import inhaBadgeUrl from '../../images/inha-badge.svg'
+import inqSymbolUrl from '../../images/inq-symbol.png'
 
 function formatFileSize(size) {
   if (!Number.isFinite(size) || size <= 0) return '-'
@@ -301,7 +301,7 @@ function AdminDashboardPage() {
       <aside className="admin-rail" aria-label="관리자 메뉴">
         <div className="admin-rail__top">
           <Link className="admin-brand-link" to="/" aria-label="챗봇 홈으로 이동">
-            <img src={inhaBadgeUrl} alt="" />
+            <img src={inqSymbolUrl} alt="" />
           </Link>
           <button
             type="button"

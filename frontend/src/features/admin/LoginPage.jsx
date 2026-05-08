@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { login } from '../../services/authApi.js'
 import { hasAccessToken } from '../../services/authStorage.js'
-import inhaBadgeUrl from '../../images/inha-badge.svg'
+import inqSymbolUrl from '../../images/inq-symbol.png'
+import inqWordmarkUrl from '../../images/inq-wordmark.png'
 
 function LoginPage() {
   const navigate = useNavigate()
@@ -54,13 +55,9 @@ function LoginPage() {
     <section className="portal-login">
       <header className="portal-brand">
         <Link className="portal-home-link" to="/" aria-label="챗봇 홈으로 이동">
-          <img src={inhaBadgeUrl} alt="" />
+          <img className="portal-home-link__symbol" src={inqSymbolUrl} alt="" />
+          <img className="portal-home-link__wordmark" src={inqWordmarkUrl} alt="InQ" />
         </Link>
-        <div>
-          <strong>인하공업전문대학</strong>
-          <span>INHA TECHNICAL COLLEGE</span>
-        </div>
-        <b>챗봇</b>
       </header>
 
       <main className="portal-card">

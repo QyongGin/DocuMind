@@ -1192,13 +1192,13 @@ button:disabled {
 .badge-button {
   display: inline-grid;
   place-items: center;
-  min-width: 40px;
-  width: 40px;
-  min-height: 40px;
-  height: 40px;
+  min-width: 42px;
+  width: 42px;
+  min-height: 42px;
+  height: 42px;
   padding: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: 12px;
   background: transparent;
   box-shadow: none;
 }
@@ -1210,20 +1210,52 @@ button:disabled {
 
 .badge-button img {
   display: block;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
+  width: 36px;
+  height: 36px;
   object-fit: contain;
+  mix-blend-mode: multiply;
 }
 
 .badge-button--rail img {
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
 }
 
 .badge-button--sidebar img {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
+}
+
+.guest-brand-link {
+  position: fixed;
+  top: 22px;
+  left: 28px;
+  z-index: 45;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 6px 8px 6px 6px;
+  border-radius: 14px;
+  text-decoration: none;
+}
+
+.guest-brand-link:hover {
+  background: #f7f7f8;
+}
+
+.guest-brand-link__symbol {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  mix-blend-mode: multiply;
+}
+
+.guest-brand-link__wordmark {
+  width: 88px;
+  height: auto;
+  object-fit: contain;
+  mix-blend-mode: multiply;
 }
 
 .login-shortcut {
@@ -2066,10 +2098,10 @@ button:disabled {
 }
 
 .avatar--assistant img {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
+  width: 32px;
+  height: 32px;
   object-fit: contain;
+  mix-blend-mode: multiply;
 }
 
 .answer-card,
@@ -2416,18 +2448,18 @@ button:disabled {
 .portal-brand {
   display: flex;
   align-items: center;
-  gap: 12px;
   width: min(1180px, 100%);
   margin: 0 auto;
 }
 
 .portal-home-link {
-  display: grid;
-  place-items: center;
-  width: 56px;
-  height: 56px;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 62px;
   flex: 0 0 auto;
-  border-radius: 9999px;
+  padding: 6px 10px 6px 6px;
+  border-radius: 16px;
   text-decoration: none;
 }
 
@@ -2435,36 +2467,18 @@ button:disabled {
   background: #ffffff;
 }
 
-.portal-home-link img {
-  width: 52px;
-  height: 52px;
+.portal-home-link__symbol {
+  width: 56px;
+  height: 56px;
   object-fit: contain;
+  mix-blend-mode: multiply;
 }
 
-.portal-brand div {
-  display: grid;
-  gap: 2px;
-}
-
-.portal-brand strong {
-  color: var(--ink);
-  font-size: 24px;
-  font-weight: 700;
-  line-height: 1.05;
-}
-
-.portal-brand span {
-  color: var(--chat-muted);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.portal-brand b {
-  margin-left: 8px;
-  color: var(--college-blue);
-  font-size: 40px;
-  font-weight: 700;
-  line-height: 1;
+.portal-home-link__wordmark {
+  width: 124px;
+  height: auto;
+  object-fit: contain;
+  mix-blend-mode: multiply;
 }
 
 .portal-card {
@@ -2693,11 +2707,11 @@ button:disabled {
 .admin-brand-link {
   display: grid;
   place-items: center;
-  width: 46px;
-  height: 46px;
+  width: 48px;
+  height: 48px;
   flex: 0 0 auto;
   padding: 0;
-  border-radius: 9999px;
+  border-radius: 14px;
   color: inherit;
   text-decoration: none;
 }
@@ -2711,6 +2725,7 @@ button:disabled {
   height: 42px;
   flex: 0 0 auto;
   object-fit: contain;
+  mix-blend-mode: multiply;
 }
 
 .admin-rail__toggle {
@@ -3352,10 +3367,6 @@ button:disabled {
     padding: 22px 16px 28px;
   }
 
-  .portal-brand b {
-    font-size: 30px;
-  }
-
   .portal-card {
     grid-template-columns: 1fr;
     gap: 24px;
@@ -3427,28 +3438,20 @@ button:disabled {
 
 @media (max-width: 560px) {
   .portal-brand {
-    display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) auto;
     align-items: center;
   }
 
   .portal-home-link {
-    width: 48px;
-    height: 48px;
+    min-height: 52px;
   }
 
-  .portal-brand img {
-    width: 42px;
-    height: 42px;
+  .portal-home-link__symbol {
+    width: 46px;
+    height: 46px;
   }
 
-  .portal-brand strong {
-    font-size: 16px;
-  }
-
-  .portal-brand b {
-    margin-left: 0;
-    font-size: 18px;
+  .portal-home-link__wordmark {
+    width: 98px;
   }
 
   .portal-tab {
