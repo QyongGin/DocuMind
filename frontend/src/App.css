@@ -1578,7 +1578,7 @@ button:disabled {
   align-items: center;
   min-height: 40px;
   gap: 10px;
-  padding: 0 6px;
+  padding: 0;
 }
 
 .sidebar-brand-button {
@@ -1587,6 +1587,7 @@ button:disabled {
   width: 118px;
   min-width: 0;
   min-height: 42px;
+  margin-left: -10px;
   padding: 0;
   border: 0;
   border-radius: 14px;
@@ -1857,6 +1858,7 @@ button:disabled {
   width: 42px;
   height: 42px;
   min-height: 42px;
+  margin-left: 0;
 }
 
 .chat-shell--sidebar-collapsed .sidebar-brand-button__logo {
@@ -2742,6 +2744,7 @@ button:disabled {
   width: 136px;
   height: 48px;
   flex: 0 0 auto;
+  margin-left: -10px;
   padding: 0;
   border-radius: 14px;
   color: inherit;
@@ -2884,6 +2887,7 @@ button:disabled {
 .admin-surface--rail-collapsed .admin-brand-link {
   width: 42px;
   height: 42px;
+  margin-left: 0;
 }
 
 .admin-surface--rail-collapsed .admin-brand-link__logo {
