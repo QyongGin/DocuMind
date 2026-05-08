@@ -1229,7 +1229,7 @@ button:disabled {
 .guest-brand-link {
   position: fixed;
   top: 12px;
-  left: 18px;
+  left: 8px;
   z-index: 45;
   display: grid;
   place-items: center;
@@ -2741,8 +2741,8 @@ button:disabled {
 .admin-brand-link {
   display: grid;
   place-items: center;
-  width: 136px;
-  height: 48px;
+  width: 118px;
+  height: 42px;
   flex: 0 0 auto;
   margin-left: -10px;
   padding: 0;
@@ -2756,7 +2756,7 @@ button:disabled {
 }
 
 .admin-brand-link__logo {
-  width: 126px;
+  width: 108px;
   height: auto;
   object-fit: contain;
   mix-blend-mode: multiply;
