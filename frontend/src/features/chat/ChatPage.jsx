@@ -789,7 +789,11 @@ function ChatPage() {
                 <div className="feedback-bar" aria-label="답변 피드백">
                   <button
                     type="button"
-                    className={feedback === 'positive' ? 'icon-action icon-action--selected' : 'icon-action'}
+                    className={
+                      feedback === 'positive'
+                        ? 'icon-action icon-action--positive icon-action--selected'
+                        : 'icon-action icon-action--positive'
+                    }
                     onClick={() => handleFeedback('positive')}
                     disabled={!canGiveFeedback}
                     aria-pressed={feedback === 'positive'}
@@ -800,7 +804,11 @@ function ChatPage() {
                   </button>
                   <button
                     type="button"
-                    className={feedback === 'negative' ? 'icon-action icon-action--selected' : 'icon-action'}
+                    className={
+                      feedback === 'negative'
+                        ? 'icon-action icon-action--negative icon-action--selected'
+                        : 'icon-action icon-action--negative'
+                    }
                     onClick={() => handleFeedback('negative')}
                     disabled={!canGiveFeedback}
                     aria-pressed={feedback === 'negative'}

@@ -411,6 +411,40 @@ function AdminDashboardPage() {
                 <strong>{formatPercent(feedbackStats.positiveRate)}</strong>
               </article>
             </section>
+
+            <section className="feedback-summary" aria-label="답변 피드백 요약">
+              <header>
+                <div>
+                  <span>답변 피드백</span>
+                  <strong>{formatPercent(feedbackStats.positiveRate)} 긍정</strong>
+                </div>
+                <p>총 {feedbackStats.totalCount}건</p>
+              </header>
+              <div
+                className="feedback-summary__bar"
+                role="img"
+                aria-label={`좋아요 ${feedbackStats.positiveCount}건, 싫어요 ${feedbackStats.negativeCount}건`}
+              >
+                <span
+                  className="feedback-summary__bar-positive"
+                  style={{ width: feedbackStats.totalCount > 0 ? formatPercent(feedbackStats.positiveRate) : '0%' }}
+                />
+                <span
+                  className="feedback-summary__bar-negative"
+                  style={{ width: feedbackStats.totalCount > 0 ? formatPercent(1 - feedbackStats.positiveRate) : '0%' }}
+                />
+              </div>
+              <div className="feedback-summary__legend">
+                <span>
+                  <i className="feedback-summary__dot feedback-summary__dot--positive" aria-hidden="true" />
+                  좋아요 {feedbackStats.positiveCount}
+                </span>
+                <span>
+                  <i className="feedback-summary__dot feedback-summary__dot--negative" aria-hidden="true" />
+                  싫어요 {feedbackStats.negativeCount}
+                </span>
+              </div>
+            </section>
           </section>
         )}
 
