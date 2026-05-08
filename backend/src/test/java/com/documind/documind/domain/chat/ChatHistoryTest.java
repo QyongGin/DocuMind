@@ -20,6 +20,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 /**
@@ -229,7 +231,7 @@ class ChatHistoryTest {
     @Test
     @DisplayName("로그인 사용자 질문 저장 시 sessionKey가 아니라 userId 소유 세션으로 저장")
     void chat_withUserId_createsUserOwnedSession() {
-        when(fastApiClient.query("로그인 새 질문", 5))
+        when(fastApiClient.query(eq("로그인 새 질문"), eq(5), anyString()))
                 .thenReturn(queryResponse("로그인 새 답변"));
 
         ChatResponse response = chatService.chat(chatRequest("로그인 새 질문", "guest-key"), testUser.getId());

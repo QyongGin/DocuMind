@@ -84,13 +84,14 @@ class FastApiClientTest {
             sendJson(exchange, "{\"answer\":\"답변\",\"sources\":[{\"document_id\":7,\"source\":\"sample.pdf\"}]}");
         });
 
-        FastApiQueryResponse response = fastApiClient.query("질문", 5);
+        FastApiQueryResponse response = fastApiClient.query("질문", 5, "관리자 정책");
 
         assertEquals("답변", response.getAnswer());
         assertEquals(1, response.getSources().size());
         assertTrue(contentType.get().startsWith(MediaType.APPLICATION_JSON_VALUE));
         assertTrue(requestBody.get().contains("\"question\":\"질문\""));
         assertTrue(requestBody.get().contains("\"top_k\":5"));
+        assertTrue(requestBody.get().contains("\"system_prompt\":\"관리자 정책\""));
     }
 
     @Test
@@ -181,7 +182,7 @@ class FastApiClientTest {
             exchange.close();
         });
 
-        List<String> events = fastApiClient.streamQuery("질문", 5)
+        List<String> events = fastApiClient.streamQuery("질문", 5, "관리자 정책")
                 .collectList()
                 .block(Duration.ofSeconds(3));
 
@@ -189,6 +190,7 @@ class FastApiClientTest {
         assertTrue(contentType.get().startsWith(MediaType.APPLICATION_JSON_VALUE));
         assertTrue(requestBody.get().contains("\"question\":\"질문\""));
         assertTrue(requestBody.get().contains("\"top_k\":5"));
+        assertTrue(requestBody.get().contains("\"system_prompt\":\"관리자 정책\""));
     }
 
     private String readBody(HttpExchange exchange) throws IOException {

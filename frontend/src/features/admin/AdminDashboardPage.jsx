@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { logout } from '../../services/authApi.js'
 import { createCategory, listCategories } from '../../services/categoryApi.js'
 import { deleteDocument, listDocumentChunks, listDocuments, uploadDocument } from '../../services/documentApi.js'
-import inhaBadgeUrl from '../../images/inha-badge.svg'
+import { getPromptConfig, updatePromptConfig } from '../../services/promptApi.js'
+import inqLogoUrl from '../../images/inq-logo.png'
+import inqSymbolUrl from '../../images/inq-symbol.png'
 
 function formatFileSize(size) {
   if (!Number.isFinite(size) || size <= 0) return '-'
@@ -21,6 +24,19 @@ function formatDate(value) {
   }).format(date)
 }
 
+function formatDateTime(value) {
+  if (!value) return '저장 전'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '저장 전'
+  return new Intl.DateTimeFormat('ko-KR', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
 function formatDuration(durationMs) {
   if (!Number.isFinite(durationMs) || durationMs < 0) return null
   if (durationMs < 1000) return `${durationMs}ms`
@@ -34,6 +50,7 @@ function formatDuration(durationMs) {
 }
 
 function AdminDashboardPage() {
+  const navigate = useNavigate()
   const fileInputRef = useRef(null)
   const [documents, setDocuments] = useState([])
   const [categories, setCategories] = useState([])
@@ -55,6 +72,13 @@ function AdminDashboardPage() {
   const [documentChunks, setDocumentChunks] = useState([])
   const [isChunksLoading, setIsChunksLoading] = useState(false)
   const [chunksErrorMessage, setChunksErrorMessage] = useState('')
+  const [promptConfig, setPromptConfig] = useState(null)
+  const [systemPrompt, setSystemPrompt] = useState('')
+  const [promptMessage, setPromptMessage] = useState('')
+  const [promptErrorMessage, setPromptErrorMessage] = useState('')
+  const [isPromptLoading, setIsPromptLoading] = useState(true)
+  const [isPromptSaving, setIsPromptSaving] = useState(false)
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
 
   const filteredDocuments = useMemo(() => {
     if (selectedCategory === '전체') return documents
@@ -62,6 +86,7 @@ function AdminDashboardPage() {
   }, [documents, selectedCategory])
 
   const totalChunks = documents.reduce((sum, document) => sum + (document.chunkCount ?? 0), 0)
+  const isPromptDirty = systemPrompt !== (promptConfig?.systemPrompt ?? '')
 
   const loadDashboard = async () => {
     setIsLoading(true)
@@ -81,8 +106,24 @@ function AdminDashboardPage() {
     }
   }
 
+  const loadPromptConfig = async () => {
+    setIsPromptLoading(true)
+    setPromptErrorMessage('')
+
+    try {
+      const nextPromptConfig = await getPromptConfig()
+      setPromptConfig(nextPromptConfig)
+      setSystemPrompt(nextPromptConfig?.systemPrompt ?? '')
+    } catch (error) {
+      setPromptErrorMessage(error.message)
+    } finally {
+      setIsPromptLoading(false)
+    }
+  }
+
   useEffect(() => {
     loadDashboard()
+    loadPromptConfig()
   }, [])
 
   const resetSelectedFile = () => {
@@ -225,12 +266,44 @@ function AdminDashboardPage() {
     setLastUploadDurationMs(null)
   }
 
+  const handleSavePrompt = async (event) => {
+    event.preventDefault()
+    const trimmedPrompt = systemPrompt.trim()
+    if (!trimmedPrompt || isPromptSaving) return
+
+    setPromptMessage('')
+    setPromptErrorMessage('')
+    setIsPromptSaving(true)
+
+    try {
+      const updatedPromptConfig = await updatePromptConfig(trimmedPrompt)
+      setPromptConfig(updatedPromptConfig)
+      setSystemPrompt(updatedPromptConfig?.systemPrompt ?? trimmedPrompt)
+      setPromptMessage('프롬프트 설정을 저장했습니다.')
+    } catch (error) {
+      setPromptErrorMessage(error.message)
+    } finally {
+      setIsPromptSaving(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true)
+
+    try {
+      await logout()
+    } finally {
+      navigate('/admin/login')
+    }
+  }
+
   return (
     <section className={isRailCollapsed ? 'admin-surface admin-surface--rail-collapsed' : 'admin-surface'}>
       <aside className="admin-rail" aria-label="관리자 메뉴">
         <div className="admin-rail__top">
           <Link className="admin-brand-link" to="/" aria-label="챗봇 홈으로 이동">
-            <img src={inhaBadgeUrl} alt="" />
+            <img className="admin-brand-link__logo" src={inqLogoUrl} alt="InQ" />
+            <img className="admin-brand-link__symbol" src={inqSymbolUrl} alt="" />
           </Link>
           <button
             type="button"
@@ -266,6 +339,17 @@ function AdminDashboardPage() {
             프롬프트
           </button>
         </nav>
+
+        <div className="admin-rail__bottom">
+          <button
+            type="button"
+            className="admin-rail__logout"
+            onClick={handleLogout}
+            disabled={isLoggingOut}
+          >
+            {isLoggingOut ? '로그아웃 중' : '로그아웃'}
+          </button>
+        </div>
       </aside>
 
       <main className="admin-main">
@@ -422,18 +506,36 @@ function AdminDashboardPage() {
                 <h1 id="admin-prompt-title">답변 정책</h1>
               </div>
             </div>
-            <div className="prompt-panel">
+            <form className="prompt-panel" onSubmit={handleSavePrompt}>
               <label>
                 시스템 프롬프트
                 <textarea
-                  defaultValue="인하공업전문대학 홈페이지와 학사 안내 문서에 근거해서 간결하고 정확하게 답변한다."
+                  value={systemPrompt}
+                  onChange={(event) => {
+                    setSystemPrompt(event.target.value)
+                    setPromptMessage('')
+                    setPromptErrorMessage('')
+                  }}
+                  disabled={isPromptLoading || isPromptSaving}
                   rows={5}
                 />
               </label>
-              <button type="button" className="admin-primary-button" disabled>
-                저장 API 연결 예정
+              <div className="prompt-panel__meta">
+                <span>마지막 저장: {formatDateTime(promptConfig?.updatedAt)}</span>
+                <span>수정 관리자: {promptConfig?.updatedByUsername || '-'}</span>
+              </div>
+              {promptMessage && <p className="prompt-panel__message">{promptMessage}</p>}
+              {promptErrorMessage && (
+                <p className="prompt-panel__message prompt-panel__message--error">{promptErrorMessage}</p>
+              )}
+              <button
+                type="submit"
+                className="admin-primary-button"
+                disabled={isPromptLoading || isPromptSaving || !systemPrompt.trim() || !isPromptDirty}
+              >
+                {isPromptSaving ? '저장 중' : '저장'}
               </button>
-            </div>
+            </form>
           </section>
         )}
       </main>

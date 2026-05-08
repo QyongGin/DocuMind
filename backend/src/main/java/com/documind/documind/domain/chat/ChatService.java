@@ -1,5 +1,6 @@
 package com.documind.documind.domain.chat;
 
+import com.documind.documind.domain.admin.PromptConfigService;
 import com.documind.documind.domain.auth.User;
 import com.documind.documind.global.exception.CustomException;
 import com.documind.documind.global.exception.ErrorCode;
@@ -38,6 +39,7 @@ public class ChatService {
     private final ChatMessageRepository chatMessageRepository;
     private final ChatStreamPersistenceService chatStreamPersistenceService;
     private final SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher;
+    private final PromptConfigService promptConfigService;
     private final FastApiClient fastApiClient;
     private final EntityManager entityManager;
     // Spring Boot가 자동 설정한 ObjectMapper 빈을 주입해 Jackson 전역 설정을 공유
@@ -65,7 +67,8 @@ public class ChatService {
 
         // 3. FastAPI RAG 파이프라인 호출
         int topK = request.getTopK() != null ? request.getTopK() : DEFAULT_TOP_K;
-        FastApiQueryResponse fastApiResponse = fastApiClient.query(request.getQuestion(), topK);
+        String systemPrompt = promptConfigService.getCurrent().getSystemPrompt();
+        FastApiQueryResponse fastApiResponse = fastApiClient.query(request.getQuestion(), topK, systemPrompt);
         List<Map<String, Object>> enrichedSources = sourceDocumentMetadataEnricher.enrich(fastApiResponse.getSources());
 
         // 4. sources 리스트를 JSON 문자열로 직렬화해 chat_messages.source_docs에 저장
@@ -253,7 +256,8 @@ public class ChatService {
         command.emitter().onError(context::onEmitterError);
 
         try {
-            Disposable subscription = fastApiClient.streamQuery(command.question(), resolvedTopK)
+            String systemPrompt = promptConfigService.getCurrent().getSystemPrompt();
+            Disposable subscription = fastApiClient.streamQuery(command.question(), resolvedTopK, systemPrompt)
                     .subscribe(context::onToken, context::onUpstreamError);
             context.attachSubscription(subscription);
         } catch (Exception e) {

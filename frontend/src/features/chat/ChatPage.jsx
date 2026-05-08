@@ -6,7 +6,8 @@ import { openChatStream } from '../../services/chatStream.js'
 import { getAuthProfile, hasAccessToken } from '../../services/authStorage.js'
 import { deleteChatSession, getChatSession, listChatSessions } from '../../services/chatHistoryApi.js'
 import { getSessionKey } from '../../utils/sessionKey.js'
-import inhaBadgeUrl from '../../images/inha-badge.svg'
+import inqLogoUrl from '../../images/inq-logo.png'
+import inqSymbolUrl from '../../images/inq-symbol.png'
 
 function NewChatIcon() {
   return (
@@ -84,7 +85,7 @@ function ProfileIcon() {
 function BadgeButton({ className = '', onClick, label }) {
   return (
     <button type="button" className={`badge-button ${className}`} onClick={onClick} aria-label={label}>
-      <img src={inhaBadgeUrl} alt="" />
+      <img src={inqSymbolUrl} alt="" />
     </button>
   )
 }
@@ -568,19 +569,23 @@ function ChatPage() {
       ].filter(Boolean).join(' ')}
     >
       {!isLoggedIn && (
-        <Link className="login-shortcut" to="/admin/login" aria-label="로그인">
-          <LoginIcon />
-        </Link>
+        <>
+          <Link className="guest-brand-link" to="/" aria-label="챗봇 홈">
+            <img src={inqLogoUrl} alt="InQ" />
+          </Link>
+          <Link className="login-shortcut" to="/admin/login" aria-label="로그인">
+            <LoginIcon />
+          </Link>
+        </>
       )}
 
       {isLoggedIn && (
         <aside className="chat-sidebar" aria-label="대화 목록">
           <div className="chat-sidebar__brand">
-            <BadgeButton
-              className="badge-button--sidebar"
-              onClick={resetChat}
-              label="새 질문 시작"
-            />
+            <button type="button" className="sidebar-brand-button" onClick={resetChat} aria-label="챗봇 홈">
+              <img className="sidebar-brand-button__logo" src={inqLogoUrl} alt="InQ" />
+              <img className="sidebar-brand-button__symbol" src={inqSymbolUrl} alt="" />
+            </button>
             <button
               type="button"
               className="sidebar-toggle sidebar-toggle--inside"
@@ -614,10 +619,6 @@ function ChatPage() {
 
       <section className="chat-main">
         <header className="chat-topbar">
-          <div>
-            <span>Inha Technical College</span>
-            <strong>인하공업전문대학 AI 안내</strong>
-          </div>
           {isLoggedIn ? (
             <div className="profile-menu" ref={profileMenuRef}>
               <button
@@ -670,7 +671,7 @@ function ChatPage() {
 
                 <div className="assistant-cluster">
                   <span className="avatar avatar--assistant" aria-hidden="true">
-                    <img src={inhaBadgeUrl} alt="" />
+                    <img src={inqSymbolUrl} alt="" />
                   </span>
                   <article className="answer-card">
                     <div className="answer-card__header">

@@ -1192,13 +1192,13 @@ button:disabled {
 .badge-button {
   display: inline-grid;
   place-items: center;
-  min-width: 40px;
-  width: 40px;
-  min-height: 40px;
-  height: 40px;
+  min-width: 42px;
+  width: 42px;
+  min-height: 42px;
+  height: 42px;
   padding: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: 12px;
   background: transparent;
   box-shadow: none;
 }
@@ -1212,18 +1212,43 @@ button:disabled {
   display: block;
   width: 34px;
   height: 34px;
-  border-radius: 50%;
   object-fit: contain;
+  mix-blend-mode: multiply;
 }
 
 .badge-button--rail img {
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
 }
 
 .badge-button--sidebar img {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
+}
+
+.guest-brand-link {
+  position: fixed;
+  top: 12px;
+  left: 8px;
+  z-index: 45;
+  display: grid;
+  place-items: center;
+  width: 116px;
+  height: 42px;
+  padding: 0;
+  border-radius: 14px;
+  text-decoration: none;
+}
+
+.guest-brand-link:hover {
+  background: #f7f7f8;
+}
+
+.guest-brand-link img {
+  width: 108px;
+  height: auto;
+  object-fit: contain;
+  mix-blend-mode: multiply;
 }
 
 .login-shortcut {
@@ -1553,7 +1578,39 @@ button:disabled {
   align-items: center;
   min-height: 40px;
   gap: 10px;
-  padding: 0 6px;
+  padding: 0;
+}
+
+.sidebar-brand-button {
+  display: grid;
+  place-items: center;
+  width: 118px;
+  min-width: 0;
+  min-height: 42px;
+  margin-left: -10px;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+}
+
+.sidebar-brand-button:hover:not(:disabled) {
+  background: var(--chat-subtle);
+}
+
+.sidebar-brand-button__logo {
+  width: 108px;
+  height: auto;
+  object-fit: contain;
+  mix-blend-mode: multiply;
+}
+
+.sidebar-brand-button__symbol {
+  display: none;
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  mix-blend-mode: multiply;
 }
 
 .chat-sidebar__identity {
@@ -1797,6 +1854,21 @@ button:disabled {
   padding: 0;
 }
 
+.chat-shell--sidebar-collapsed .sidebar-brand-button {
+  width: 42px;
+  height: 42px;
+  min-height: 42px;
+  margin-left: 0;
+}
+
+.chat-shell--sidebar-collapsed .sidebar-brand-button__logo {
+  display: none;
+}
+
+.chat-shell--sidebar-collapsed .sidebar-brand-button__symbol {
+  display: block;
+}
+
 .chat-shell--sidebar-collapsed .chat-sidebar__identity,
 .chat-shell--sidebar-collapsed .new-chat-button,
 .chat-shell--sidebar-collapsed .sidebar-section {
@@ -1825,6 +1897,7 @@ button:disabled {
 
 .chat-topbar {
   gap: 8px;
+  justify-content: flex-end;
   padding: 0 24px;
   border-bottom: 0;
   background: rgba(255, 255, 255, 0.9);
@@ -2066,10 +2139,10 @@ button:disabled {
 }
 
 .avatar--assistant img {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
+  width: 32px;
+  height: 32px;
   object-fit: contain;
+  mix-blend-mode: multiply;
 }
 
 .answer-card,
@@ -2416,41 +2489,30 @@ button:disabled {
 .portal-brand {
   display: flex;
   align-items: center;
-  gap: 12px;
   width: min(1180px, 100%);
   margin: 0 auto;
 }
 
-.portal-brand img {
-  width: 52px;
-  height: 52px;
-  object-fit: contain;
-}
-
-.portal-brand div {
+.portal-home-link {
   display: grid;
-  gap: 2px;
+  place-items: center;
+  width: 146px;
+  min-height: 62px;
+  flex: 0 0 auto;
+  padding: 0;
+  border-radius: 16px;
+  text-decoration: none;
 }
 
-.portal-brand strong {
-  color: var(--ink);
-  font-size: 24px;
-  font-weight: 700;
-  line-height: 1.05;
+.portal-home-link:hover {
+  background: #ffffff;
 }
 
-.portal-brand span {
-  color: var(--chat-muted);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.portal-brand b {
-  margin-left: 8px;
-  color: var(--college-blue);
-  font-size: 40px;
-  font-weight: 700;
-  line-height: 1;
+.portal-home-link img {
+  width: 136px;
+  height: auto;
+  object-fit: contain;
+  mix-blend-mode: multiply;
 }
 
 .portal-card {
@@ -2523,6 +2585,11 @@ button:disabled {
   border-radius: 0;
   background: #ffffff;
   font-size: 17px;
+}
+
+.portal-fields input:focus {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px var(--college-blue);
 }
 
 .portal-fields input + input {
@@ -2655,7 +2722,7 @@ button:disabled {
   top: 0;
   align-self: start;
   display: grid;
-  align-content: start;
+  grid-template-rows: auto 1fr auto;
   gap: 18px;
   min-height: 100svh;
   padding: 22px 14px;
@@ -2674,11 +2741,12 @@ button:disabled {
 .admin-brand-link {
   display: grid;
   place-items: center;
-  width: 46px;
-  height: 46px;
+  width: 118px;
+  height: 42px;
   flex: 0 0 auto;
+  margin-left: -10px;
   padding: 0;
-  border-radius: 9999px;
+  border-radius: 14px;
   color: inherit;
   text-decoration: none;
 }
@@ -2687,11 +2755,19 @@ button:disabled {
   background: #f7f7f8;
 }
 
-.admin-brand-link img {
+.admin-brand-link__logo {
+  width: 108px;
+  height: auto;
+  object-fit: contain;
+  mix-blend-mode: multiply;
+}
+
+.admin-brand-link__symbol {
+  display: none;
   width: 42px;
   height: 42px;
-  flex: 0 0 auto;
   object-fit: contain;
+  mix-blend-mode: multiply;
 }
 
 .admin-rail__toggle {
@@ -2746,6 +2822,7 @@ button:disabled {
 
 .admin-rail__nav {
   display: grid;
+  align-content: start;
   gap: 2px;
   padding-top: 8px;
   border-top: 1px solid var(--chat-border);
@@ -2774,6 +2851,30 @@ button:disabled {
   background: #f7f7f8;
 }
 
+.admin-rail__bottom {
+  display: grid;
+  padding-top: 12px;
+  border-top: 1px solid var(--chat-border);
+}
+
+.admin-rail__logout {
+  min-width: 0;
+  min-height: 38px;
+  padding: 10px;
+  border: 1px solid #f1d3d0;
+  border-radius: 9999px;
+  color: #b42318;
+  background: #fffafa;
+  font-size: 14px;
+  font-weight: 560;
+}
+
+.admin-rail__logout:hover:not(:disabled) {
+  color: #9f1f17;
+  border-color: #efc4bf;
+  background: #ffffff;
+}
+
 .admin-surface--rail-collapsed .admin-rail {
   padding: 18px 10px;
 }
@@ -2784,8 +2885,19 @@ button:disabled {
 }
 
 .admin-surface--rail-collapsed .admin-brand-link {
-  width: 44px;
-  height: 44px;
+  width: 42px;
+  height: 42px;
+  margin-left: 0;
+}
+
+.admin-surface--rail-collapsed .admin-brand-link__logo {
+  display: none;
+}
+
+.admin-surface--rail-collapsed .admin-brand-link__symbol {
+  display: block;
+  width: 34px;
+  height: 34px;
 }
 
 .admin-surface--rail-collapsed .admin-rail__nav {
@@ -2795,6 +2907,10 @@ button:disabled {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+.admin-surface--rail-collapsed .admin-rail__bottom {
+  display: none;
 }
 
 .admin-main {
@@ -3140,6 +3256,32 @@ button:disabled {
   width: min(780px, 100%);
 }
 
+.prompt-panel__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--chat-muted);
+  font-size: 13px;
+}
+
+.prompt-panel__meta span {
+  padding: 7px 10px;
+  border: 1px solid var(--chat-border);
+  border-radius: 9999px;
+  background: #fafafa;
+}
+
+.prompt-panel__message {
+  margin: 0;
+  color: var(--college-blue);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.prompt-panel__message--error {
+  color: var(--danger);
+}
+
 .admin-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -3278,10 +3420,6 @@ button:disabled {
     padding: 22px 16px 28px;
   }
 
-  .portal-brand b {
-    font-size: 30px;
-  }
-
   .portal-card {
     grid-template-columns: 1fr;
     gap: 24px;
@@ -3353,23 +3491,16 @@ button:disabled {
 
 @media (max-width: 560px) {
   .portal-brand {
-    display: grid;
-    grid-template-columns: 42px minmax(0, 1fr) auto;
     align-items: center;
   }
 
-  .portal-brand img {
-    width: 42px;
-    height: 42px;
+  .portal-home-link {
+    min-height: 52px;
+    width: 118px;
   }
 
-  .portal-brand strong {
-    font-size: 16px;
-  }
-
-  .portal-brand b {
-    margin-left: 0;
-    font-size: 18px;
+  .portal-home-link img {
+    width: 110px;
   }
 
   .portal-tab {

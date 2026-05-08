@@ -76,11 +76,30 @@ public class FastApiClient {
         }
     }
 
-    // 질문을 FastAPI에 전송해 RAG 파이프라인(임베딩 → 검색 → LLM 추론) 실행을 요청
+    /**
+     * 질문을 FastAPI에 전송해 RAG 파이프라인 실행을 요청한다.
+     *
+     * @param question 사용자 질문
+     * @param topK     검색할 유사 청크 수
+     * @return FastAPI 질의응답 결과
+     */
     public FastApiQueryResponse query(String question, int topK) {
+        return query(question, topK, null);
+    }
+
+    /**
+     * 질문과 관리자 시스템 프롬프트를 FastAPI에 전송해 RAG 파이프라인 실행을 요청한다.
+     *
+     * @param question     사용자 질문
+     * @param topK         검색할 유사 청크 수
+     * @param systemPrompt 관리자 프롬프트 설정. null이면 FastAPI 기본 프롬프트를 사용한다.
+     * @return FastAPI 질의응답 결과
+     */
+    public FastApiQueryResponse query(String question, int topK, String systemPrompt) {
         FastApiQueryRequest queryRequest = FastApiQueryRequest.builder()
                 .question(question)
                 .topK(topK)
+                .systemPrompt(systemPrompt)
                 .build();
 
         try {
@@ -170,15 +189,34 @@ public class FastApiClient {
         }
     }
 
-    // FastAPI /query/stream SSE 엔드포인트를 구독해 data 필드 JSON 문자열 Flux를 반환
-    // ServerSentEvent<String> 디코더가 SSE 포맷을 자동 파싱하므로 "data: " 접두사 제거 불필요
+    /**
+     * FastAPI /query/stream SSE 엔드포인트를 구독한다.
+     * ServerSentEvent 디코더가 SSE 포맷을 자동 파싱하므로 data 접두사 제거는 필요 없다.
+     *
+     * @param question 사용자 질문
+     * @param topK     검색할 유사 청크 수
+     * @return SSE data 필드 JSON 문자열 Flux
+     */
     public Flux<String> streamQuery(String question, int topK) {
+        return streamQuery(question, topK, null);
+    }
+
+    /**
+     * FastAPI /query/stream SSE 엔드포인트를 관리자 시스템 프롬프트와 함께 구독한다.
+     *
+     * @param question     사용자 질문
+     * @param topK         검색할 유사 청크 수
+     * @param systemPrompt 관리자 프롬프트 설정. null이면 FastAPI 기본 프롬프트를 사용한다.
+     * @return SSE data 필드 JSON 문자열 Flux
+     */
+    public Flux<String> streamQuery(String question, int topK, String systemPrompt) {
         return streamingWebClient.post()
                 .uri("/query/stream")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(FastApiQueryRequest.builder()
                         .question(question)
                         .topK(topK)
+                        .systemPrompt(systemPrompt)
                         .build())
                 .retrieve()
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
