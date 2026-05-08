@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import StatusBadge from '../../components/common/StatusBadge.jsx'
 import { env } from '../../config/env.js'
 import { logout } from '../../services/authApi.js'
 import { openChatStream } from '../../services/chatStream.js'
@@ -654,14 +653,6 @@ function ChatPage() {
               <LoginIcon />
             </Link>
           )}
-          <StatusBadge active={isStreaming}>
-            {isStreaming ? (
-              <span className="status-badge__loading">
-                답변 생성 중
-                <LoadingDots />
-              </span>
-            ) : '대기 중'}
-          </StatusBadge>
         </header>
 
         <div ref={transcriptRef} className="chat-canvas" aria-live="polite">

@@ -186,6 +186,39 @@ class DocumentManagementTest {
     }
 
     @Test
+    @DisplayName("문서 업로드 - 선택한 카테고리가 문서에 저장되고 목록 응답에 반환된다")
+    void upload_categorySavedAndReturnedInList() {
+        when(fastApiClient.uploadDocument(any(), anyLong()))
+                .thenReturn(new FastApiUploadResponse("success", "report.pdf", 7));
+        Category category = categoryRepository.save(Category.create("학사"));
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "report.pdf", "application/pdf", new byte[100]
+        );
+
+        DocumentUploadResponse response = documentService.upload(file, category.getId(), ADMIN_USERNAME);
+
+        DocumentListResponse uploadedResponse = documentService.list().stream()
+                .filter(document -> document.getId().equals(response.getDocumentId()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(category.getId(), uploadedResponse.getCategoryId());
+        assertEquals("학사", uploadedResponse.getCategoryName());
+    }
+
+    @Test
+    @DisplayName("문서 업로드 - 존재하지 않는 카테고리는 CATEGORY_NOT_FOUND 예외를 반환한다")
+    void upload_missingCategoryThrowsException() {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "report.pdf", "application/pdf", new byte[100]
+        );
+
+        CustomException ex = assertThrows(CustomException.class,
+                () -> documentService.upload(file, 99999L, ADMIN_USERNAME));
+        assertEquals(ErrorCode.CATEGORY_NOT_FOUND, ex.getErrorCode());
+        verify(fastApiClient, never()).uploadDocument(any(), anyLong());
+    }
+
+    @Test
     @DisplayName("문서 업로드 - 허용하지 않는 파일 형식은 INVALID_FILE_TYPE 예외를 반환한다")
     void upload_invalidMimeTypeThrowsException() {
         MockMultipartFile file = new MockMultipartFile(
