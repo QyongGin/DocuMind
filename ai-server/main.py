@@ -329,9 +329,15 @@ async def upload_document(
 class QueryRequest(BaseModel):
     question: str
     top_k: int = 5  # 검색할 유사 청크 수. 기본값 5
+    system_prompt: str | None = None  # Spring Boot 관리자 프롬프트 설정. 미전달 시 기본값 사용
 
 
-def _prepare_query(question: str, top_k: int) -> tuple[str | None, list]:
+DEFAULT_SYSTEM_PROMPT = (
+    "주어진 문서를 참고하여 질문에 답변하세요."
+)
+
+
+def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) -> tuple[str | None, list]:
     """
     질문 임베딩 → ChromaDB 검색 → 프롬프트 + 출처 조합.
     문서가 없으면 (None, []) 반환. 호출자가 빈 응답 처리를 담당한다.
@@ -351,8 +357,11 @@ def _prepare_query(question: str, top_k: int) -> tuple[str | None, list]:
         return None, []
 
     context = "\n\n".join(docs)
-    # 프롬프트 조합: 문서 외 내용 답변 방지를 위해 명시적 제약 포함
-    prompt = f"""주어진 문서를 참고하여 질문에 답변하세요. 문서에 없는 내용은 "관련 내용을 문서에서 찾을 수 없습니다."라고 답하세요.
+    prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
+
+    # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다
+    prompt = f"""{prompt_policy}
+문서에 없는 내용은 "관련 내용을 문서에서 찾을 수 없습니다."라고 답하세요.
 
 [문서]
 {context}
@@ -459,7 +468,12 @@ async def query_document(request: QueryRequest):
     # _prepare_query는 embed_query·Chroma 조회가 모두 동기 블로킹이다.
     # async 핸들러에서 직접 호출하면 이벤트 루프가 묶여 다른 요청이 대기하므로
     # asyncio.to_thread()로 별도 스레드에서 실행한다.
-    prompt, sources = await asyncio.to_thread(_prepare_query, request.question, request.top_k)
+    prompt, sources = await asyncio.to_thread(
+        _prepare_query,
+        request.question,
+        request.top_k,
+        request.system_prompt
+    )
 
     if prompt is None:
         return {"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
@@ -479,7 +493,12 @@ async def query_stream(request: QueryRequest):
     3. 완료 시 sources 포함 done 이벤트 전송
     클라이언트 연결 종료 시 asyncio.CancelledError로 자동 중단된다.
     """
-    prompt, sources = await asyncio.to_thread(_prepare_query, request.question, request.top_k)
+    prompt, sources = await asyncio.to_thread(
+        _prepare_query,
+        request.question,
+        request.top_k,
+        request.system_prompt
+    )
 
     if prompt is None:
         async def empty_stream():

@@ -2655,7 +2655,7 @@ button:disabled {
   top: 0;
   align-self: start;
   display: grid;
-  align-content: start;
+  grid-template-rows: auto 1fr auto;
   gap: 18px;
   min-height: 100svh;
   padding: 22px 14px;
@@ -2746,6 +2746,7 @@ button:disabled {
 
 .admin-rail__nav {
   display: grid;
+  align-content: start;
   gap: 2px;
   padding-top: 8px;
   border-top: 1px solid var(--chat-border);
@@ -2774,6 +2775,30 @@ button:disabled {
   background: #f7f7f8;
 }
 
+.admin-rail__bottom {
+  display: grid;
+  padding-top: 12px;
+  border-top: 1px solid var(--chat-border);
+}
+
+.admin-rail__logout {
+  min-width: 0;
+  min-height: 38px;
+  padding: 10px;
+  border: 1px solid #f1d3d0;
+  border-radius: 9999px;
+  color: #b42318;
+  background: #fffafa;
+  font-size: 14px;
+  font-weight: 560;
+}
+
+.admin-rail__logout:hover:not(:disabled) {
+  color: #9f1f17;
+  border-color: #efc4bf;
+  background: #ffffff;
+}
+
 .admin-surface--rail-collapsed .admin-rail {
   padding: 18px 10px;
 }
@@ -2795,6 +2820,10 @@ button:disabled {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+.admin-surface--rail-collapsed .admin-rail__bottom {
+  display: none;
 }
 
 .admin-main {
@@ -3138,6 +3167,32 @@ button:disabled {
 
 .prompt-panel {
   width: min(780px, 100%);
+}
+
+.prompt-panel__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--chat-muted);
+  font-size: 13px;
+}
+
+.prompt-panel__meta span {
+  padding: 7px 10px;
+  border: 1px solid var(--chat-border);
+  border-radius: 9999px;
+  background: #fafafa;
+}
+
+.prompt-panel__message {
+  margin: 0;
+  color: var(--college-blue);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.prompt-panel__message--error {
+  color: var(--danger);
 }
 
 .admin-modal-backdrop {

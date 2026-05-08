@@ -5,7 +5,9 @@ import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
 
-// DB의 prompt_config 테이블과 매핑되는 Entity 클래스임을 선언
+/**
+ * LLM 답변 생성에 사용할 관리자 설정 프롬프트를 저장하는 Entity이다.
+ */
 @Entity
 // 매핑할 테이블 이름 지정
 @Table(name = "prompt_config")
@@ -44,6 +46,32 @@ public class PromptConfig {
     // DB에 UPDATE 되기 직전에 자동 실행되는 메서드
     @PreUpdate
     protected void onUpdate() {
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * 새 프롬프트 설정을 생성한다.
+     *
+     * @param systemPrompt LLM에 전달할 시스템 프롬프트
+     * @param updatedBy    설정을 저장한 관리자
+     * @return 저장 전 프롬프트 설정 Entity
+     */
+    public static PromptConfig create(String systemPrompt, User updatedBy) {
+        PromptConfig config = new PromptConfig();
+        config.systemPrompt = systemPrompt;
+        config.updatedBy = updatedBy;
+        return config;
+    }
+
+    /**
+     * 기존 프롬프트 설정 내용을 변경하고 마지막 수정 관리자를 갱신한다.
+     *
+     * @param systemPrompt 새 시스템 프롬프트
+     * @param updatedBy    설정을 저장한 관리자
+     */
+    public void update(String systemPrompt, User updatedBy) {
+        this.systemPrompt = systemPrompt;
+        this.updatedBy = updatedBy;
         this.updatedAt = LocalDateTime.now();
     }
 }
