@@ -117,9 +117,12 @@ function getSourcePageLabel(source) {
 }
 
 function getSourceDetailMeta(source) {
+  const pageLabel = getSourcePageLabel(source)
+
   return [
-    getSourcePageLabel(source),
+    pageLabel,
     getChunkPositionLabel(source),
+    pageLabel ? '' : getSourcePath(source),
   ].filter(Boolean)
 }
 
