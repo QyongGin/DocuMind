@@ -862,14 +862,27 @@ button:disabled {
 }
 
 .icon-action {
+  display: inline-grid;
+  place-items: center;
   min-width: 0;
   min-height: 40px;
-  padding: 10px 14px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
   border-color: transparent;
   border-radius: var(--radius-pill);
   color: var(--ink-muted);
   background: transparent;
-  font-size: 14px;
+}
+
+.icon-action svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .icon-action:hover:not(:disabled),
@@ -2338,8 +2351,13 @@ button:disabled {
 
 .icon-action {
   min-height: 32px;
-  padding: 7px 10px;
-  font-size: 13px;
+  width: 32px;
+  height: 32px;
+}
+
+.icon-action svg {
+  width: 18px;
+  height: 18px;
 }
 
 @media (max-width: 833px) {

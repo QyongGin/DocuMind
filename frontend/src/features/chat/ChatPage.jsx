@@ -46,6 +46,26 @@ function DeleteIcon() {
   )
 }
 
+function ThumbUpIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+      <path d="M7 10.5v9" />
+      <path d="M3.8 10.5h3.2v9H3.8a1.3 1.3 0 0 1-1.3-1.3v-6.4a1.3 1.3 0 0 1 1.3-1.3Z" />
+      <path d="M7 10.5 11.7 4a1.7 1.7 0 0 1 3 1.4l-.9 3.2h4.6a2 2 0 0 1 1.9 2.5l-1.6 6a3.3 3.3 0 0 1-3.2 2.4H7" />
+    </svg>
+  )
+}
+
+function ThumbDownIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+      <path d="M7 13.5v-9" />
+      <path d="M3.8 13.5h3.2v-9H3.8a1.3 1.3 0 0 0-1.3 1.3v6.4a1.3 1.3 0 0 0 1.3 1.3Z" />
+      <path d="M7 13.5 11.7 20a1.7 1.7 0 0 0 3-1.4l-.9-3.2h4.6a2 2 0 0 0 1.9-2.5l-1.6-6a3.3 3.3 0 0 0-3.2-2.4H7" />
+    </svg>
+  )
+}
+
 function SettingsIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
@@ -822,7 +842,7 @@ function ChatPage() {
                     aria-label="좋아요"
                     title="좋아요"
                   >
-                    좋아요
+                    <ThumbUpIcon />
                   </button>
                   <button
                     type="button"
@@ -837,7 +857,7 @@ function ChatPage() {
                     aria-label="싫어요"
                     title="싫어요"
                   >
-                    싫어요
+                    <ThumbDownIcon />
                   </button>
                   {(isFeedbackSaving || feedbackError) && (
                     <span className={feedbackError ? 'feedback-status feedback-status--error' : 'feedback-status'}>
