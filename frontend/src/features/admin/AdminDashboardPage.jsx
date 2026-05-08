@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { logout } from '../../services/authApi.js'
 import { createCategory, listCategories } from '../../services/categoryApi.js'
 import { deleteDocument, listDocumentChunks, listDocuments, uploadDocument } from '../../services/documentApi.js'
+import { getFeedbackStats } from '../../services/feedbackStatsApi.js'
 import { getPromptConfig, updatePromptConfig } from '../../services/promptApi.js'
 import inqLogoUrl from '../../images/inq-logo.png'
 import inqSymbolUrl from '../../images/inq-symbol.png'
@@ -49,11 +50,23 @@ function formatDuration(durationMs) {
   return `${minutes}분 ${seconds}초`
 }
 
+function formatPercent(rate) {
+  const percent = Number(rate) * 100
+  if (!Number.isFinite(percent)) return '0%'
+  return `${Math.round(percent)}%`
+}
+
 function AdminDashboardPage() {
   const navigate = useNavigate()
   const fileInputRef = useRef(null)
   const [documents, setDocuments] = useState([])
   const [categories, setCategories] = useState([])
+  const [feedbackStats, setFeedbackStats] = useState({
+    totalCount: 0,
+    positiveCount: 0,
+    negativeCount: 0,
+    positiveRate: 0,
+  })
   const [selectedCategory, setSelectedCategory] = useState('전체')
   const [selectedFile, setSelectedFile] = useState(null)
   const [selectedUploadCategoryId, setSelectedUploadCategoryId] = useState('')
@@ -93,12 +106,19 @@ function AdminDashboardPage() {
     setErrorMessage('')
 
     try {
-      const [nextDocuments, nextCategories] = await Promise.all([
+      const [nextDocuments, nextCategories, nextFeedbackStats] = await Promise.all([
         listDocuments(),
         listCategories(),
+        getFeedbackStats(),
       ])
       setDocuments(Array.isArray(nextDocuments) ? nextDocuments : [])
       setCategories(Array.isArray(nextCategories) ? nextCategories : [])
+      setFeedbackStats(nextFeedbackStats ?? {
+        totalCount: 0,
+        positiveCount: 0,
+        negativeCount: 0,
+        positiveRate: 0,
+      })
     } catch (error) {
       setErrorMessage(error.message)
     } finally {
@@ -378,6 +398,40 @@ function AdminDashboardPage() {
                 <span>카테고리</span>
                 <strong>{categories.length}</strong>
               </article>
+            </section>
+
+            <section className="feedback-summary" aria-label="답변 피드백 요약">
+              <header>
+                <div>
+                  <span>답변 피드백</span>
+                  <strong>{formatPercent(feedbackStats.positiveRate)} 긍정</strong>
+                </div>
+                <p>총 {feedbackStats.totalCount}건</p>
+              </header>
+              <div
+                className="feedback-summary__bar"
+                role="img"
+                aria-label={`좋아요 ${feedbackStats.positiveCount}건, 싫어요 ${feedbackStats.negativeCount}건`}
+              >
+                <span
+                  className="feedback-summary__bar-positive"
+                  style={{ width: feedbackStats.totalCount > 0 ? formatPercent(feedbackStats.positiveRate) : '0%' }}
+                />
+                <span
+                  className="feedback-summary__bar-negative"
+                  style={{ width: feedbackStats.totalCount > 0 ? formatPercent(1 - feedbackStats.positiveRate) : '0%' }}
+                />
+              </div>
+              <div className="feedback-summary__legend">
+                <span>
+                  <i className="feedback-summary__dot feedback-summary__dot--positive" aria-hidden="true" />
+                  좋아요 {feedbackStats.positiveCount}
+                </span>
+                <span>
+                  <i className="feedback-summary__dot feedback-summary__dot--negative" aria-hidden="true" />
+                  싫어요 {feedbackStats.negativeCount}
+                </span>
+              </div>
             </section>
           </section>
         )}

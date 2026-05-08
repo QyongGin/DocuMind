@@ -79,6 +79,7 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.GET, "/api/chat/sessions").permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/chat/sessions/**").permitAll()
                     .requestMatchers(HttpMethod.DELETE, "/api/chat/sessions/**").permitAll()
+                    .requestMatchers(HttpMethod.PUT, "/api/chat/messages/*/feedback").permitAll()
                     .requestMatchers("/error", "/actuator/health").permitAll()
 
                     // 명시되지 않은 모든 요청 차단 — 새 API 추가 시 반드시 위에 명시해야 한다

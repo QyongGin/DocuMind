@@ -51,4 +51,27 @@ public class ChatFeedback {
     protected void onUpdate() {
         this.updatedAt = LocalDateTime.now();
     }
+
+    /**
+     * 채팅 메시지에 대한 새 피드백을 생성한다.
+     *
+     * @param chatMessage 피드백 대상 메시지
+     * @param score 피드백 점수. 1은 좋아요, -1은 싫어요
+     * @return 저장 가능한 피드백 엔티티
+     */
+    public static ChatFeedback create(ChatMessage chatMessage, byte score) {
+        ChatFeedback feedback = new ChatFeedback();
+        feedback.chatMessage = chatMessage;
+        feedback.score = score;
+        return feedback;
+    }
+
+    /**
+     * 기존 피드백 점수를 수정한다.
+     *
+     * @param score 변경할 피드백 점수. 1은 좋아요, -1은 싫어요
+     */
+    public void updateScore(byte score) {
+        this.score = score;
+    }
 }
