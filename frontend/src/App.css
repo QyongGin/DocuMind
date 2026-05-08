@@ -2421,7 +2421,21 @@ button:disabled {
   margin: 0 auto;
 }
 
-.portal-brand img {
+.portal-home-link {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  text-decoration: none;
+}
+
+.portal-home-link:hover {
+  background: #ffffff;
+}
+
+.portal-home-link img {
   width: 52px;
   height: 52px;
   object-fit: contain;
@@ -2523,6 +2537,11 @@ button:disabled {
   border-radius: 0;
   background: #ffffff;
   font-size: 17px;
+}
+
+.portal-fields input:focus {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px var(--college-blue);
 }
 
 .portal-fields input + input {
@@ -3409,8 +3428,13 @@ button:disabled {
 @media (max-width: 560px) {
   .portal-brand {
     display: grid;
-    grid-template-columns: 42px minmax(0, 1fr) auto;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
     align-items: center;
+  }
+
+  .portal-home-link {
+    width: 48px;
+    height: 48px;
   }
 
   .portal-brand img {

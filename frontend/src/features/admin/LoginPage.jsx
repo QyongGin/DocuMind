@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { login } from '../../services/authApi.js'
 import { hasAccessToken } from '../../services/authStorage.js'
 import inhaBadgeUrl from '../../images/inha-badge.svg'
@@ -53,7 +53,9 @@ function LoginPage() {
   return (
     <section className="portal-login">
       <header className="portal-brand">
-        <img src={inhaBadgeUrl} alt="" />
+        <Link className="portal-home-link" to="/" aria-label="챗봇 홈으로 이동">
+          <img src={inhaBadgeUrl} alt="" />
+        </Link>
         <div>
           <strong>인하공업전문대학</strong>
           <span>INHA TECHNICAL COLLEGE</span>
