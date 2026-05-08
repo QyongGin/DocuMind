@@ -115,6 +115,85 @@ def _normalize_text(text: str) -> str:
     return text
 
 
+def _compact_for_page_match(text: str) -> str:
+    """
+    페이지 추정을 위해 공백을 제거한 비교용 문자열을 만든다.
+    청킹 과정에서 개행과 공백이 정규화되어도 원본 페이지와 매칭할 수 있게 한다.
+    """
+    return re.sub(r'\s+', '', text)
+
+
+def _build_page_lookup(raw_docs: list[Document]) -> list[dict]:
+    """
+    원본 로더가 제공한 페이지 metadata를 검색 가능한 형태로 보존한다.
+    PDF는 OpenDataLoader가 page metadata를 제공하고, DOCX/PPTX/XLSX는 페이지 개념이 없으므로 제외된다.
+    """
+    page_lookup: list[dict] = []
+    for doc in raw_docs:
+        page = doc.metadata.get("page")
+        if page is None:
+            continue
+
+        try:
+            page_number = int(page)
+        except (TypeError, ValueError):
+            continue
+
+        normalized_content = _compact_for_page_match(_normalize_text(doc.page_content))
+        if normalized_content:
+            page_lookup.append({
+                "page": page_number,
+                "content": normalized_content,
+            })
+
+    return page_lookup
+
+
+def _sample_page_match_snippets(text: str) -> list[str]:
+    """
+    청크의 앞/중간/뒤 일부를 뽑아 원본 페이지와 비교한다.
+    수동 overlap 때문에 앞부분이 이전 페이지에 걸칠 수 있어 여러 구간을 함께 사용한다.
+    """
+    compacted = _compact_for_page_match(text)
+    if not compacted:
+        return []
+
+    snippet_size = min(120, len(compacted))
+    starts = {0, max(0, (len(compacted) - snippet_size) // 2), max(0, len(compacted) - snippet_size)}
+
+    snippets: list[str] = []
+    for start in sorted(starts):
+        snippet = compacted[start:start + snippet_size]
+        if len(snippet) >= 8:
+            snippets.append(snippet)
+
+    return snippets
+
+
+def _resolve_page_range(content: str, page_lookup: list[dict]) -> tuple[int | None, int | None]:
+    """
+    청크 내용이 어느 원본 페이지에 포함되는지 추정한다.
+    여러 페이지에 걸친 overlap 청크는 page_start/page_end 범위로 반환한다.
+    """
+    if not page_lookup:
+        return None, None
+
+    snippets = _sample_page_match_snippets(content)
+    if not snippets:
+        return None, None
+
+    matched_pages = set()
+    for page in page_lookup:
+        page_content = page["content"]
+        if any(snippet in page_content for snippet in snippets):
+            matched_pages.add(page["page"])
+
+    if not matched_pages:
+        return None, None
+
+    return min(matched_pages), max(matched_pages)
+
+
 def _two_pass_split(full_text: str) -> list[Document]:
     """
     Two-Pass 청킹: MarkdownHeaderTextSplitter → RecursiveCharacterTextSplitter.
@@ -162,6 +241,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
     async def _execute() -> int:
         # 파서 분기: 확장자에 따라 PDF 또는 Docling 로더 사용
         raw_docs = _load_documents(tmp_path, filename)
+        page_lookup = _build_page_lookup(raw_docs)
 
         # 전체 텍스트 병합 후 정규화
         full_text = "\n".join([doc.page_content for doc in raw_docs])
@@ -180,7 +260,13 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             metadata: dict = {
                 "document_id": str(document_id),
                 "source": filename,
+                "chunk_index": i,
             }
+            page_start, page_end = _resolve_page_range(doc.page_content, page_lookup)
+            if page_start is not None:
+                metadata["page"] = page_start
+                metadata["page_start"] = page_start
+                metadata["page_end"] = page_end if page_end is not None else page_start
             for k, v in doc.metadata.items():
                 if isinstance(v, (str, int, float, bool)):
                     metadata[k] = v
@@ -259,6 +345,7 @@ def _prepare_query(question: str, top_k: int) -> tuple[str | None, list]:
 
     docs = results["documents"][0] if results["documents"] else []
     metadatas = results["metadatas"][0] if results["metadatas"] else []
+    ids = results["ids"][0] if results["ids"] else []
 
     if not docs:
         return None, []
@@ -276,12 +363,16 @@ def _prepare_query(question: str, top_k: int) -> tuple[str | None, list]:
 [답변]
 """
 
-    # 출처 목록 구성: document_id, source(파일명), 청크 미리보기, 헤더 메타데이터 포함
+    # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 헤더 메타데이터 포함
     sources = []
-    for doc, meta in zip(docs, metadatas):
+    for doc, meta, chunk_id in zip(docs, metadatas, ids):
         source: dict = {
             "document_id": meta.get("document_id", ""),
             "source": meta.get("source", ""),
+            "page": meta.get("page"),
+            "page_start": meta.get("page_start"),
+            "page_end": meta.get("page_end"),
+            "chunk_index": meta.get("chunk_index", _parse_chunk_index(chunk_id)),
             # 청크 전체를 반환하면 응답이 너무 커지므로 200자 미리보기만 포함
             "content": doc[:200]
         }
@@ -292,6 +383,15 @@ def _prepare_query(question: str, top_k: int) -> tuple[str | None, list]:
         sources.append(source)
 
     return prompt, sources
+
+
+def _parse_chunk_index(chunk_id: str) -> int | None:
+    """
+    ChromaDB id({document_id}_{chunk_index})에서 청크 순번을 복원한다.
+    기존 업로드 문서처럼 chunk_index metadata가 없는 경우 출처 UI에 최소 위치 정보를 제공한다.
+    """
+    suffix = str(chunk_id).rsplit("_", 1)[-1]
+    return int(suffix) if suffix.isdigit() else None
 
 
 @app.delete("/documents/{document_id}")

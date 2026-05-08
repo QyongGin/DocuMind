@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import StatusBadge from '../../components/common/StatusBadge.jsx'
 import { env } from '../../config/env.js'
 import { logout } from '../../services/authApi.js'
 import { openChatStream } from '../../services/chatStream.js'
@@ -45,6 +44,15 @@ function DeleteIcon() {
   )
 }
 
+function SettingsIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+      <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2.05 2.05 0 0 1-2.9 2.9l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2.05 2.05 0 0 1-4.1 0v-.08A1.7 1.7 0 0 0 8.9 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2.05 2.05 0 0 1-2.9-2.9l.06-.06A1.7 1.7 0 0 0 4.46 15 1.7 1.7 0 0 0 2.9 13.97H2.8a2.05 2.05 0 0 1 0-4.1h.08A1.7 1.7 0 0 0 4.44 8.9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2.05 2.05 0 0 1 2.9-2.9l.06.06A1.7 1.7 0 0 0 8.88 4.46 1.7 1.7 0 0 0 9.91 2.9V2.8a2.05 2.05 0 0 1 4.1 0v.08a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06a2.05 2.05 0 0 1 2.9 2.9l-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.56 1.03h.08a2.05 2.05 0 0 1 0 4.1h-.08A1.7 1.7 0 0 0 19.4 15Z" />
+    </svg>
+  )
+}
+
 function LoadingDots() {
   return (
     <span className="loading-dots" aria-hidden="true">
@@ -82,7 +90,7 @@ function BadgeButton({ className = '', onClick, label }) {
 }
 
 function getSourceTitle(source, index) {
-  return source.source || source.document_name || source.filename || `참조 문서 ${index + 1}`
+  return source.document_original_name || source.source || source.document_name || source.filename || `참조 문서 ${index + 1}`
 }
 
 function getSourcePath(source) {
@@ -92,8 +100,92 @@ function getSourcePath(source) {
     .join(' · ')
 }
 
+function toSourcePageNumber(value) {
+  if (value === null || value === undefined || value === '') return null
+
+  const pageNumber = Number(value)
+  return Number.isFinite(pageNumber) ? pageNumber : null
+}
+
+function getSourcePageLabel(source) {
+  const startPage = toSourcePageNumber(source.page_start ?? source.pageStart ?? source.page)
+  const endPage = toSourcePageNumber(source.page_end ?? source.pageEnd)
+
+  if (startPage === null) return ''
+  if (endPage !== null && endPage !== startPage) return `PDF ${startPage}-${endPage}페이지`
+  return `PDF ${startPage}페이지`
+}
+
+function getSourceDetailMeta(source) {
+  const pageLabel = getSourcePageLabel(source)
+
+  return [
+    pageLabel,
+    getChunkPositionLabel(source),
+    pageLabel ? '' : getSourcePath(source),
+  ].filter(Boolean)
+}
+
+function getDocumentInfoMeta(group) {
+  return [
+    group.documentId ? `문서 ID ${group.documentId}` : '',
+    group.uploadedAt ? `업로드 ${formatSourceDateTime(group.uploadedAt)}` : '',
+  ].filter(Boolean)
+}
+
+function getChunkPositionLabel(source) {
+  if (source.chunk_index === null || source.chunk_index === undefined) {
+    return ''
+  }
+
+  const chunkNumber = Number(source.chunk_index)
+  if (!Number.isFinite(chunkNumber)) {
+    return ''
+  }
+
+  return `문서 내 ${chunkNumber + 1}번째 청크`
+}
+
 function getSourceSnippet(source) {
   return source.content || source.text || source.page_content || '출처 본문이 응답에 포함되지 않았습니다.'
+}
+
+function formatSourceDateTime(value) {
+  if (!value) return ''
+  return String(value).replace('T', ' ').slice(0, 16)
+}
+
+function getSourceGroupKey(source, index) {
+  return source.document_id || source.document_original_name || source.source || source.filename || `source-${index}`
+}
+
+function groupSourcesByDocument(sources) {
+  const groups = new Map()
+
+  sources.forEach((source, index) => {
+    const key = getSourceGroupKey(source, index)
+    const existing = groups.get(key)
+    const sourcePath = getSourcePath(source)
+
+    if (existing) {
+      existing.chunks.push({ source, originalIndex: index })
+      if (!existing.primaryPath && sourcePath) {
+        existing.primaryPath = sourcePath
+      }
+      return
+    }
+
+    groups.set(key, {
+      key,
+      documentId: source.document_id,
+      title: getSourceTitle(source, index),
+      uploadedAt: source.document_uploaded_at,
+      primaryPath: sourcePath,
+      chunks: [{ source, originalIndex: index }],
+    })
+  })
+
+  return Array.from(groups.values())
 }
 
 function getRoleLabel(role) {
@@ -365,6 +457,8 @@ function ChatPage() {
   const canSend = question.trim().length > 0 && !isStreaming
   const hasConversation = submittedQuestion || answer || errorMessage
   const canGiveFeedback = Boolean(answer) && !isStreaming && !errorMessage
+  const sourceGroups = groupSourcesByDocument(sources)
+  const isAdmin = authProfile?.role === 'ADMIN'
 
   const resetChat = () => {
     eventSourceRef.current?.close()
@@ -509,6 +603,12 @@ function ChatPage() {
               {renderHistoryContent()}
             </div>
           </div>
+
+          {isAdmin && (
+            <Link className="admin-home-link" to="/admin" aria-label="관리자 홈" title="관리자 홈">
+              <SettingsIcon />
+            </Link>
+          )}
         </aside>
       )}
 
@@ -556,14 +656,6 @@ function ChatPage() {
               <LoginIcon />
             </Link>
           )}
-          <StatusBadge active={isStreaming}>
-            {isStreaming ? (
-              <span className="status-badge__loading">
-                답변 생성 중
-                <LoadingDots />
-              </span>
-            ) : '대기 중'}
-          </StatusBadge>
         </header>
 
         <div ref={transcriptRef} className="chat-canvas" aria-live="polite">
@@ -603,23 +695,50 @@ function ChatPage() {
                   </article>
                 </div>
 
-                {sources.length > 0 && (
+                {sourceGroups.length > 0 && (
                   <section className="source-card" aria-label="출처 문서">
                     <h2>출처 문서</h2>
                     <ol className="source-list">
-                      {sources.map((source, index) => (
-                        <li key={`${source.document_id ?? source.source ?? 'source'}-${index}`}>
-                          <button
-                            type="button"
-                            className="source-trigger"
-                            onClick={() => setActiveSourceIndex((prevIndex) => (prevIndex === index ? null : index))}
-                          >
-                            <strong>{getSourceTitle(source, index)}</strong>
-                            {getSourcePath(source) && <span>{getSourcePath(source)}</span>}
-                          </button>
-                          {activeSourceIndex === index && (
-                            <p>{getSourceSnippet(source)}</p>
-                          )}
+                      {sourceGroups.map((group, index) => (
+                        <li key={group.key}>
+                          <article className="source-document">
+                            <button
+                              type="button"
+                              className="source-trigger"
+                              aria-expanded={activeSourceIndex === index}
+                              aria-controls={`source-detail-${index}`}
+                              onClick={() => setActiveSourceIndex((prevIndex) => (prevIndex === index ? null : index))}
+                            >
+                              <strong>{group.title}</strong>
+                            </button>
+                            {activeSourceIndex === index && (
+                              <div id={`source-detail-${index}`} className="source-detail">
+                                <dl className="source-detail__meta source-detail__meta--document" aria-label="문서 상세 정보">
+                                  {getDocumentInfoMeta(group).map((item) => (
+                                    <div key={item}>
+                                      <dt className="sr-only">출처 정보</dt>
+                                      <dd>{item}</dd>
+                                    </div>
+                                  ))}
+                                </dl>
+                                <div className="source-chunk-list" aria-label={`${group.title} 검색 청크 목록`}>
+                                  {group.chunks.map(({ source, originalIndex }) => (
+                                    <section className="source-chunk" key={`${group.key}-${originalIndex}`}>
+                                      <dl className="source-detail__meta" aria-label="청크 상세 정보">
+                                        {getSourceDetailMeta(source).map((item) => (
+                                          <div key={item}>
+                                            <dt className="sr-only">청크 정보</dt>
+                                            <dd>{item}</dd>
+                                          </div>
+                                        ))}
+                                      </dl>
+                                      <p>{getSourceSnippet(source)}</p>
+                                    </section>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </article>
                         </li>
                       ))}
                     </ol>

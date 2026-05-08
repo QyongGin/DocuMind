@@ -22,6 +22,7 @@ class SseStreamingContextTest {
 
     private final SseEmitter emitter = mock(SseEmitter.class);
     private final ChatStreamPersistenceService persistenceService = mock(ChatStreamPersistenceService.class);
+    private final SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher = mock(SourceDocumentMetadataEnricher.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
@@ -136,12 +137,15 @@ class SseStreamingContextTest {
     }
 
     private SseStreamingContext createContext() {
+        when(sourceDocumentMetadataEnricher.enrich(any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
         return new SseStreamingContext(
                 emitter,
                 MESSAGE_ID,
                 SESSION_ID,
                 objectMapper,
-                persistenceService
+                persistenceService,
+                sourceDocumentMetadataEnricher
         );
     }
 }
