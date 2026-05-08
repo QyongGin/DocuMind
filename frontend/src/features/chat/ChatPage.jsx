@@ -582,11 +582,10 @@ function ChatPage() {
       {isLoggedIn && (
         <aside className="chat-sidebar" aria-label="대화 목록">
           <div className="chat-sidebar__brand">
-            <BadgeButton
-              className="badge-button--sidebar"
-              onClick={resetChat}
-              label="새 질문 시작"
-            />
+            <button type="button" className="sidebar-brand-button" onClick={resetChat} aria-label="챗봇 홈">
+              <img className="sidebar-brand-button__logo" src={inqLogoUrl} alt="InQ" />
+              <img className="sidebar-brand-button__symbol" src={inqSymbolUrl} alt="" />
+            </button>
             <button
               type="button"
               className="sidebar-toggle sidebar-toggle--inside"
@@ -620,10 +619,6 @@ function ChatPage() {
 
       <section className="chat-main">
         <header className="chat-topbar">
-          <div>
-            <span>Inha Technical College</span>
-            <strong>인하공업전문대학 AI 안내</strong>
-          </div>
           {isLoggedIn ? (
             <div className="profile-menu" ref={profileMenuRef}>
               <button

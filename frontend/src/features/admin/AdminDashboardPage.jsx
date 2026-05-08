@@ -4,6 +4,7 @@ import { logout } from '../../services/authApi.js'
 import { createCategory, listCategories } from '../../services/categoryApi.js'
 import { deleteDocument, listDocumentChunks, listDocuments, uploadDocument } from '../../services/documentApi.js'
 import { getPromptConfig, updatePromptConfig } from '../../services/promptApi.js'
+import inqLogoUrl from '../../images/inq-logo.png'
 import inqSymbolUrl from '../../images/inq-symbol.png'
 
 function formatFileSize(size) {
@@ -301,7 +302,8 @@ function AdminDashboardPage() {
       <aside className="admin-rail" aria-label="관리자 메뉴">
         <div className="admin-rail__top">
           <Link className="admin-brand-link" to="/" aria-label="챗봇 홈으로 이동">
-            <img src={inqSymbolUrl} alt="" />
+            <img className="admin-brand-link__logo" src={inqLogoUrl} alt="InQ" />
+            <img className="admin-brand-link__symbol" src={inqSymbolUrl} alt="" />
           </Link>
           <button
             type="button"

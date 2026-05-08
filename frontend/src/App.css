@@ -1210,15 +1210,15 @@ button:disabled {
 
 .badge-button img {
   display: block;
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   object-fit: contain;
   mix-blend-mode: multiply;
 }
 
 .badge-button--rail img {
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
 }
 
 .badge-button--sidebar img {
@@ -1581,6 +1581,37 @@ button:disabled {
   padding: 0 6px;
 }
 
+.sidebar-brand-button {
+  display: grid;
+  place-items: center;
+  width: 118px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+}
+
+.sidebar-brand-button:hover:not(:disabled) {
+  background: var(--chat-subtle);
+}
+
+.sidebar-brand-button__logo {
+  width: 108px;
+  height: auto;
+  object-fit: contain;
+  mix-blend-mode: multiply;
+}
+
+.sidebar-brand-button__symbol {
+  display: none;
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  mix-blend-mode: multiply;
+}
+
 .chat-sidebar__identity {
   min-width: 0;
 }
@@ -1822,6 +1853,20 @@ button:disabled {
   padding: 0;
 }
 
+.chat-shell--sidebar-collapsed .sidebar-brand-button {
+  width: 42px;
+  height: 42px;
+  min-height: 42px;
+}
+
+.chat-shell--sidebar-collapsed .sidebar-brand-button__logo {
+  display: none;
+}
+
+.chat-shell--sidebar-collapsed .sidebar-brand-button__symbol {
+  display: block;
+}
+
 .chat-shell--sidebar-collapsed .chat-sidebar__identity,
 .chat-shell--sidebar-collapsed .new-chat-button,
 .chat-shell--sidebar-collapsed .sidebar-section {
@@ -1850,6 +1895,7 @@ button:disabled {
 
 .chat-topbar {
   gap: 8px;
+  justify-content: flex-end;
   padding: 0 24px;
   border-bottom: 0;
   background: rgba(255, 255, 255, 0.9);
@@ -2693,7 +2739,7 @@ button:disabled {
 .admin-brand-link {
   display: grid;
   place-items: center;
-  width: 48px;
+  width: 136px;
   height: 48px;
   flex: 0 0 auto;
   padding: 0;
@@ -2706,10 +2752,17 @@ button:disabled {
   background: #f7f7f8;
 }
 
-.admin-brand-link img {
+.admin-brand-link__logo {
+  width: 126px;
+  height: auto;
+  object-fit: contain;
+  mix-blend-mode: multiply;
+}
+
+.admin-brand-link__symbol {
+  display: none;
   width: 42px;
   height: 42px;
-  flex: 0 0 auto;
   object-fit: contain;
   mix-blend-mode: multiply;
 }
@@ -2829,8 +2882,18 @@ button:disabled {
 }
 
 .admin-surface--rail-collapsed .admin-brand-link {
-  width: 44px;
-  height: 44px;
+  width: 42px;
+  height: 42px;
+}
+
+.admin-surface--rail-collapsed .admin-brand-link__logo {
+  display: none;
+}
+
+.admin-surface--rail-collapsed .admin-brand-link__symbol {
+  display: block;
+  width: 34px;
+  height: 34px;
 }
 
 .admin-surface--rail-collapsed .admin-rail__nav {
