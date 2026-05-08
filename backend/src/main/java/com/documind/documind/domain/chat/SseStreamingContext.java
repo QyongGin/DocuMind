@@ -3,11 +3,14 @@ package com.documind.documind.domain.chat;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -26,6 +29,7 @@ class SseStreamingContext {
     private final Long sessionId;
     private final ObjectMapper objectMapper;
     private final ChatStreamPersistenceService persistenceService;
+    private final SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher;
     private final StringBuffer answerBuffer = new StringBuffer();
     private final Object persistenceLock = new Object();
     private boolean normallyCompleted;
@@ -37,13 +41,15 @@ class SseStreamingContext {
             Long messageId,
             Long sessionId,
             ObjectMapper objectMapper,
-            ChatStreamPersistenceService persistenceService
+            ChatStreamPersistenceService persistenceService,
+            SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher
     ) {
         this.emitter = emitter;
         this.messageId = messageId;
         this.sessionId = sessionId;
         this.objectMapper = objectMapper;
         this.persistenceService = persistenceService;
+        this.sourceDocumentMetadataEnricher = sourceDocumentMetadataEnricher;
     }
 
     /**
@@ -135,12 +141,12 @@ class SseStreamingContext {
     }
 
     private void handleDoneEvent(String jsonData, JsonNode node) throws IOException {
-        String sourcesJson = node.has("sources")
-                ? objectMapper.writeValueAsString(node.get("sources"))
-                : "[]";
+        List<Map<String, Object>> enrichedSources = enrichDoneSources(node);
+        String sourcesJson = objectMapper.writeValueAsString(enrichedSources);
         String finalAnswer = node.has("answer")
                 ? node.get("answer").asText()
                 : currentAnswer();
+        String enrichedJsonData = replaceSources(jsonData, node, enrichedSources);
 
         synchronized (persistenceLock) {
             if (answerStored) {
@@ -150,8 +156,27 @@ class SseStreamingContext {
             answerStored = true;
             normallyCompleted = true;
         }
-        emitter.send(SseEmitter.event().data(jsonData));
+        emitter.send(SseEmitter.event().data(enrichedJsonData));
         emitter.complete();
+    }
+
+    private List<Map<String, Object>> enrichDoneSources(JsonNode node) {
+        if (!node.has("sources")) {
+            return List.of();
+        }
+        List<Map<String, Object>> sources = objectMapper.convertValue(node.get("sources"), new TypeReference<>() {});
+        return sourceDocumentMetadataEnricher.enrich(sources);
+    }
+
+    private String replaceSources(String jsonData, JsonNode node, List<Map<String, Object>> sources)
+            throws JsonProcessingException {
+        if (!node.isObject()) {
+            return jsonData;
+        }
+
+        ObjectNode outbound = (ObjectNode) node.deepCopy();
+        outbound.set("sources", objectMapper.valueToTree(sources));
+        return objectMapper.writeValueAsString(outbound);
     }
 
     private void handleErrorEvent(String jsonData, JsonNode node) {

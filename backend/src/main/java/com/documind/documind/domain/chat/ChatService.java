@@ -37,6 +37,7 @@ public class ChatService {
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
     private final ChatStreamPersistenceService chatStreamPersistenceService;
+    private final SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher;
     private final FastApiClient fastApiClient;
     private final EntityManager entityManager;
     // Spring Boot가 자동 설정한 ObjectMapper 빈을 주입해 Jackson 전역 설정을 공유
@@ -65,9 +66,10 @@ public class ChatService {
         // 3. FastAPI RAG 파이프라인 호출
         int topK = request.getTopK() != null ? request.getTopK() : DEFAULT_TOP_K;
         FastApiQueryResponse fastApiResponse = fastApiClient.query(request.getQuestion(), topK);
+        List<Map<String, Object>> enrichedSources = sourceDocumentMetadataEnricher.enrich(fastApiResponse.getSources());
 
         // 4. sources 리스트를 JSON 문자열로 직렬화해 chat_messages.source_docs에 저장
-        String sourceDocsJson = serializeSources(fastApiResponse);
+        String sourceDocsJson = serializeSources(enrichedSources);
 
         // 5. 메시지에 answer와 sourceDocs를 채움. @Transactional dirty checking으로 자동 UPDATE
         message.complete(fastApiResponse.getAnswer(), sourceDocsJson);
@@ -79,7 +81,7 @@ public class ChatService {
                 .sessionId(session.getId())
                 .messageId(message.getId())
                 .answer(fastApiResponse.getAnswer())
-                .sources(fastApiResponse.getSources())
+                .sources(enrichedSources)
                 .build();
     }
 
@@ -213,12 +215,12 @@ public class ChatService {
     }
 
     // sources 리스트를 JSON 문자열로 변환. 직렬화 실패 시 빈 배열 문자열로 폴백
-    private String serializeSources(FastApiQueryResponse response) {
-        if (response.getSources() == null) {
+    private String serializeSources(List<Map<String, Object>> sources) {
+        if (sources == null) {
             return "[]";
         }
         try {
-            return objectMapper.writeValueAsString(response.getSources());
+            return objectMapper.writeValueAsString(sources);
         } catch (JsonProcessingException e) {
             log.error("sources 직렬화 실패. 빈 배열로 폴백합니다.", e);
             return "[]";
@@ -242,7 +244,8 @@ public class ChatService {
                 message.getId(),
                 session.getId(),
                 objectMapper,
-                chatStreamPersistenceService
+                chatStreamPersistenceService,
+                sourceDocumentMetadataEnricher
         );
 
         command.emitter().onCompletion(context::onClientDisconnect);

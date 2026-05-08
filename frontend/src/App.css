@@ -741,10 +741,26 @@ button:disabled {
 .source-list li {
   display: grid;
   gap: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.source-document {
+  display: grid;
+  gap: 12px;
   padding: 16px 18px;
   border: 1px solid var(--hairline-soft);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--panel);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.source-document:hover {
+  border-color: var(--hairline);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.09);
+  transform: translateY(-1px);
 }
 
 .source-list strong {
@@ -785,7 +801,7 @@ button:disabled {
 
 .source-detail {
   display: grid;
-  gap: 9px;
+  gap: 14px;
 }
 
 .source-detail__meta {
@@ -807,6 +823,20 @@ button:disabled {
   background: var(--hairline-soft);
   font-size: 12px;
   font-weight: 700;
+}
+
+.source-chunk-list {
+  display: grid;
+  gap: 10px;
+}
+
+.source-chunk {
+  display: grid;
+  gap: 9px;
+  padding: 13px 14px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
 }
 
 .source-detail p {
@@ -2053,10 +2083,27 @@ button:disabled {
 }
 
 .source-list li {
-  padding: 12px 0;
+  padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
+}
+
+.source-document {
+  display: grid;
+  gap: 12px;
+  padding: 13px 14px;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background: transparent;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.source-document:hover {
+  border-color: var(--chat-border);
+  background: #ffffff;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
 }
 
 .source-trigger {
@@ -2109,7 +2156,7 @@ button:disabled {
 
 .source-detail {
   display: grid;
-  gap: 9px;
+  gap: 14px;
   padding-top: 2px;
 }
 
@@ -2132,6 +2179,20 @@ button:disabled {
   background: var(--chat-subtle);
   font-size: 12px;
   font-weight: 650;
+}
+
+.source-chunk-list {
+  display: grid;
+  gap: 10px;
+}
+
+.source-chunk {
+  display: grid;
+  gap: 9px;
+  padding: 12px 13px;
+  border: 1px solid var(--chat-border);
+  border-radius: 12px;
+  background: #ffffff;
 }
 
 .source-detail p {
