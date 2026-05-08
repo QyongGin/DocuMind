@@ -727,7 +727,7 @@ button:disabled {
 }
 
 .source-card h2 {
-  margin: 0 0 18px;
+  margin: 0 0 10px;
 }
 
 .source-list {
@@ -750,17 +750,16 @@ button:disabled {
 .source-document {
   display: grid;
   gap: 12px;
-  padding: 16px 18px;
-  border: 1px solid var(--hairline-soft);
+  padding: 14px 18px;
+  border: 0;
   border-radius: var(--radius-md);
-  background: var(--panel);
-  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  background: transparent;
+  transition: box-shadow 160ms ease, background 160ms ease;
 }
 
 .source-document:hover {
-  border-color: var(--hairline);
+  background: #ffffff;
   box-shadow: 0 14px 34px rgba(15, 23, 42, 0.09);
-  transform: translateY(-1px);
 }
 
 .source-list strong {
@@ -2079,7 +2078,7 @@ button:disabled {
 }
 
 .source-list {
-  gap: 6px;
+  gap: 8px;
 }
 
 .source-list li {
@@ -2092,18 +2091,16 @@ button:disabled {
 .source-document {
   display: grid;
   gap: 12px;
-  padding: 13px 14px;
-  border: 1px solid transparent;
+  padding: 13px 18px;
+  border: 0;
   border-radius: 16px;
   background: transparent;
-  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease, background 160ms ease;
+  transition: box-shadow 160ms ease, background 160ms ease;
 }
 
 .source-document:hover {
-  border-color: var(--chat-border);
   background: #ffffff;
   box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08);
-  transform: translateY(-1px);
 }
 
 .source-trigger {

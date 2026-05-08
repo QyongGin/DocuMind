@@ -345,6 +345,7 @@ def _prepare_query(question: str, top_k: int) -> tuple[str | None, list]:
 
     docs = results["documents"][0] if results["documents"] else []
     metadatas = results["metadatas"][0] if results["metadatas"] else []
+    ids = results["ids"][0] if results["ids"] else []
 
     if not docs:
         return None, []
@@ -364,14 +365,14 @@ def _prepare_query(question: str, top_k: int) -> tuple[str | None, list]:
 
     # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 헤더 메타데이터 포함
     sources = []
-    for doc, meta in zip(docs, metadatas):
+    for doc, meta, chunk_id in zip(docs, metadatas, ids):
         source: dict = {
             "document_id": meta.get("document_id", ""),
             "source": meta.get("source", ""),
             "page": meta.get("page"),
             "page_start": meta.get("page_start"),
             "page_end": meta.get("page_end"),
-            "chunk_index": meta.get("chunk_index"),
+            "chunk_index": meta.get("chunk_index", _parse_chunk_index(chunk_id)),
             # 청크 전체를 반환하면 응답이 너무 커지므로 200자 미리보기만 포함
             "content": doc[:200]
         }
@@ -382,6 +383,15 @@ def _prepare_query(question: str, top_k: int) -> tuple[str | None, list]:
         sources.append(source)
 
     return prompt, sources
+
+
+def _parse_chunk_index(chunk_id: str) -> int | None:
+    """
+    ChromaDB id({document_id}_{chunk_index})에서 청크 순번을 복원한다.
+    기존 업로드 문서처럼 chunk_index metadata가 없는 경우 출처 UI에 최소 위치 정보를 제공한다.
+    """
+    suffix = str(chunk_id).rsplit("_", 1)[-1]
+    return int(suffix) if suffix.isdigit() else None
 
 
 @app.delete("/documents/{document_id}")
