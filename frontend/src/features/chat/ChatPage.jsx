@@ -109,12 +109,9 @@ function getSourcePageLabel(source) {
 }
 
 function getSourceDetailMeta(source) {
-  const sourcePath = getSourcePath(source)
-
   return [
     getSourcePageLabel(source),
     getChunkPositionLabel(source),
-    sourcePath,
   ].filter(Boolean)
 }
 
@@ -122,7 +119,6 @@ function getDocumentInfoMeta(group) {
   return [
     group.documentId ? `문서 ID ${group.documentId}` : '',
     group.uploadedAt ? `업로드 ${formatSourceDateTime(group.uploadedAt)}` : '',
-    group.primaryPath,
   ].filter(Boolean)
 }
 

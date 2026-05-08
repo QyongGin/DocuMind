@@ -2902,6 +2902,26 @@ button:disabled {
   background: #f8fafc;
 }
 
+.admin-text-button--delete {
+  color: #b42318;
+  border-color: #f1d3d0;
+  background: #fffafa;
+}
+
+.admin-text-button--delete:hover:not(:disabled) {
+  color: #9f1f17;
+  border-color: #efc4bf;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(180, 35, 24, 0.11);
+}
+
+.admin-text-button--delete:disabled {
+  color: var(--chat-muted);
+  border-color: var(--chat-border);
+  background: #ffffff;
+  box-shadow: none;
+}
+
 .admin-primary-button {
   border: 0;
   color: #ffffff;

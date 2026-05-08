@@ -399,7 +399,7 @@ function AdminDashboardPage() {
                     <time>{formatDate(document.createdAt)}</time>
                     <button
                       type="button"
-                      className="admin-text-button"
+                      className="admin-text-button admin-text-button--delete"
                       onClick={() => setDeleteTarget(document)}
                       disabled={isUploading || isDeleting}
                     >
