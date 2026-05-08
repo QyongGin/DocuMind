@@ -92,6 +92,32 @@ function getSourcePath(source) {
     .join(' · ')
 }
 
+function toSourcePageNumber(value) {
+  if (value === null || value === undefined || value === '') return null
+
+  const pageNumber = Number(value)
+  return Number.isFinite(pageNumber) ? pageNumber : null
+}
+
+function getSourcePageLabel(source) {
+  const startPage = toSourcePageNumber(source.page_start ?? source.pageStart ?? source.page)
+  const endPage = toSourcePageNumber(source.page_end ?? source.pageEnd)
+
+  if (startPage === null) return ''
+  if (endPage !== null && endPage !== startPage) return `${startPage}-${endPage}페이지`
+  return `${startPage}페이지`
+}
+
+function getSourceDetailMeta(source, index) {
+  return [
+    getSourcePageLabel(source),
+    getSourcePath(source),
+    source.chunk_index !== null && source.chunk_index !== undefined ? `청크 ${Number(source.chunk_index) + 1}` : '',
+    source.document_id ? `문서 ID ${source.document_id}` : '',
+    `출처 ${index + 1}`,
+  ].filter(Boolean)
+}
+
 function getSourceSnippet(source) {
   return source.content || source.text || source.page_content || '출처 본문이 응답에 포함되지 않았습니다.'
 }
@@ -607,21 +633,41 @@ function ChatPage() {
                   <section className="source-card" aria-label="출처 문서">
                     <h2>출처 문서</h2>
                     <ol className="source-list">
-                      {sources.map((source, index) => (
-                        <li key={`${source.document_id ?? source.source ?? 'source'}-${index}`}>
-                          <button
-                            type="button"
-                            className="source-trigger"
-                            onClick={() => setActiveSourceIndex((prevIndex) => (prevIndex === index ? null : index))}
-                          >
-                            <strong>{getSourceTitle(source, index)}</strong>
-                            {getSourcePath(source) && <span>{getSourcePath(source)}</span>}
-                          </button>
-                          {activeSourceIndex === index && (
-                            <p>{getSourceSnippet(source)}</p>
-                          )}
-                        </li>
-                      ))}
+                      {sources.map((source, index) => {
+                        const pageLabel = getSourcePageLabel(source)
+                        const sourcePath = getSourcePath(source)
+
+                        return (
+                          <li key={`${source.document_id ?? source.source ?? 'source'}-${index}`}>
+                            <button
+                              type="button"
+                              className="source-trigger"
+                              aria-expanded={activeSourceIndex === index}
+                              aria-controls={`source-detail-${index}`}
+                              onClick={() => setActiveSourceIndex((prevIndex) => (prevIndex === index ? null : index))}
+                            >
+                              <strong>{getSourceTitle(source, index)}</strong>
+                              <span className="source-trigger__meta">
+                                {pageLabel && <span className="source-page">{pageLabel}</span>}
+                                {sourcePath && <span className="source-path">{sourcePath}</span>}
+                              </span>
+                            </button>
+                            {activeSourceIndex === index && (
+                              <div id={`source-detail-${index}`} className="source-detail">
+                                <dl className="source-detail__meta" aria-label="출처 상세 정보">
+                                  {getSourceDetailMeta(source, index).map((item) => (
+                                    <div key={item}>
+                                      <dt className="sr-only">출처 정보</dt>
+                                      <dd>{item}</dd>
+                                    </div>
+                                  ))}
+                                </dl>
+                                <p>{getSourceSnippet(source)}</p>
+                              </div>
+                            )}
+                          </li>
+                        )
+                      })}
                     </ol>
                   </section>
                 )}
