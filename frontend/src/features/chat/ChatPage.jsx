@@ -92,10 +92,6 @@ function getSourcePath(source) {
     .join(' · ')
 }
 
-function getSectionLabel(path) {
-  return path ? `섹션 ${path}` : ''
-}
-
 function toSourcePageNumber(value) {
   if (value === null || value === undefined || value === '') return null
 
@@ -108,8 +104,8 @@ function getSourcePageLabel(source) {
   const endPage = toSourcePageNumber(source.page_end ?? source.pageEnd)
 
   if (startPage === null) return ''
-  if (endPage !== null && endPage !== startPage) return `${startPage}-${endPage}페이지`
-  return `${startPage}페이지`
+  if (endPage !== null && endPage !== startPage) return `PDF ${startPage}-${endPage}페이지`
+  return `PDF ${startPage}페이지`
 }
 
 function getSourceDetailMeta(source) {
@@ -117,16 +113,16 @@ function getSourceDetailMeta(source) {
 
   return [
     getSourcePageLabel(source),
-    getSectionLabel(sourcePath),
     getChunkPositionLabel(source),
+    sourcePath,
   ].filter(Boolean)
 }
 
 function getDocumentInfoMeta(group) {
   return [
-    getSectionLabel(group.primaryPath),
     group.documentId ? `문서 ID ${group.documentId}` : '',
     group.uploadedAt ? `업로드 ${formatSourceDateTime(group.uploadedAt)}` : '',
+    group.primaryPath,
   ].filter(Boolean)
 }
 
