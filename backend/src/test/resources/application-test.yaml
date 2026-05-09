@@ -19,6 +19,7 @@ fastapi:
   stream-timeout: 5m
 
 chat:
+  default-top-k: 3
   sse-emitter-timeout: 5m
 
 jwt:

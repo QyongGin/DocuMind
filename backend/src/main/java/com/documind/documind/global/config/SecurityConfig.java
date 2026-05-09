@@ -99,7 +99,7 @@ public class SecurityConfig {
         return http.build();
     }
 
-    // Vite dev server(5173/5174), Docker nginx(80), 운영 서버(192.168.35.168)에서의 브라우저 요청 허용
+    // Vite dev server와 Docker/nginx 배포 Origin을 환경변수로 받아 허용한다.
     // allowCredentials(true)와 allowedOrigins("*") 조합은 Spring CORS에서 예외 발생 — origin 명시 필수
     @Bean
     CorsConfigurationSource corsConfigurationSource() {

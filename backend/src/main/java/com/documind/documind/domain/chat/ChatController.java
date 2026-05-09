@@ -37,6 +37,7 @@ public class ChatController {
     private final ChatService chatService;
     private final StreamSessionStore streamSessionStore;
     private final Duration sseEmitterTimeout;
+    private final int defaultTopK;
 
     /**
      * ChatController 의존성과 SSE 타임아웃 설정을 주입한다.
@@ -44,11 +45,13 @@ public class ChatController {
     public ChatController(
             ChatService chatService,
             StreamSessionStore streamSessionStore,
-            @Value("${chat.sse-emitter-timeout:0s}") Duration sseEmitterTimeout
+            @Value("${chat.sse-emitter-timeout:0s}") Duration sseEmitterTimeout,
+            @Value("${chat.default-top-k:3}") int defaultTopK
     ) {
         this.chatService = chatService;
         this.streamSessionStore = streamSessionStore;
         this.sseEmitterTimeout = sseEmitterTimeout;
+        this.defaultTopK = defaultTopK;
     }
 
     /**
@@ -148,7 +151,7 @@ public class ChatController {
             @Valid @RequestBody StreamSessionRequest request,
             Authentication authentication
     ) {
-        int topK = request.topK() == null ? 5 : request.topK();
+        int topK = request.topK() == null ? defaultTopK : request.topK();
         Long userId = extractUserId(authentication);
         StreamSessionSaveCommand command = new StreamSessionSaveCommand(
                 request.question(),
@@ -196,12 +199,12 @@ public class ChatController {
     public SseEmitter stream(
             @RequestParam String question,
             @RequestParam(required = false) String sessionKey,
-            // defaultValue로 미전달 시 5를 기본값으로 사용. @Min/@Max는 @Validated 활성화 시 적용
-            @RequestParam(defaultValue = "5") @Min(value = 1, message = "topK는 1 이상이어야 합니다.") @Max(value = 20, message = "topK는 20 이하이어야 합니다.") int topK
+            @RequestParam(required = false) @Min(value = 1, message = "topK는 1 이상이어야 합니다.") @Max(value = 20, message = "topK는 20 이하이어야 합니다.") Integer topK
     ) {
         // SseEmitter timeout 0L: 서버가 정상 스트리밍 중인 연결을 임의로 끊지 않음
         SseEmitter emitter = new SseEmitter(sseEmitterTimeout.toMillis());
-        chatService.streamChat(new ChatStreamCommand(question, null, sessionKey, topK, emitter));
+        int resolvedTopK = topK == null ? defaultTopK : topK;
+        chatService.streamChat(new ChatStreamCommand(question, null, sessionKey, resolvedTopK, emitter));
         return emitter;
     }
 

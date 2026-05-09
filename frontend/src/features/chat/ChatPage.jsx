@@ -10,6 +10,8 @@ import { getSessionKey } from '../../utils/sessionKey.js'
 import inqLogoUrl from '../../images/inq-logo.png'
 import inqSymbolUrl from '../../images/inq-symbol.png'
 
+const TOKEN_FLUSH_INTERVAL_MS = 50
+
 function NewChatIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
@@ -260,6 +262,8 @@ function ChatPage() {
   const profileMenuRef = useRef(null)
   const deleteModalRef = useRef(null)
   const previousFocusRef = useRef(null)
+  const pendingTokenRef = useRef('')
+  const tokenFlushTimerRef = useRef(null)
   const [isLoggedIn, setIsLoggedIn] = useState(() => hasAccessToken())
   const [isProfileOpen, setIsProfileOpen] = useState(false)
   const [isSidebarOpen, setIsSidebarOpen] = useState(() =>
@@ -294,9 +298,45 @@ function ChatPage() {
     return nextIsLoggedIn
   }
 
+  const clearTokenFlushTimer = () => {
+    if (tokenFlushTimerRef.current === null) return
+
+    window.clearTimeout(tokenFlushTimerRef.current)
+    tokenFlushTimerRef.current = null
+  }
+
+  const flushBufferedAnswerTokens = () => {
+    clearTokenFlushTimer()
+
+    const bufferedTokens = pendingTokenRef.current
+    if (!bufferedTokens) return
+
+    pendingTokenRef.current = ''
+    setAnswer((prevAnswer) => prevAnswer + bufferedTokens)
+  }
+
+  const resetBufferedAnswerTokens = () => {
+    clearTokenFlushTimer()
+    pendingTokenRef.current = ''
+  }
+
+  const appendAnswerToken = (token) => {
+    pendingTokenRef.current += token
+
+    if (tokenFlushTimerRef.current !== null) return
+
+    tokenFlushTimerRef.current = window.setTimeout(() => {
+      tokenFlushTimerRef.current = null
+      flushBufferedAnswerTokens()
+    }, TOKEN_FLUSH_INTERVAL_MS)
+  }
+
   useEffect(() => {
     return () => {
       eventSourceRef.current?.close()
+      if (tokenFlushTimerRef.current !== null) {
+        window.clearTimeout(tokenFlushTimerRef.current)
+      }
     }
   }, [])
 
@@ -346,6 +386,7 @@ function ChatPage() {
     if (!sessionId || isStreaming) return
 
     const shouldUseAuth = refreshLoginState()
+    resetBufferedAnswerTokens()
     setErrorMessage('')
     setFeedback(null)
     setFeedbackError('')
@@ -456,6 +497,7 @@ function ChatPage() {
     }
 
     eventSourceRef.current?.close()
+    resetBufferedAnswerTokens()
     const sessionKey = getSessionKey()
     const shouldUseAuth = refreshLoginState()
     setSubmittedQuestion(trimmedQuestion)
@@ -474,8 +516,9 @@ function ChatPage() {
       auth: shouldUseAuth,
       sessionKey,
       topK: env.defaultTopK,
-      onToken: (token) => setAnswer((prev) => prev + token),
+      onToken: appendAnswerToken,
       onDone: ({ answer: completedAnswer, messageId: completedMessageId, sources: nextSources }) => {
+        flushBufferedAnswerTokens()
         if (completedAnswer) {
           setAnswer(completedAnswer)
         }
@@ -485,6 +528,7 @@ function ChatPage() {
         loadHistory()
       },
       onError: (message) => {
+        flushBufferedAnswerTokens()
         setErrorMessage(message)
         setIsStreaming(false)
       },
@@ -493,6 +537,7 @@ function ChatPage() {
 
   const stopStream = () => {
     eventSourceRef.current?.close()
+    flushBufferedAnswerTokens()
     setIsStreaming(false)
   }
 
@@ -541,6 +586,7 @@ function ChatPage() {
 
   const resetChat = () => {
     eventSourceRef.current?.close()
+    resetBufferedAnswerTokens()
     setQuestion('')
     setSubmittedQuestion('')
     setMessageId(null)
@@ -560,6 +606,7 @@ function ChatPage() {
       await logout()
     } finally {
       eventSourceRef.current?.close()
+      resetBufferedAnswerTokens()
       setIsLoggedIn(false)
       setIsSidebarOpen(false)
       setIsProfileOpen(false)

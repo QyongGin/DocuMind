@@ -5,7 +5,7 @@ from langchain_opendataloader_pdf import OpenDataLoaderPDFLoader
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings, OllamaLLM
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import chromadb
 import tempfile
 import os
@@ -13,11 +13,61 @@ import re
 import json
 import asyncio
 import logging
-from langfuse_callback import get_langfuse_handler
+import time
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="DocuMind AI Server", version="1.0.0")
+
+
+def _env_int(name: str, default: int) -> int:
+    """정수 환경변수를 읽되 잘못된 값이면 기본값으로 되돌린다."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning("%s=%s 값이 정수가 아니어서 기본값 %s를 사용합니다.", name, raw_value, default)
+        return default
+
+    if value <= 0:
+        logger.warning("%s=%s 값이 0 이하라서 기본값 %s를 사용합니다.", name, raw_value, default)
+        return default
+
+    return value
+
+
+def _keep_alive_seconds(value: str | None) -> int | None:
+    """
+    OllamaEmbeddings는 keep_alive를 int로 받으므로 duration 문자열을 초 단위로 변환한다.
+    OllamaLLM에는 원문 값을 넘겨 `30m` 같은 Ollama duration 표현을 유지한다.
+    """
+    if not value:
+        return None
+
+    normalized = value.strip().lower()
+    if normalized.isdigit():
+        return int(normalized)
+
+    unit = normalized[-1]
+    amount = normalized[:-1]
+    if not amount.isdigit():
+        logger.warning("OLLAMA_KEEP_ALIVE=%s 값을 초 단위로 변환하지 못해 embedding keep_alive를 생략합니다.", value)
+        return None
+
+    multipliers = {
+        "s": 1,
+        "m": 60,
+        "h": 60 * 60,
+    }
+    multiplier = multipliers.get(unit)
+    if multiplier is None:
+        logger.warning("OLLAMA_KEEP_ALIVE=%s 단위를 지원하지 않아 embedding keep_alive를 생략합니다.", value)
+        return None
+
+    return int(amount) * multiplier
 
 # 환경변수로 로컬/Docker 환경 분기
 # 로컬: OLLAMA_BASE_URL 미설정 시 localhost 사용
@@ -27,24 +77,36 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "exaone3.5:7.8b")
 # 환경변수로 임베딩 모델명 분기. 배포 서버에서는 qwen3-embedding:8b 사용 가능
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:4b")
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 4096)
+OLLAMA_NUM_PREDICT = _env_int("OLLAMA_NUM_PREDICT", 512)
+EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 64)
+UPLOAD_READ_CHUNK_BYTES = _env_int("UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)
+DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 3)
 
 embeddings = OllamaEmbeddings(
     model=OLLAMA_EMBEDDING_MODEL,
-    base_url=OLLAMA_BASE_URL
+    base_url=OLLAMA_BASE_URL,
+    keep_alive=_keep_alive_seconds(OLLAMA_KEEP_ALIVE),
+    num_ctx=OLLAMA_NUM_CTX
 )
 
 # 질의응답에 사용할 LLM. 임베딩 모델과 분리해 별도 관리
 llm = OllamaLLM(
     model=OLLAMA_LLM_MODEL,
-    base_url=OLLAMA_BASE_URL
+    base_url=OLLAMA_BASE_URL,
+    keep_alive=OLLAMA_KEEP_ALIVE,
+    num_ctx=OLLAMA_NUM_CTX,
+    num_predict=OLLAMA_NUM_PREDICT
 )
 
 # 환경변수로 ChromaDB 모드 분기
 # 로컬: CHROMA_HOST 미설정 시 in-process PersistentClient 사용
 # Docker: CHROMA_HOST=chromadb 설정 시 서버 모드 HttpClient 사용
 CHROMA_HOST = os.getenv("CHROMA_HOST")
+CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
 if CHROMA_HOST:
-    client = chromadb.HttpClient(host=CHROMA_HOST, port=8000)
+    client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
 else:
     client = chromadb.PersistentClient(path="./chroma_db")
 
@@ -65,14 +127,6 @@ _char_splitter = RecursiveCharacterTextSplitter(
 
 # 허용 파일 확장자. Spring Boot DocumentService와 동기화 필요
 ALLOWED_EXTENSIONS = {"pdf", "docx", "pptx", "xlsx"}
-
-# LANGFUSE_SECRET_KEY 설정 시 Langfuse 클라이언트를 초기화한다.
-# 미설정 시 None으로 유지해 트레이싱 없이 파이프라인이 실행된다.
-_langfuse = None
-if os.getenv("LANGFUSE_SECRET_KEY"):
-    from langfuse import Langfuse
-    _langfuse = Langfuse()
-
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -235,65 +289,119 @@ def _apply_overlap(docs: list[Document]) -> list[Document]:
     return overlapped
 
 
+def _build_chunk_metadata(doc: Document, filename: str, document_id: int, chunk_index: int, page_lookup: list[dict]) -> dict:
+    """
+    ChromaDB에 저장할 청크 metadata를 만든다.
+    Header metadata와 페이지 추정값을 함께 보존한다.
+    """
+    metadata: dict = {
+        "document_id": str(document_id),
+        "source": filename,
+        "chunk_index": chunk_index,
+    }
+    page_start, page_end = _resolve_page_range(doc.page_content, page_lookup)
+    if page_start is not None:
+        metadata["page"] = page_start
+        metadata["page_start"] = page_start
+        metadata["page_end"] = page_end if page_end is not None else page_start
+    for key, value in doc.metadata.items():
+        if isinstance(value, (str, int, float, bool)):
+            metadata[key] = value
+
+    return metadata
+
+
+def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float]:
+    """
+    문서 청크를 batch embedding 후 ChromaDB에 batch 저장한다.
+    청크별 HTTP 호출을 피하기 위해 EMBEDDING_BATCH_SIZE 단위로 묶어 처리한다.
+    """
+    page_match_elapsed = 0.0
+    embedding_elapsed = 0.0
+    chroma_elapsed = 0.0
+
+    for start in range(0, len(final_docs), EMBEDDING_BATCH_SIZE):
+        batch_docs = final_docs[start:start + EMBEDDING_BATCH_SIZE]
+        batch_ids = [f"{document_id}_{start + offset}" for offset in range(len(batch_docs))]
+        batch_texts = [doc.page_content for doc in batch_docs]
+
+        metadata_start = time.perf_counter()
+        batch_metadatas = [
+            _build_chunk_metadata(doc, filename, document_id, start + offset, page_lookup)
+            for offset, doc in enumerate(batch_docs)
+        ]
+        page_match_elapsed += time.perf_counter() - metadata_start
+
+        embedding_start = time.perf_counter()
+        batch_vectors = embeddings.embed_documents(batch_texts)
+        embedding_elapsed += time.perf_counter() - embedding_start
+
+        chroma_start = time.perf_counter()
+        collection.add(
+            ids=batch_ids,
+            embeddings=batch_vectors,
+            documents=batch_texts,
+            metadatas=batch_metadatas
+        )
+        chroma_elapsed += time.perf_counter() - chroma_start
+
+    return page_match_elapsed, embedding_elapsed, chroma_elapsed
+
+
 async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -> int:
     """문서 전처리 파이프라인: 로딩 → 정규화 → Two-Pass 청킹 → overlap → 임베딩 → ChromaDB 저장"""
 
-    async def _execute() -> int:
+    def _execute() -> int:
+        total_start = time.perf_counter()
+
         # 파서 분기: 확장자에 따라 PDF 또는 Docling 로더 사용
+        parse_start = time.perf_counter()
         raw_docs = _load_documents(tmp_path, filename)
+        parse_elapsed = time.perf_counter() - parse_start
+
+        page_lookup_start = time.perf_counter()
         page_lookup = _build_page_lookup(raw_docs)
+        page_lookup_elapsed = time.perf_counter() - page_lookup_start
 
         # 전체 텍스트 병합 후 정규화
+        normalize_start = time.perf_counter()
         full_text = "\n".join([doc.page_content for doc in raw_docs])
         full_text = _normalize_text(full_text)
+        normalize_elapsed = time.perf_counter() - normalize_start
 
         # Two-Pass 청킹 + 수동 overlap 후처리
+        split_start = time.perf_counter()
         split_docs = _two_pass_split(full_text)
         final_docs = _apply_overlap(split_docs)
+        split_elapsed = time.perf_counter() - split_start
 
-        # 임베딩 + ChromaDB 저장
-        for i, doc in enumerate(final_docs):
-            vector = embeddings.embed_query(doc.page_content)
-
-            # 헤더 메타데이터(Header 1, Header 2 등) + 문서 식별 메타데이터 병합
-            # ChromaDB는 str/int/float/bool 타입만 허용하므로 필터링한다
-            metadata: dict = {
-                "document_id": str(document_id),
-                "source": filename,
-                "chunk_index": i,
-            }
-            page_start, page_end = _resolve_page_range(doc.page_content, page_lookup)
-            if page_start is not None:
-                metadata["page"] = page_start
-                metadata["page_start"] = page_start
-                metadata["page_end"] = page_end if page_end is not None else page_start
-            for k, v in doc.metadata.items():
-                if isinstance(v, (str, int, float, bool)):
-                    metadata[k] = v
-
-            collection.add(
-                ids=[f"{document_id}_{i}"],
-                embeddings=[vector],
-                documents=[doc.page_content],
-                metadatas=[metadata]
-            )
-
+        # 임베딩 + ChromaDB 저장. 청크별 호출 대신 batch 단위로 처리해 HTTP 왕복과 저장 오버헤드를 줄인다.
+        page_match_elapsed, embedding_elapsed, chroma_elapsed = _store_document_chunks(
+            final_docs,
+            filename,
+            document_id,
+            page_lookup
+        )
+        total_elapsed = time.perf_counter() - total_start
+        logger.info(
+            "[upload] document_id=%s filename=%s raw_docs=%s chunks=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            document_id,
+            filename,
+            len(raw_docs),
+            len(final_docs),
+            EMBEDDING_BATCH_SIZE,
+            parse_elapsed,
+            page_lookup_elapsed,
+            normalize_elapsed,
+            split_elapsed,
+            page_match_elapsed,
+            embedding_elapsed,
+            chroma_elapsed,
+            total_elapsed
+        )
         return len(final_docs)
 
-    # Langfuse 4.x: start_as_current_observation()은 async context manager로 동작한다
-    # _langfuse가 None이면 트레이싱 없이 파이프라인을 그대로 실행한다
-    if _langfuse:
-        with _langfuse.start_as_current_observation(
-            name="document-upload-pipeline",
-            as_type="chain",
-            metadata={"document_id": document_id, "filename": filename}
-        ):
-            chunk_count = await _execute()
-            _langfuse.set_current_trace_io(output={"chunks": chunk_count})
-            _langfuse.flush()
-            return chunk_count
-    else:
-        return await _execute()
+    return await asyncio.to_thread(_execute)
 
 
 @app.post("/documents")
@@ -301,7 +409,8 @@ async def upload_document(
     file: UploadFile = File(...),
     document_id: int = Form(None)
 ):
-    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    filename = file.filename or "upload"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
@@ -309,16 +418,28 @@ async def upload_document(
         )
 
     # 확장자를 임시 파일 suffix로 사용해야 파서가 형식을 올바르게 인식한다
+    file_save_start = time.perf_counter()
+    bytes_written = 0
     with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
-        content = await file.read()
-        tmp.write(content)
         tmp_path = tmp.name
+        while chunk := await file.read(UPLOAD_READ_CHUNK_BYTES):
+            tmp.write(chunk)
+            bytes_written += len(chunk)
+
+    logger.info(
+        "[upload_file] document_id=%s filename=%s bytes=%s chunk_bytes=%s save=%.2fs",
+        document_id,
+        filename,
+        bytes_written,
+        UPLOAD_READ_CHUNK_BYTES,
+        time.perf_counter() - file_save_start
+    )
 
     try:
-        chunk_count = await _run_upload_pipeline(tmp_path, file.filename, document_id)
+        chunk_count = await _run_upload_pipeline(tmp_path, filename, document_id)
         return {
             "status": "success",
-            "filename": file.filename,
+            "filename": filename,
             "chunks": chunk_count
         }
     finally:
@@ -328,7 +449,7 @@ async def upload_document(
 # 질의응답 요청 스키마. Pydantic BaseModel로 JSON body를 자동 파싱·검증
 class QueryRequest(BaseModel):
     question: str
-    top_k: int = 5  # 검색할 유사 청크 수. 기본값 5
+    top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=20)  # 검색할 유사 청크 수
     system_prompt: str | None = None  # Spring Boot 관리자 프롬프트 설정. 미전달 시 기본값 사용
 
 
@@ -342,18 +463,31 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     질문 임베딩 → ChromaDB 검색 → 프롬프트 + 출처 조합.
     문서가 없으면 (None, []) 반환. 호출자가 빈 응답 처리를 담당한다.
     """
+    prepare_start = time.perf_counter()
+    embedding_start = time.perf_counter()
     question_vector = embeddings.embed_query(question)
+    embedding_elapsed = time.perf_counter() - embedding_start
+
+    chroma_start = time.perf_counter()
     results = collection.query(
         query_embeddings=[question_vector],
         n_results=top_k,
         include=["documents", "metadatas", "distances"]
     )
+    chroma_elapsed = time.perf_counter() - chroma_start
 
     docs = results["documents"][0] if results["documents"] else []
     metadatas = results["metadatas"][0] if results["metadatas"] else []
     ids = results["ids"][0] if results["ids"] else []
 
     if not docs:
+        logger.info(
+            "[query_prepare] top_k=%s docs=0 embed=%.2fs chroma=%.2fs total=%.2fs",
+            top_k,
+            embedding_elapsed,
+            chroma_elapsed,
+            time.perf_counter() - prepare_start
+        )
         return None, []
 
     context = "\n\n".join(docs)
@@ -391,6 +525,15 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
                 source[k] = v
         sources.append(source)
 
+    logger.info(
+        "[query_prepare] top_k=%s docs=%s prompt_chars=%s embed=%.2fs chroma=%.2fs total=%.2fs",
+        top_k,
+        len(docs),
+        len(prompt),
+        embedding_elapsed,
+        chroma_elapsed,
+        time.perf_counter() - prepare_start
+    )
     return prompt, sources
 
 
@@ -465,6 +608,7 @@ async def query_document(request: QueryRequest):
     1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query)
     2. EXAONE LLM 비동기 호출 → 답변 반환
     """
+    query_start = time.perf_counter()
     # _prepare_query는 embed_query·Chroma 조회가 모두 동기 블로킹이다.
     # async 핸들러에서 직접 호출하면 이벤트 루프가 묶여 다른 요청이 대기하므로
     # asyncio.to_thread()로 별도 스레드에서 실행한다.
@@ -479,7 +623,17 @@ async def query_document(request: QueryRequest):
         return {"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
 
     # async 핸들러에서 ainvoke()로 이벤트 루프 블로킹 방지
+    llm_start = time.perf_counter()
     answer = await llm.ainvoke(prompt)
+    llm_elapsed = time.perf_counter() - llm_start
+    logger.info(
+        "[query] top_k=%s sources=%s prompt_chars=%s llm=%.2fs total=%.2fs",
+        request.top_k,
+        len(sources),
+        len(prompt),
+        llm_elapsed,
+        time.perf_counter() - query_start
+    )
 
     return {"answer": answer, "sources": sources}
 
@@ -493,6 +647,7 @@ async def query_stream(request: QueryRequest):
     3. 완료 시 sources 포함 done 이벤트 전송
     클라이언트 연결 종료 시 asyncio.CancelledError로 자동 중단된다.
     """
+    stream_start = time.perf_counter()
     prompt, sources = await asyncio.to_thread(
         _prepare_query,
         request.question,
@@ -515,10 +670,30 @@ async def query_stream(request: QueryRequest):
         )
 
     async def token_stream():
+        first_token_elapsed = None
+        chunk_count = 0
         try:
             async for chunk in llm.astream(prompt):
                 if chunk:
+                    if first_token_elapsed is None:
+                        first_token_elapsed = time.perf_counter() - stream_start
+                        logger.info(
+                            "[query_stream] first_token top_k=%s sources=%s prompt_chars=%s first_token=%.2fs",
+                            request.top_k,
+                            len(sources),
+                            len(prompt),
+                            first_token_elapsed
+                        )
+                    chunk_count += 1
                     yield f"data: {json.dumps({'token': chunk}, ensure_ascii=False)}\n\n"
+            logger.info(
+                "[query_stream] done top_k=%s sources=%s chunks=%s first_token=%s total=%.2fs",
+                request.top_k,
+                len(sources),
+                chunk_count,
+                f"{first_token_elapsed:.2f}s" if first_token_elapsed is not None else "none",
+                time.perf_counter() - stream_start
+            )
             # 정상 완료 시 출처 포함 done 이벤트 전송
             yield f"data: {json.dumps({'done': True, 'sources': sources}, ensure_ascii=False)}\n\n"
         except asyncio.CancelledError:
