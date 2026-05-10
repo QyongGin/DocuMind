@@ -3474,7 +3474,7 @@ button:disabled {
   height: 100%;
   border-radius: inherit;
   background: #0b6fd3;
-  transition: width 650ms ease;
+  transition: width 140ms linear;
 }
 
 .admin-progress__value {

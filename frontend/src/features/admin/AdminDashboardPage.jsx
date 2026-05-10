@@ -91,6 +91,7 @@ function AdminDashboardPage() {
   const [errorMessage, setErrorMessage] = useState('')
   const [lastUploadSummary, setLastUploadSummary] = useState(null)
   const [uploadProgress, setUploadProgress] = useState(null)
+  const [displayedUploadProgressPercent, setDisplayedUploadProgressPercent] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [isUploading, setIsUploading] = useState(false)
   const [isUploadDragActive, setIsUploadDragActive] = useState(false)
@@ -122,7 +123,7 @@ function AdminDashboardPage() {
 
   const totalChunks = documents.reduce((sum, document) => sum + (document.chunkCount ?? 0), 0)
   const isPromptDirty = systemPrompt !== (promptConfig?.systemPrompt ?? '')
-  const uploadProgressPercent = clampPercent(uploadProgress?.percent ?? 0)
+  const uploadProgressTargetPercent = clampPercent(uploadProgress?.percent ?? 0)
 
   const loadDashboard = async ({ silent = false, throwOnError = false } = {}) => {
     if (!silent) {
@@ -180,6 +181,27 @@ function AdminDashboardPage() {
     loadDashboard()
     loadPromptConfig()
   }, [])
+
+  useEffect(() => {
+    if (!isUploading) {
+      setDisplayedUploadProgressPercent(0)
+      return undefined
+    }
+
+    const intervalId = window.setInterval(() => {
+      setDisplayedUploadProgressPercent((currentPercent) => {
+        if (currentPercent === uploadProgressTargetPercent) {
+          return currentPercent
+        }
+        if (currentPercent < uploadProgressTargetPercent) {
+          return Math.min(currentPercent + 1, uploadProgressTargetPercent)
+        }
+        return uploadProgressTargetPercent
+      })
+    }, 45)
+
+    return () => window.clearInterval(intervalId)
+  }, [isUploading, uploadProgressTargetPercent])
 
   useEffect(() => {
     if (!hasProcessingDocuments || isUploading) return undefined
@@ -709,12 +731,12 @@ function AdminDashboardPage() {
               role="progressbar"
               aria-valuemin="0"
               aria-valuemax="100"
-              aria-valuenow={uploadProgressPercent}
+              aria-valuenow={displayedUploadProgressPercent}
               aria-label="문서 처리 진행률"
             >
-              <span style={{ width: `${uploadProgressPercent}%` }} />
+              <span style={{ width: `${displayedUploadProgressPercent}%` }} />
             </div>
-            <small className="admin-progress__value">{uploadProgressPercent}%</small>
+            <small className="admin-progress__value">{displayedUploadProgressPercent}%</small>
           </section>
         </div>
       )}
