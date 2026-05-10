@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,8 +47,8 @@ public class ChatService {
     // Spring Boot가 자동 설정한 ObjectMapper 빈을 주입해 Jackson 전역 설정을 공유
     private final ObjectMapper objectMapper;
 
-    // 기본 Top-K 값. FastAPI 기본값과 동기화
-    private static final int DEFAULT_TOP_K = 5;
+    @Value("${chat.default-top-k:3}")
+    private int defaultTopK;
 
     /**
      * 일반 질의응답을 처리하고 질문·답변·출처를 채팅 이력에 저장한다.
@@ -67,7 +68,7 @@ public class ChatService {
         chatMessageRepository.save(message);
 
         // 3. FastAPI RAG 파이프라인 호출
-        int topK = request.getTopK() != null ? request.getTopK() : DEFAULT_TOP_K;
+        int topK = request.getTopK() != null ? request.getTopK() : defaultTopK;
         String systemPrompt = promptConfigService.getCurrent().getSystemPrompt();
         FastApiQueryResponse fastApiResponse = fastApiClient.query(request.getQuestion(), topK, systemPrompt);
         List<Map<String, Object>> enrichedSources = sourceDocumentMetadataEnricher.enrich(fastApiResponse.getSources());
@@ -300,7 +301,7 @@ public class ChatService {
      * @param command 사용자 질문, 소유자 식별 정보, 검색 개수, SSE emitter를 담은 요청 객체
      */
     public void streamChat(ChatStreamCommand command) {
-        int resolvedTopK = command.topK() != null ? command.topK() : DEFAULT_TOP_K;
+        int resolvedTopK = command.topK() != null ? command.topK() : defaultTopK;
 
         ChatSession session = getOrCreateSession(command.question(), command.userId(), command.sessionKey());
         ChatMessage message = ChatMessage.create(session, command.question());

@@ -18,15 +18,18 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.core.io.Resource;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -177,11 +180,13 @@ class DocumentManagementTest {
 
         assertEquals(7, response.getChunkCount());
         assertEquals("report.pdf", response.getOriginalName());
+        assertEquals(DocumentProcessingStatus.READY, response.getProcessingStatus());
         assertNotNull(response.getProcessingDurationMs());
         assertTrue(response.getProcessingDurationMs() >= 0);
 
         Document uploaded = documentRepository.findById(response.getDocumentId()).orElseThrow();
         assertEquals(7, uploaded.getChunkCount());
+        assertEquals(DocumentProcessingStatus.READY, uploaded.getProcessingStatus());
         assertNotNull(uploaded.getProcessingDurationMs());
     }
 
@@ -203,6 +208,30 @@ class DocumentManagementTest {
                 .orElseThrow();
         assertEquals(category.getId(), uploadedResponse.getCategoryId());
         assertEquals("학사", uploadedResponse.getCategoryName());
+    }
+
+    @Test
+    @DisplayName("문서 업로드 - 비동기 모드에서는 PROCESSING 상태를 즉시 반환하고 백그라운드에서 완료한다")
+    void upload_asyncProcessingReturnsImmediately() throws InterruptedException {
+        ReflectionTestUtils.setField(documentService, "asyncProcessingEnabled", true);
+        when(fastApiClient.uploadDocument(any(Resource.class), eq("async.pdf"), anyLong()))
+                .thenAnswer(invocation -> {
+                    Thread.sleep(100);
+                    return new FastApiUploadResponse("success", "async.pdf", 5);
+                });
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "async.pdf", "application/pdf", new byte[100]
+        );
+
+        DocumentUploadResponse response = documentService.upload(file, ADMIN_USERNAME);
+
+        assertEquals(DocumentProcessingStatus.PROCESSING, response.getProcessingStatus());
+        assertEquals(0, response.getChunkCount());
+        assertNull(response.getProcessingDurationMs());
+
+        Document completed = waitForStatus(response.getDocumentId(), DocumentProcessingStatus.READY);
+        assertEquals(5, completed.getChunkCount());
+        assertNotNull(completed.getProcessingDurationMs());
     }
 
     @Test
@@ -228,6 +257,18 @@ class DocumentManagementTest {
         CustomException ex = assertThrows(CustomException.class,
                 () -> documentService.upload(file, ADMIN_USERNAME));
         assertEquals(ErrorCode.INVALID_FILE_TYPE, ex.getErrorCode());
+    }
+
+    private Document waitForStatus(Long documentId, DocumentProcessingStatus expectedStatus) throws InterruptedException {
+        for (int i = 0; i < 40; i++) {
+            Document document = documentRepository.findById(documentId).orElseThrow();
+            if (document.getProcessingStatus() == expectedStatus) {
+                return document;
+            }
+            Thread.sleep(50);
+        }
+        fail("문서 상태가 제한 시간 안에 " + expectedStatus + "(으)로 바뀌지 않았습니다.");
+        throw new IllegalStateException("unreachable");
     }
 
     @Test

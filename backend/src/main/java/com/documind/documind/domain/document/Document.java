@@ -60,6 +60,11 @@ public class Document {
     @Column
     private Long processingDurationMs;
 
+    // 문서 색인 처리 상태. 기존 데이터는 null일 수 있으므로 응답 변환 시 READY로 보정한다.
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private DocumentProcessingStatus processingStatus;
+
     // 논리삭제 플래그. 물리삭제 대신 is_active=false로 비활성화해 FK 무결성 보존
     @Column(nullable = false)
     private Boolean isActive = true;
@@ -104,6 +109,7 @@ public class Document {
         doc.fileSize = fileSize;
         doc.mimeType = mimeType;
         doc.chunkCount = 0;
+        doc.processingStatus = DocumentProcessingStatus.PROCESSING;
         doc.isActive = true;
         return doc;
     }
@@ -117,6 +123,17 @@ public class Document {
     public void completeProcessing(int chunkCount, long processingDurationMs) {
         this.chunkCount = chunkCount;
         this.processingDurationMs = processingDurationMs;
+        this.processingStatus = DocumentProcessingStatus.READY;
+    }
+
+    /**
+     * FastAPI 처리 실패 상태를 기록한다.
+     *
+     * @param processingDurationMs 실패까지 걸린 시간(ms)
+     */
+    public void failProcessing(long processingDurationMs) {
+        this.processingDurationMs = processingDurationMs;
+        this.processingStatus = DocumentProcessingStatus.FAILED;
     }
 
     /**

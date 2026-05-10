@@ -24,6 +24,8 @@ public class DocumentListResponse {
     private String categoryName;
     /** 문서 처리 완료까지 걸린 시간(ms). 기존 데이터나 처리 전 문서는 null */
     private Long processingDurationMs;
+    /** 문서 색인 처리 상태. 기존 데이터는 READY로 보정한다. */
+    private DocumentProcessingStatus processingStatus;
     private LocalDateTime createdAt;
 
     /** Document Entity를 DTO로 변환한다. */
@@ -37,7 +39,12 @@ public class DocumentListResponse {
                 .categoryId(document.getCategory() != null ? document.getCategory().getId() : null)
                 .categoryName(document.getCategory() != null ? document.getCategory().getName() : null)
                 .processingDurationMs(document.getProcessingDurationMs())
+                .processingStatus(resolveProcessingStatus(document))
                 .createdAt(document.getCreatedAt())
                 .build();
+    }
+
+    private static DocumentProcessingStatus resolveProcessingStatus(Document document) {
+        return document.getProcessingStatus() != null ? document.getProcessingStatus() : DocumentProcessingStatus.READY;
     }
 }

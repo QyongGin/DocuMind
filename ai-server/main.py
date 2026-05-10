@@ -4,8 +4,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_opendataloader_pdf import OpenDataLoaderPDFLoader
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-from langchain_ollama import OllamaEmbeddings, OllamaLLM
-from pydantic import BaseModel
+from langchain_ollama import OllamaLLM
+from ollama import Client
+from pydantic import BaseModel, Field
 import chromadb
 import tempfile
 import os
@@ -13,11 +14,45 @@ import re
 import json
 import asyncio
 import logging
-from langfuse_callback import get_langfuse_handler
+import math
+import time
+from threading import Lock
 
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="DocuMind AI Server", version="1.0.0")
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    """정수 환경변수를 읽되 범위를 벗어난 값이면 기본값으로 되돌린다."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning("%s=%s 값이 정수가 아니어서 기본값 %s를 사용합니다.", name, raw_value, default)
+        return default
+
+    if value < minimum:
+        logger.warning("%s=%s 값이 최소값 %s보다 작아서 기본값 %s를 사용합니다.", name, raw_value, minimum, default)
+        return default
+
+    return value
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    """boolean 환경변수를 읽는다."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
 
 # 환경변수로 로컬/Docker 환경 분기
 # 로컬: OLLAMA_BASE_URL 미설정 시 localhost 사용
@@ -25,54 +60,89 @@ app = FastAPI(title="DocuMind AI Server", version="1.0.0")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 # 환경변수로 LLM 모델명 분기. Docker: OLLAMA_LLM_MODEL=exaone3.5:7.8b
 OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "exaone3.5:7.8b")
-# 환경변수로 임베딩 모델명 분기. 배포 서버에서는 qwen3-embedding:8b 사용 가능
+# 환경변수로 임베딩 모델명 분기. VRAM이 작은 서버에서는 qwen3-embedding:4b를 우선 사용한다.
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:4b")
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+OLLAMA_EMBEDDING_WARMUP_ON_STARTUP = _env_bool("OLLAMA_EMBEDDING_WARMUP_ON_STARTUP")
+OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 4096)
+OLLAMA_NUM_PREDICT = _env_int("OLLAMA_NUM_PREDICT", 512)
+OLLAMA_NUM_THREAD = _env_int("OLLAMA_NUM_THREAD", 0, minimum=0) or None
+CHUNK_SIZE = _env_int("CHUNK_SIZE", 800, minimum=100)
+CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 50, minimum=0)
+CHUNK_MERGE_MIN_SIZE = _env_int("CHUNK_MERGE_MIN_SIZE", 300, minimum=0)
+EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 64)
+UPLOAD_READ_CHUNK_BYTES = _env_int("UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)
+DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 3)
 
-embeddings = OllamaEmbeddings(
-    model=OLLAMA_EMBEDDING_MODEL,
-    base_url=OLLAMA_BASE_URL
-)
+if CHUNK_OVERLAP >= CHUNK_SIZE:
+    logger.warning(
+        "CHUNK_OVERLAP=%s 값이 CHUNK_SIZE=%s 이상이라서 overlap을 0으로 조정합니다.",
+        CHUNK_OVERLAP,
+        CHUNK_SIZE
+    )
+    CHUNK_OVERLAP = 0
+
+ollama_client = Client(host=OLLAMA_BASE_URL)
 
 # 질의응답에 사용할 LLM. 임베딩 모델과 분리해 별도 관리
 llm = OllamaLLM(
     model=OLLAMA_LLM_MODEL,
-    base_url=OLLAMA_BASE_URL
+    base_url=OLLAMA_BASE_URL,
+    keep_alive=OLLAMA_KEEP_ALIVE,
+    num_ctx=OLLAMA_NUM_CTX,
+    num_predict=OLLAMA_NUM_PREDICT,
+    num_thread=OLLAMA_NUM_THREAD
 )
 
 # 환경변수로 ChromaDB 모드 분기
 # 로컬: CHROMA_HOST 미설정 시 in-process PersistentClient 사용
 # Docker: CHROMA_HOST=chromadb 설정 시 서버 모드 HttpClient 사용
 CHROMA_HOST = os.getenv("CHROMA_HOST")
+CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
 if CHROMA_HOST:
-    client = chromadb.HttpClient(host=CHROMA_HOST, port=8000)
+    client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
 else:
     client = chromadb.PersistentClient(path="./chroma_db")
 
 collection = client.get_or_create_collection("documents")
+
+_progress_lock = Lock()
+_document_progress: dict[int, dict] = {}
+
+logger.info(
+    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s chroma_host=%s chroma_port=%s",
+    OLLAMA_BASE_URL,
+    OLLAMA_LLM_MODEL,
+    OLLAMA_EMBEDDING_MODEL,
+    OLLAMA_KEEP_ALIVE,
+    OLLAMA_EMBEDDING_WARMUP_ON_STARTUP,
+    OLLAMA_NUM_CTX,
+    OLLAMA_NUM_PREDICT,
+    OLLAMA_NUM_THREAD or "auto",
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    CHUNK_MERGE_MIN_SIZE,
+    EMBEDDING_BATCH_SIZE,
+    DEFAULT_TOP_K,
+    CHROMA_HOST or "persistent",
+    CHROMA_PORT
+)
 
 # Two-Pass 청킹 설정
 # 1단계: 마크다운 헤더(#, ##, ###) 경계에서 분할, 헤더 경로를 메타데이터로 자동 부여
 _MD_HEADERS = [("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")]
 _md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_MD_HEADERS)
 
-# 2단계: 500자 초과 청크만 재분할. 내장 overlap은 서로 다른 헤더 구간 간 미적용 버그가
+# 2단계: CHUNK_SIZE 초과 청크만 재분할. 내장 overlap은 서로 다른 헤더 구간 간 미적용 버그가
 # 있으므로 0으로 두고 수동 후처리(_apply_overlap)로 대체한다.
 _char_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=500,
+    chunk_size=CHUNK_SIZE,
     chunk_overlap=0,
     length_function=len
 )
 
 # 허용 파일 확장자. Spring Boot DocumentService와 동기화 필요
 ALLOWED_EXTENSIONS = {"pdf", "docx", "pptx", "xlsx"}
-
-# LANGFUSE_SECRET_KEY 설정 시 Langfuse 클라이언트를 초기화한다.
-# 미설정 시 None으로 유지해 트레이싱 없이 파이프라인이 실행된다.
-_langfuse = None
-if os.getenv("LANGFUSE_SECRET_KEY"):
-    from langfuse import Langfuse
-    _langfuse = Langfuse()
-
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -199,7 +269,7 @@ def _two_pass_split(full_text: str) -> list[Document]:
     Two-Pass 청킹: MarkdownHeaderTextSplitter → RecursiveCharacterTextSplitter.
 
     1단계: 헤더 경계에서 분할해 헤더 경로 메타데이터를 부여한다.
-    2단계: 500자 초과 청크만 char_splitter로 재분할한다.
+    2단계: CHUNK_SIZE 초과 청크만 char_splitter로 재분할한다.
            split_documents()는 부모 Document의 metadata를 자식에게 복사하므로
            1단계 헤더 메타데이터가 유지된다.
     """
@@ -207,7 +277,7 @@ def _two_pass_split(full_text: str) -> list[Document]:
 
     result: list[Document] = []
     for doc in header_chunks:
-        if len(doc.page_content) > 500:
+        if len(doc.page_content) > CHUNK_SIZE:
             sub_docs = _char_splitter.split_documents([doc])
             result.extend(sub_docs)
         else:
@@ -216,18 +286,102 @@ def _two_pass_split(full_text: str) -> list[Document]:
     return result
 
 
+def _combine_chunk_documents(docs: list[Document]) -> Document:
+    """
+    인접한 짧은 청크를 하나로 합친다.
+    서로 다른 헤더 metadata가 섞이면 공통으로 같은 값만 유지해 위치 정보를 과장하지 않는다.
+    """
+    page_content = "\n\n".join(doc.page_content for doc in docs if doc.page_content)
+    common_metadata: dict = {}
+    if docs:
+        first_metadata = docs[0].metadata
+        for key, value in first_metadata.items():
+            if all(doc.metadata.get(key) == value for doc in docs[1:]):
+                common_metadata[key] = value
+
+    common_metadata["merged_chunk_count"] = len(docs)
+    return Document(page_content=page_content, metadata=common_metadata)
+
+
+def _set_document_progress(document_id: int | None, percent: int, stage: str, message: str, status: str = "processing") -> None:
+    """문서 처리 진행률을 메모리에 기록한다."""
+    if document_id is None:
+        return
+
+    normalized_percent = max(0, min(100, int(percent)))
+    progress = {
+        "document_id": document_id,
+        "percent": normalized_percent,
+        "stage": stage,
+        "message": message,
+        "status": status,
+        "updated_at": time.time(),
+    }
+    with _progress_lock:
+        _document_progress[document_id] = progress
+
+
+def _get_document_progress(document_id: int) -> dict:
+    """문서 처리 진행률을 조회한다."""
+    with _progress_lock:
+        progress = _document_progress.get(document_id)
+        if progress is None:
+            return {
+                "document_id": document_id,
+                "percent": 0,
+                "stage": "unknown",
+                "message": "진행 정보를 준비 중입니다.",
+                "status": "unknown",
+                "updated_at": time.time(),
+            }
+        return dict(progress)
+
+
+def _merge_short_chunks(docs: list[Document]) -> list[Document]:
+    """
+    너무 짧은 인접 청크를 CHUNK_SIZE를 넘지 않는 범위에서 병합한다.
+    LlamaIndex ingestion pipeline의 node 관리처럼 embedding 대상 수를 줄이는 목적이다.
+    """
+    if CHUNK_MERGE_MIN_SIZE <= 0:
+        return docs
+
+    merged: list[Document] = []
+    buffer: list[Document] = []
+    buffer_length = 0
+
+    for doc in docs:
+        doc_length = len(doc.page_content)
+        next_length = buffer_length + (2 if buffer else 0) + doc_length
+
+        if buffer and (buffer_length >= CHUNK_MERGE_MIN_SIZE or next_length > CHUNK_SIZE):
+            merged.append(_combine_chunk_documents(buffer))
+            buffer = []
+            buffer_length = 0
+
+        buffer.append(doc)
+        buffer_length += (2 if buffer_length else 0) + doc_length
+
+    if buffer:
+        merged.append(_combine_chunk_documents(buffer))
+
+    return merged
+
+
 def _apply_overlap(docs: list[Document]) -> list[Document]:
     """
-    이전 청크 마지막 50글자를 다음 청크 앞에 prepend하는 수동 overlap 후처리.
+    이전 청크 마지막 CHUNK_OVERLAP 글자를 다음 청크 앞에 prepend하는 수동 overlap 후처리.
     RecursiveCharacterTextSplitter의 내장 overlap은 서로 다른 헤더 구간 간에
     작동하지 않으므로 전체 청크 리스트에 수동으로 적용한다.
     """
+    if CHUNK_OVERLAP <= 0:
+        return docs
+
     overlapped: list[Document] = []
     for i, doc in enumerate(docs):
         if i == 0:
             overlapped.append(doc)
         else:
-            overlap_text = docs[i - 1].page_content[-50:]
+            overlap_text = docs[i - 1].page_content[-CHUNK_OVERLAP:]
             overlapped.append(Document(
                 page_content=overlap_text + "\n" + doc.page_content,
                 metadata=doc.metadata
@@ -235,65 +389,251 @@ def _apply_overlap(docs: list[Document]) -> list[Document]:
     return overlapped
 
 
+def _build_chunk_metadata(doc: Document, filename: str, document_id: int, chunk_index: int, page_lookup: list[dict]) -> dict:
+    """
+    ChromaDB에 저장할 청크 metadata를 만든다.
+    Header metadata와 페이지 추정값을 함께 보존한다.
+    """
+    metadata: dict = {
+        "document_id": str(document_id),
+        "source": filename,
+        "chunk_index": chunk_index,
+    }
+    page_start, page_end = _resolve_page_range(doc.page_content, page_lookup)
+    if page_start is not None:
+        metadata["page"] = page_start
+        metadata["page_start"] = page_start
+        metadata["page_end"] = page_end if page_end is not None else page_start
+    for key, value in doc.metadata.items():
+        if isinstance(value, (str, int, float, bool)):
+            metadata[key] = value
+
+    return metadata
+
+
+def _ollama_embedding_options() -> dict:
+    """Ollama embed API에 전달할 runtime options를 만든다."""
+    options = {"num_ctx": OLLAMA_NUM_CTX}
+    if OLLAMA_NUM_THREAD is not None:
+        options["num_thread"] = OLLAMA_NUM_THREAD
+    return options
+
+
+def _seconds_from_nanos(value: int | None) -> float | None:
+    """Ollama가 반환한 nanosecond duration을 초 단위로 바꾼다."""
+    return value / 1_000_000_000 if value is not None else None
+
+
+def _format_seconds(value: float | None) -> str:
+    """로그에 남길 duration 문자열을 만든다."""
+    return f"{value:.2f}s" if value is not None else "n/a"
+
+
+def _embed_texts(texts: list[str]) -> tuple[list[list[float]], dict]:
+    """
+    Ollama embed API로 batch embedding을 수행하고 duration metadata를 함께 반환한다.
+    LangChain wrapper가 숨기는 total/load/prompt timing을 로그 분석에 사용한다.
+    """
+    response = ollama_client.embed(
+        model=OLLAMA_EMBEDDING_MODEL,
+        input=texts,
+        options=_ollama_embedding_options(),
+        keep_alive=OLLAMA_KEEP_ALIVE,
+    )
+    response_data = response.model_dump()
+    return response_data["embeddings"], response_data
+
+
+def _warm_up_embedding_model() -> None:
+    """첫 사용자 업로드가 Ollama cold load 시간을 떠안지 않도록 임베딩 모델을 미리 로딩한다."""
+    started = time.perf_counter()
+    response = ollama_client.embed(
+        model=OLLAMA_EMBEDDING_MODEL,
+        input=["warmup"],
+        options=_ollama_embedding_options(),
+        keep_alive=OLLAMA_KEEP_ALIVE,
+    )
+    elapsed = time.perf_counter() - started
+    response_data = response.model_dump()
+    logger.info(
+        "[startup_embedding_warmup_done] model=%s wall=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s prompt_eval_count=%s",
+        OLLAMA_EMBEDDING_MODEL,
+        elapsed,
+        _format_seconds(_seconds_from_nanos(response_data.get("total_duration"))),
+        _format_seconds(_seconds_from_nanos(response_data.get("load_duration"))),
+        _format_seconds(_seconds_from_nanos(response_data.get("prompt_eval_duration"))),
+        response_data.get("prompt_eval_count", "n/a"),
+    )
+
+
+@app.on_event("startup")
+async def warm_up_embedding_model_on_startup() -> None:
+    """옵션이 켜져 있으면 앱 시작 시 임베딩 모델 로딩까지 완료한다."""
+    if not OLLAMA_EMBEDDING_WARMUP_ON_STARTUP:
+        return
+
+    logger.info(
+        "[startup_embedding_warmup] model=%s keep_alive=%s",
+        OLLAMA_EMBEDDING_MODEL,
+        OLLAMA_KEEP_ALIVE,
+    )
+    await asyncio.to_thread(_warm_up_embedding_model)
+
+
+def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float]:
+    """
+    문서 청크를 batch embedding 후 ChromaDB에 batch 저장한다.
+    청크별 HTTP 호출을 피하기 위해 EMBEDDING_BATCH_SIZE 단위로 묶어 처리한다.
+    """
+    page_match_elapsed = 0.0
+    embedding_elapsed = 0.0
+    chroma_elapsed = 0.0
+    total_chunks = len(final_docs)
+    if total_chunks == 0:
+        return page_match_elapsed, embedding_elapsed, chroma_elapsed
+
+    for start in range(0, len(final_docs), EMBEDDING_BATCH_SIZE):
+        batch_number = start // EMBEDDING_BATCH_SIZE + 1
+        total_batches = math.ceil(len(final_docs) / EMBEDDING_BATCH_SIZE)
+        batch_docs = final_docs[start:start + EMBEDDING_BATCH_SIZE]
+        batch_ids = [f"{document_id}_{start + offset}" for offset in range(len(batch_docs))]
+        batch_texts = [doc.page_content for doc in batch_docs]
+
+        metadata_start = time.perf_counter()
+        batch_metadatas = [
+            _build_chunk_metadata(doc, filename, document_id, start + offset, page_lookup)
+            for offset, doc in enumerate(batch_docs)
+        ]
+        page_match_elapsed += time.perf_counter() - metadata_start
+
+        embedding_start = time.perf_counter()
+        _set_document_progress(
+            document_id,
+            30 + round((start / total_chunks) * 60),
+            "embedding",
+            f"임베딩 중입니다. ({start}/{total_chunks} chunks)"
+        )
+        logger.info(
+            "[upload_embed] document_id=%s batch=%s/%s chunks=%s model=%s num_thread=%s",
+            document_id,
+            batch_number,
+            total_batches,
+            len(batch_docs),
+            OLLAMA_EMBEDDING_MODEL,
+            OLLAMA_NUM_THREAD or "auto"
+        )
+        batch_vectors, embed_metadata = _embed_texts(batch_texts)
+        batch_embedding_elapsed = time.perf_counter() - embedding_start
+        embedding_elapsed += batch_embedding_elapsed
+        ollama_total = _seconds_from_nanos(embed_metadata.get("total_duration"))
+        ollama_load = _seconds_from_nanos(embed_metadata.get("load_duration"))
+        ollama_prompt_eval = _seconds_from_nanos(embed_metadata.get("prompt_eval_duration"))
+        logger.info(
+            "[upload_embed_done] document_id=%s batch=%s/%s wall=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s prompt_eval_count=%s",
+            document_id,
+            batch_number,
+            total_batches,
+            batch_embedding_elapsed,
+            _format_seconds(ollama_total),
+            _format_seconds(ollama_load),
+            _format_seconds(ollama_prompt_eval),
+            embed_metadata.get("prompt_eval_count")
+        )
+
+        chroma_start = time.perf_counter()
+        collection.add(
+            ids=batch_ids,
+            embeddings=batch_vectors,
+            documents=batch_texts,
+            metadatas=batch_metadatas
+        )
+        chroma_elapsed += time.perf_counter() - chroma_start
+        completed_chunks = min(start + len(batch_docs), total_chunks)
+        _set_document_progress(
+            document_id,
+            30 + round((completed_chunks / total_chunks) * 60),
+            "embedding",
+            f"임베딩과 벡터 저장을 진행 중입니다. ({completed_chunks}/{total_chunks} chunks)"
+        )
+
+    return page_match_elapsed, embedding_elapsed, chroma_elapsed
+
+
 async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -> int:
     """문서 전처리 파이프라인: 로딩 → 정규화 → Two-Pass 청킹 → overlap → 임베딩 → ChromaDB 저장"""
 
-    async def _execute() -> int:
+    def _execute() -> int:
+        total_start = time.perf_counter()
+        _set_document_progress(document_id, 8, "parse", "문서를 파싱하고 있습니다.")
+
         # 파서 분기: 확장자에 따라 PDF 또는 Docling 로더 사용
+        parse_start = time.perf_counter()
         raw_docs = _load_documents(tmp_path, filename)
+        parse_elapsed = time.perf_counter() - parse_start
+        _set_document_progress(document_id, 18, "parse", "문서 파싱을 완료했습니다.")
+
+        page_lookup_start = time.perf_counter()
         page_lookup = _build_page_lookup(raw_docs)
+        page_lookup_elapsed = time.perf_counter() - page_lookup_start
+        _set_document_progress(document_id, 22, "page_lookup", "페이지 정보를 분석하고 있습니다.")
 
         # 전체 텍스트 병합 후 정규화
+        normalize_start = time.perf_counter()
         full_text = "\n".join([doc.page_content for doc in raw_docs])
         full_text = _normalize_text(full_text)
+        normalize_elapsed = time.perf_counter() - normalize_start
+        _set_document_progress(document_id, 25, "normalize", "문서 텍스트를 정리했습니다.")
 
         # Two-Pass 청킹 + 수동 overlap 후처리
+        split_start = time.perf_counter()
         split_docs = _two_pass_split(full_text)
-        final_docs = _apply_overlap(split_docs)
+        split_elapsed = time.perf_counter() - split_start
+        _set_document_progress(document_id, 28, "chunking", "문서를 청크로 나누고 있습니다.")
 
-        # 임베딩 + ChromaDB 저장
-        for i, doc in enumerate(final_docs):
-            vector = embeddings.embed_query(doc.page_content)
+        merge_start = time.perf_counter()
+        merged_docs = _merge_short_chunks(split_docs)
+        merge_elapsed = time.perf_counter() - merge_start
 
-            # 헤더 메타데이터(Header 1, Header 2 등) + 문서 식별 메타데이터 병합
-            # ChromaDB는 str/int/float/bool 타입만 허용하므로 필터링한다
-            metadata: dict = {
-                "document_id": str(document_id),
-                "source": filename,
-                "chunk_index": i,
-            }
-            page_start, page_end = _resolve_page_range(doc.page_content, page_lookup)
-            if page_start is not None:
-                metadata["page"] = page_start
-                metadata["page_start"] = page_start
-                metadata["page_end"] = page_end if page_end is not None else page_start
-            for k, v in doc.metadata.items():
-                if isinstance(v, (str, int, float, bool)):
-                    metadata[k] = v
+        overlap_start = time.perf_counter()
+        final_docs = _apply_overlap(merged_docs)
+        overlap_elapsed = time.perf_counter() - overlap_start
+        _set_document_progress(document_id, 30, "chunking", f"청킹을 완료했습니다. ({len(final_docs)} chunks)")
 
-            collection.add(
-                ids=[f"{document_id}_{i}"],
-                embeddings=[vector],
-                documents=[doc.page_content],
-                metadatas=[metadata]
-            )
-
+        # 임베딩 + ChromaDB 저장. 청크별 호출 대신 batch 단위로 처리해 HTTP 왕복과 저장 오버헤드를 줄인다.
+        page_match_elapsed, embedding_elapsed, chroma_elapsed = _store_document_chunks(
+            final_docs,
+            filename,
+            document_id,
+            page_lookup
+        )
+        _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
+        total_elapsed = time.perf_counter() - total_start
+        logger.info(
+            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s merged_chunks=%s chunks=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            document_id,
+            filename,
+            len(raw_docs),
+            len(split_docs),
+            len(merged_docs),
+            len(final_docs),
+            CHUNK_SIZE,
+            CHUNK_OVERLAP,
+            CHUNK_MERGE_MIN_SIZE,
+            EMBEDDING_BATCH_SIZE,
+            parse_elapsed,
+            page_lookup_elapsed,
+            normalize_elapsed,
+            split_elapsed,
+            merge_elapsed,
+            overlap_elapsed,
+            page_match_elapsed,
+            embedding_elapsed,
+            chroma_elapsed,
+            total_elapsed
+        )
         return len(final_docs)
 
-    # Langfuse 4.x: start_as_current_observation()은 async context manager로 동작한다
-    # _langfuse가 None이면 트레이싱 없이 파이프라인을 그대로 실행한다
-    if _langfuse:
-        with _langfuse.start_as_current_observation(
-            name="document-upload-pipeline",
-            as_type="chain",
-            metadata={"document_id": document_id, "filename": filename}
-        ):
-            chunk_count = await _execute()
-            _langfuse.set_current_trace_io(output={"chunks": chunk_count})
-            _langfuse.flush()
-            return chunk_count
-    else:
-        return await _execute()
+    return await asyncio.to_thread(_execute)
 
 
 @app.post("/documents")
@@ -301,7 +641,9 @@ async def upload_document(
     file: UploadFile = File(...),
     document_id: int = Form(None)
 ):
-    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    _set_document_progress(document_id, 0, "upload", "파일 업로드를 준비하고 있습니다.")
+    filename = file.filename or "upload"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
@@ -309,26 +651,49 @@ async def upload_document(
         )
 
     # 확장자를 임시 파일 suffix로 사용해야 파서가 형식을 올바르게 인식한다
+    file_save_start = time.perf_counter()
+    bytes_written = 0
     with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
-        content = await file.read()
-        tmp.write(content)
         tmp_path = tmp.name
+        while chunk := await file.read(UPLOAD_READ_CHUNK_BYTES):
+            tmp.write(chunk)
+            bytes_written += len(chunk)
+
+    _set_document_progress(document_id, 5, "upload", "파일 저장을 완료했습니다.")
+    logger.info(
+        "[upload_file] document_id=%s filename=%s bytes=%s chunk_bytes=%s save=%.2fs",
+        document_id,
+        filename,
+        bytes_written,
+        UPLOAD_READ_CHUNK_BYTES,
+        time.perf_counter() - file_save_start
+    )
 
     try:
-        chunk_count = await _run_upload_pipeline(tmp_path, file.filename, document_id)
+        chunk_count = await _run_upload_pipeline(tmp_path, filename, document_id)
+        _set_document_progress(document_id, 100, "completed", "문서 처리가 완료되었습니다.", status="completed")
         return {
             "status": "success",
-            "filename": file.filename,
+            "filename": filename,
             "chunks": chunk_count
         }
+    except Exception:
+        _set_document_progress(document_id, 100, "failed", "문서 처리에 실패했습니다.", status="failed")
+        raise
     finally:
         os.unlink(tmp_path)
+
+
+@app.get("/documents/{document_id}/progress")
+def document_progress(document_id: int):
+    """문서 처리 진행률을 반환한다."""
+    return _get_document_progress(document_id)
 
 
 # 질의응답 요청 스키마. Pydantic BaseModel로 JSON body를 자동 파싱·검증
 class QueryRequest(BaseModel):
     question: str
-    top_k: int = 5  # 검색할 유사 청크 수. 기본값 5
+    top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=20)  # 검색할 유사 청크 수
     system_prompt: str | None = None  # Spring Boot 관리자 프롬프트 설정. 미전달 시 기본값 사용
 
 
@@ -342,18 +707,38 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     질문 임베딩 → ChromaDB 검색 → 프롬프트 + 출처 조합.
     문서가 없으면 (None, []) 반환. 호출자가 빈 응답 처리를 담당한다.
     """
-    question_vector = embeddings.embed_query(question)
+    prepare_start = time.perf_counter()
+    embedding_start = time.perf_counter()
+    question_vectors, embed_metadata = _embed_texts([question])
+    question_vector = question_vectors[0]
+    embedding_elapsed = time.perf_counter() - embedding_start
+    ollama_total = _seconds_from_nanos(embed_metadata.get("total_duration"))
+    ollama_load = _seconds_from_nanos(embed_metadata.get("load_duration"))
+    ollama_prompt_eval = _seconds_from_nanos(embed_metadata.get("prompt_eval_duration"))
+
+    chroma_start = time.perf_counter()
     results = collection.query(
         query_embeddings=[question_vector],
         n_results=top_k,
         include=["documents", "metadatas", "distances"]
     )
+    chroma_elapsed = time.perf_counter() - chroma_start
 
     docs = results["documents"][0] if results["documents"] else []
     metadatas = results["metadatas"][0] if results["metadatas"] else []
     ids = results["ids"][0] if results["ids"] else []
 
     if not docs:
+        logger.info(
+            "[query_prepare] top_k=%s docs=0 embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs total=%.2fs",
+            top_k,
+            embedding_elapsed,
+            _format_seconds(ollama_total),
+            _format_seconds(ollama_load),
+            _format_seconds(ollama_prompt_eval),
+            chroma_elapsed,
+            time.perf_counter() - prepare_start
+        )
         return None, []
 
     context = "\n\n".join(docs)
@@ -391,6 +776,18 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
                 source[k] = v
         sources.append(source)
 
+    logger.info(
+        "[query_prepare] top_k=%s docs=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs total=%.2fs",
+        top_k,
+        len(docs),
+        len(prompt),
+        embedding_elapsed,
+        _format_seconds(ollama_total),
+        _format_seconds(ollama_load),
+        _format_seconds(ollama_prompt_eval),
+        chroma_elapsed,
+        time.perf_counter() - prepare_start
+    )
     return prompt, sources
 
 
@@ -465,6 +862,7 @@ async def query_document(request: QueryRequest):
     1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query)
     2. EXAONE LLM 비동기 호출 → 답변 반환
     """
+    query_start = time.perf_counter()
     # _prepare_query는 embed_query·Chroma 조회가 모두 동기 블로킹이다.
     # async 핸들러에서 직접 호출하면 이벤트 루프가 묶여 다른 요청이 대기하므로
     # asyncio.to_thread()로 별도 스레드에서 실행한다.
@@ -479,7 +877,17 @@ async def query_document(request: QueryRequest):
         return {"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
 
     # async 핸들러에서 ainvoke()로 이벤트 루프 블로킹 방지
+    llm_start = time.perf_counter()
     answer = await llm.ainvoke(prompt)
+    llm_elapsed = time.perf_counter() - llm_start
+    logger.info(
+        "[query] top_k=%s sources=%s prompt_chars=%s llm=%.2fs total=%.2fs",
+        request.top_k,
+        len(sources),
+        len(prompt),
+        llm_elapsed,
+        time.perf_counter() - query_start
+    )
 
     return {"answer": answer, "sources": sources}
 
@@ -493,6 +901,7 @@ async def query_stream(request: QueryRequest):
     3. 완료 시 sources 포함 done 이벤트 전송
     클라이언트 연결 종료 시 asyncio.CancelledError로 자동 중단된다.
     """
+    stream_start = time.perf_counter()
     prompt, sources = await asyncio.to_thread(
         _prepare_query,
         request.question,
@@ -515,10 +924,30 @@ async def query_stream(request: QueryRequest):
         )
 
     async def token_stream():
+        first_token_elapsed = None
+        chunk_count = 0
         try:
             async for chunk in llm.astream(prompt):
                 if chunk:
+                    if first_token_elapsed is None:
+                        first_token_elapsed = time.perf_counter() - stream_start
+                        logger.info(
+                            "[query_stream] first_token top_k=%s sources=%s prompt_chars=%s first_token=%.2fs",
+                            request.top_k,
+                            len(sources),
+                            len(prompt),
+                            first_token_elapsed
+                        )
+                    chunk_count += 1
                     yield f"data: {json.dumps({'token': chunk}, ensure_ascii=False)}\n\n"
+            logger.info(
+                "[query_stream] done top_k=%s sources=%s chunks=%s first_token=%s total=%.2fs",
+                request.top_k,
+                len(sources),
+                chunk_count,
+                f"{first_token_elapsed:.2f}s" if first_token_elapsed is not None else "none",
+                time.perf_counter() - stream_start
+            )
             # 정상 완료 시 출처 포함 done 이벤트 전송
             yield f"data: {json.dumps({'done': True, 'sources': sources}, ensure_ascii=False)}\n\n"
         except asyncio.CancelledError:

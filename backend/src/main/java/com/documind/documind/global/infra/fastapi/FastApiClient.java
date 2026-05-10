@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.http.codec.ServerSentEvent;
@@ -43,11 +44,27 @@ public class FastApiClient {
 
     // PDF 파일과 document_id를 FastAPI에 전송해 청킹·임베딩·저장을 요청
     public FastApiUploadResponse uploadDocument(MultipartFile file, Long documentId) {
+        return uploadDocument(
+                file.getResource(),
+                Objects.requireNonNullElse(file.getOriginalFilename(), "upload"),
+                documentId
+        );
+    }
+
+    /**
+     * 파일 Resource와 document_id를 FastAPI에 전송해 청킹·임베딩·저장을 요청한다.
+     *
+     * @param fileResource     FastAPI에 전달할 파일 Resource
+     * @param originalFilename multipart filename으로 전달할 원본 파일명
+     * @param documentId       MySQL documents PK
+     * @return FastAPI 문서 처리 결과
+     */
+    public FastApiUploadResponse uploadDocument(Resource fileResource, String originalFilename, Long documentId) {
         // MultipartBodyBuilder: multipart/form-data 파트를 생성하고 boundary는 WebClient가 자동 생성
         MultipartBodyBuilder body = new MultipartBodyBuilder();
-        // MultipartFile#getResource(): 파일 전체를 힙에 올리지 않고 Resource로 전달
-        body.part("file", file.getResource())
-                .filename(Objects.requireNonNullElse(file.getOriginalFilename(), "upload"));
+        // Resource 기반 전송: 파일 전체를 힙에 올리지 않고 multipart writer가 스트리밍 처리한다
+        body.part("file", fileResource)
+                .filename(Objects.requireNonNullElse(originalFilename, "upload"));
         // FastAPI Form 필드는 문자열로 수신 후 int로 자동 변환함
         body.part("document_id", documentId.toString());
 
@@ -185,6 +202,36 @@ public class FastApiClient {
             throw new CustomException(ErrorCode.FASTAPI_TIMEOUT);
         } catch (RuntimeException e) {
             log.warn("FastAPI GET /documents/{}/chunks 호출 실패", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_QUERY_FAILED);
+        }
+    }
+
+    /**
+     * FastAPI에서 진행 중인 문서 처리 progress를 조회한다.
+     *
+     * @param documentId 조회할 문서의 PK
+     * @return 문서 처리 진행률
+     */
+    public FastApiDocumentProgressResponse getDocumentProgress(Long documentId) {
+        try {
+            FastApiDocumentProgressResponse response = blockingWebClient.get()
+                    .uri("/documents/{id}/progress", documentId)
+                    .retrieve()
+                    .bodyToMono(FastApiDocumentProgressResponse.class)
+                    .block(responseTimeout);
+            return Objects.requireNonNull(response, "FastAPI /documents/{id}/progress 응답이 null입니다.");
+        } catch (WebClientResponseException.ServiceUnavailable e) {
+            log.warn("FastAPI GET /documents/{}/progress 서비스 불가", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_UNAVAILABLE);
+        } catch (WebClientRequestException e) {
+            log.warn("FastAPI GET /documents/{}/progress 연결 실패", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_CONNECTION_FAILED);
+        } catch (IllegalStateException e) {
+            // .block(Duration) 타임아웃 시 Reactor가 IllegalStateException을 던진다
+            log.warn("FastAPI GET /documents/{}/progress 응답 타임아웃", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_TIMEOUT);
+        } catch (RuntimeException e) {
+            log.warn("FastAPI GET /documents/{}/progress 호출 실패", documentId, e);
             throw new CustomException(ErrorCode.FASTAPI_QUERY_FAILED);
         }
     }

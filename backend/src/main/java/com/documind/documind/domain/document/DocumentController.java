@@ -57,6 +57,17 @@ public class DocumentController {
     }
 
     /**
+     * GET /api/documents/{id}/progress — 문서 색인 진행률 조회 (ADMIN 전용).
+     *
+     * @param id progress를 조회할 문서 PK
+     * @return 문서 처리 진행률
+     */
+    @GetMapping("/{id}/progress")
+    public ResponseEntity<ApiResponse<DocumentProgressResponse>> progress(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.success(documentService.progress(id)));
+    }
+
+    /**
      * DELETE /api/documents/{id} — 문서 논리 삭제 + ChromaDB 청크 제거 (ADMIN 전용).
      *
      * @param id 삭제할 문서 PK

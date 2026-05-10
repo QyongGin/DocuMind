@@ -19,3 +19,8 @@ logging:
   level:
     org.springframework.web: WARN
     com.documind: INFO
+
+app:
+  cors:
+    # 운영에서는 배포 서버 Origin을 반드시 환경변수로 명시한다.
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS}

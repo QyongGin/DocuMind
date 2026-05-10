@@ -3341,6 +3341,10 @@ button:disabled {
   background: transparent;
 }
 
+.document-row__open:disabled {
+  cursor: default;
+}
+
 .document-row__open span {
   display: grid;
   gap: 4px;
@@ -3368,6 +3372,14 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.document-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .admin-empty {
@@ -3447,6 +3459,29 @@ button:disabled {
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.admin-progress {
+  overflow: hidden;
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: #e8edf4;
+}
+
+.admin-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #0b6fd3;
+  transition: width 140ms linear;
+}
+
+.admin-progress__value {
+  color: var(--ink-muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
 }
 
 .admin-modal__hint {

@@ -29,6 +29,8 @@ fastapi:
   stream-timeout: ${FASTAPI_STREAM_TIMEOUT:5m}
 
 chat:
+  # 기본 검색 청크 수. 값이 클수록 답변 근거는 늘지만 검색·프롬프트·LLM 생성 비용도 증가한다.
+  default-top-k: ${CHAT_DEFAULT_TOP_K:3}
   # Spring MVC SseEmitter 타임아웃. 기본 5분, 더 긴 답변이 필요하면 환경변수 CHAT_SSE_EMITTER_TIMEOUT으로 조정
   sse-emitter-timeout: ${CHAT_SSE_EMITTER_TIMEOUT:5m}
   # SSE streamId 임시 저장 TTL. GET EventSource 연결이 지연되면 만료된다.
@@ -50,8 +52,8 @@ auth:
 
 app:
   cors:
-    # 브라우저 Origin 허용 목록. Docker/nginx reverse proxy 환경에서도 POST 요청은 Origin 검증을 받으므로 배포 주소를 포함한다.
-    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost,http://192.168.35.168,http://mojuk.kr:19580}
+    # 브라우저 Origin 허용 목록. 운영 배포 주소는 환경변수 APP_CORS_ALLOWED_ORIGINS로만 추가한다.
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost}
 
 documind:
   admin:

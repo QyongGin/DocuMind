@@ -18,7 +18,7 @@ npm run dev
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `VITE_API_BASE_URL` | `/api` | Spring Boot API reverse proxy 기준 URL |
-| `VITE_DEFAULT_TOP_K` | `5` | SSE 질의응답 검색 문서 수 기본값 |
+| `VITE_DEFAULT_TOP_K` | `3` | SSE 질의응답 검색 문서 수 기본값 |
 
 ## 구조
 
