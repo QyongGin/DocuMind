@@ -72,6 +72,9 @@ export async function apiRequest(path, options = {}) {
     if (response.status === 413) {
       throw new Error('업로드할 파일이 서버 허용 크기를 초과했습니다.')
     }
+    if (payload?.message) {
+      throw new Error(payload.message)
+    }
     if (response.status === 502 || response.status === 503 || response.status === 504) {
       throw new Error('백엔드 서버에 연결하지 못했습니다. Spring Boot 서버가 실행 중인지 확인해 주세요.')
     }

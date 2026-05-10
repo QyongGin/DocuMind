@@ -1,6 +1,7 @@
-# 데스크탑(NVIDIA GPU) 전용 오버라이드 파일
-# 사용법: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
-# 맥북에서는 사용하지 않는다 — docker compose up --build 그대로 사용
+# NVIDIA GPU 전용 오버라이드 파일.
+# 사용 전 host에서 nvidia-smi와 `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`가 모두 성공해야 한다.
+# 사용법: docker compose -f docker-compose.yml -f docker-compose.gpu.yml --env-file .env up --build -d
+# 맥북 Docker Desktop에서는 NVIDIA GPU passthrough가 안 되므로 사용하지 않는다.
 
 services:
   ollama:

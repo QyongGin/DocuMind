@@ -60,6 +60,10 @@ services:
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
       OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-4096}
       OLLAMA_NUM_PREDICT: ${OLLAMA_NUM_PREDICT:-512}
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-0}
+      CHUNK_SIZE: ${CHUNK_SIZE:-800}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-50}
+      CHUNK_MERGE_MIN_SIZE: ${CHUNK_MERGE_MIN_SIZE:-300}
       EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-64}
       UPLOAD_READ_CHUNK_BYTES: ${UPLOAD_READ_CHUNK_BYTES:-1048576}
       AI_DEFAULT_TOP_K: ${AI_DEFAULT_TOP_K:-3}
@@ -85,6 +89,9 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: prod
       FASTAPI_URL: http://ai-server:8000
+      FASTAPI_CONNECT_TIMEOUT: ${FASTAPI_CONNECT_TIMEOUT:-5s}
+      FASTAPI_RESPONSE_TIMEOUT: ${FASTAPI_RESPONSE_TIMEOUT:-20m}
+      FASTAPI_STREAM_TIMEOUT: ${FASTAPI_STREAM_TIMEOUT:-20m}
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/documind
       SPRING_DATASOURCE_USERNAME: root
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD}
@@ -98,7 +105,7 @@ services:
       # 컨테이너 기본 타임존은 UTC. KST(UTC+9) 로그 출력을 위해 명시적으로 설정
       TZ: Asia/Seoul
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/api/categories || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/api/categories || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 10
