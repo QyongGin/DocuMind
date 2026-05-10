@@ -4,6 +4,11 @@
 # 맥북 Docker Desktop에서는 NVIDIA GPU passthrough가 안 되므로 사용하지 않는다.
 
 services:
+  ai-server:
+    depends_on:
+      ollama:
+        condition: service_healthy
+
   ollama:
     deploy:
       resources:
