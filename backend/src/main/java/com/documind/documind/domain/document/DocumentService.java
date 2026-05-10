@@ -216,6 +216,28 @@ public class DocumentService {
     }
 
     /**
+     * 진행 중인 문서 색인의 현재 progress를 조회한다.
+     *
+     * @param documentId 조회할 문서의 PK
+     * @return 문서 처리 진행률
+     * @throws CustomException 문서를 찾을 수 없는 경우 DOCUMENT_NOT_FOUND
+     */
+    @Transactional(readOnly = true)
+    public DocumentProgressResponse progress(Long documentId) {
+        Document document = documentRepository.findByIdAndIsActiveTrue(documentId)
+                .orElseThrow(() -> new CustomException(ErrorCode.DOCUMENT_NOT_FOUND));
+
+        if (document.getProcessingStatus() == null || document.getProcessingStatus() == DocumentProcessingStatus.READY) {
+            return DocumentProgressResponse.completed(document);
+        }
+        if (document.getProcessingStatus() == DocumentProcessingStatus.FAILED) {
+            return DocumentProgressResponse.failed(document);
+        }
+
+        return DocumentProgressResponse.from(document, fastApiClient.getDocumentProgress(documentId));
+    }
+
+    /**
      * 문서를 논리 삭제하고 ChromaDB에서 청크를 제거한다.
      *
      * <p>FastAPI 호출이 실패하면 {@code CustomException}(RuntimeException)이 발생해

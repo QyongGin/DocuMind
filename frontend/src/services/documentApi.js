@@ -29,6 +29,13 @@ export async function listDocumentChunks(id) {
   })
 }
 
+export async function getDocumentProgress(id) {
+  return apiRequest(`/documents/${id}/progress`, {
+    method: 'GET',
+    auth: true,
+  })
+}
+
 export async function deleteDocument(id) {
   return apiRequest(`/documents/${id}`, {
     method: 'DELETE',

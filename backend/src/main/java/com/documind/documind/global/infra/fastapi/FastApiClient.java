@@ -207,6 +207,36 @@ public class FastApiClient {
     }
 
     /**
+     * FastAPI에서 진행 중인 문서 처리 progress를 조회한다.
+     *
+     * @param documentId 조회할 문서의 PK
+     * @return 문서 처리 진행률
+     */
+    public FastApiDocumentProgressResponse getDocumentProgress(Long documentId) {
+        try {
+            FastApiDocumentProgressResponse response = blockingWebClient.get()
+                    .uri("/documents/{id}/progress", documentId)
+                    .retrieve()
+                    .bodyToMono(FastApiDocumentProgressResponse.class)
+                    .block(responseTimeout);
+            return Objects.requireNonNull(response, "FastAPI /documents/{id}/progress 응답이 null입니다.");
+        } catch (WebClientResponseException.ServiceUnavailable e) {
+            log.warn("FastAPI GET /documents/{}/progress 서비스 불가", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_UNAVAILABLE);
+        } catch (WebClientRequestException e) {
+            log.warn("FastAPI GET /documents/{}/progress 연결 실패", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_CONNECTION_FAILED);
+        } catch (IllegalStateException e) {
+            // .block(Duration) 타임아웃 시 Reactor가 IllegalStateException을 던진다
+            log.warn("FastAPI GET /documents/{}/progress 응답 타임아웃", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_TIMEOUT);
+        } catch (RuntimeException e) {
+            log.warn("FastAPI GET /documents/{}/progress 호출 실패", documentId, e);
+            throw new CustomException(ErrorCode.FASTAPI_QUERY_FAILED);
+        }
+    }
+
+    /**
      * FastAPI /query/stream SSE 엔드포인트를 구독한다.
      * ServerSentEvent 디코더가 SSE 포맷을 자동 파싱하므로 data 접두사 제거는 필요 없다.
      *

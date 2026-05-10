@@ -16,6 +16,7 @@ import asyncio
 import logging
 import math
 import time
+from threading import Lock
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -104,6 +105,9 @@ else:
     client = chromadb.PersistentClient(path="./chroma_db")
 
 collection = client.get_or_create_collection("documents")
+
+_progress_lock = Lock()
+_document_progress: dict[int, dict] = {}
 
 logger.info(
     "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s chroma_host=%s chroma_port=%s",
@@ -299,6 +303,40 @@ def _combine_chunk_documents(docs: list[Document]) -> Document:
     return Document(page_content=page_content, metadata=common_metadata)
 
 
+def _set_document_progress(document_id: int | None, percent: int, stage: str, message: str, status: str = "processing") -> None:
+    """문서 처리 진행률을 메모리에 기록한다."""
+    if document_id is None:
+        return
+
+    normalized_percent = max(0, min(100, int(percent)))
+    progress = {
+        "document_id": document_id,
+        "percent": normalized_percent,
+        "stage": stage,
+        "message": message,
+        "status": status,
+        "updated_at": time.time(),
+    }
+    with _progress_lock:
+        _document_progress[document_id] = progress
+
+
+def _get_document_progress(document_id: int) -> dict:
+    """문서 처리 진행률을 조회한다."""
+    with _progress_lock:
+        progress = _document_progress.get(document_id)
+        if progress is None:
+            return {
+                "document_id": document_id,
+                "percent": 0,
+                "stage": "unknown",
+                "message": "진행 정보를 준비 중입니다.",
+                "status": "unknown",
+                "updated_at": time.time(),
+            }
+        return dict(progress)
+
+
 def _merge_short_chunks(docs: list[Document]) -> list[Document]:
     """
     너무 짧은 인접 청크를 CHUNK_SIZE를 넘지 않는 범위에서 병합한다.
@@ -450,6 +488,9 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
     page_match_elapsed = 0.0
     embedding_elapsed = 0.0
     chroma_elapsed = 0.0
+    total_chunks = len(final_docs)
+    if total_chunks == 0:
+        return page_match_elapsed, embedding_elapsed, chroma_elapsed
 
     for start in range(0, len(final_docs), EMBEDDING_BATCH_SIZE):
         batch_number = start // EMBEDDING_BATCH_SIZE + 1
@@ -466,6 +507,12 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
         page_match_elapsed += time.perf_counter() - metadata_start
 
         embedding_start = time.perf_counter()
+        _set_document_progress(
+            document_id,
+            30 + round((start / total_chunks) * 60),
+            "embedding",
+            f"임베딩 중입니다. ({start}/{total_chunks} chunks)"
+        )
         logger.info(
             "[upload_embed] document_id=%s batch=%s/%s chunks=%s model=%s num_thread=%s",
             document_id,
@@ -501,6 +548,13 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
             metadatas=batch_metadatas
         )
         chroma_elapsed += time.perf_counter() - chroma_start
+        completed_chunks = min(start + len(batch_docs), total_chunks)
+        _set_document_progress(
+            document_id,
+            30 + round((completed_chunks / total_chunks) * 60),
+            "embedding",
+            f"임베딩과 벡터 저장을 진행 중입니다. ({completed_chunks}/{total_chunks} chunks)"
+        )
 
     return page_match_elapsed, embedding_elapsed, chroma_elapsed
 
@@ -510,26 +564,31 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
 
     def _execute() -> int:
         total_start = time.perf_counter()
+        _set_document_progress(document_id, 8, "parse", "문서를 파싱하고 있습니다.")
 
         # 파서 분기: 확장자에 따라 PDF 또는 Docling 로더 사용
         parse_start = time.perf_counter()
         raw_docs = _load_documents(tmp_path, filename)
         parse_elapsed = time.perf_counter() - parse_start
+        _set_document_progress(document_id, 18, "parse", "문서 파싱을 완료했습니다.")
 
         page_lookup_start = time.perf_counter()
         page_lookup = _build_page_lookup(raw_docs)
         page_lookup_elapsed = time.perf_counter() - page_lookup_start
+        _set_document_progress(document_id, 22, "page_lookup", "페이지 정보를 분석하고 있습니다.")
 
         # 전체 텍스트 병합 후 정규화
         normalize_start = time.perf_counter()
         full_text = "\n".join([doc.page_content for doc in raw_docs])
         full_text = _normalize_text(full_text)
         normalize_elapsed = time.perf_counter() - normalize_start
+        _set_document_progress(document_id, 25, "normalize", "문서 텍스트를 정리했습니다.")
 
         # Two-Pass 청킹 + 수동 overlap 후처리
         split_start = time.perf_counter()
         split_docs = _two_pass_split(full_text)
         split_elapsed = time.perf_counter() - split_start
+        _set_document_progress(document_id, 28, "chunking", "문서를 청크로 나누고 있습니다.")
 
         merge_start = time.perf_counter()
         merged_docs = _merge_short_chunks(split_docs)
@@ -538,6 +597,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         overlap_start = time.perf_counter()
         final_docs = _apply_overlap(merged_docs)
         overlap_elapsed = time.perf_counter() - overlap_start
+        _set_document_progress(document_id, 30, "chunking", f"청킹을 완료했습니다. ({len(final_docs)} chunks)")
 
         # 임베딩 + ChromaDB 저장. 청크별 호출 대신 batch 단위로 처리해 HTTP 왕복과 저장 오버헤드를 줄인다.
         page_match_elapsed, embedding_elapsed, chroma_elapsed = _store_document_chunks(
@@ -546,6 +606,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             document_id,
             page_lookup
         )
+        _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
             "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s merged_chunks=%s chunks=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
@@ -580,6 +641,7 @@ async def upload_document(
     file: UploadFile = File(...),
     document_id: int = Form(None)
 ):
+    _set_document_progress(document_id, 0, "upload", "파일 업로드를 준비하고 있습니다.")
     filename = file.filename or "upload"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext not in ALLOWED_EXTENSIONS:
@@ -597,6 +659,7 @@ async def upload_document(
             tmp.write(chunk)
             bytes_written += len(chunk)
 
+    _set_document_progress(document_id, 5, "upload", "파일 저장을 완료했습니다.")
     logger.info(
         "[upload_file] document_id=%s filename=%s bytes=%s chunk_bytes=%s save=%.2fs",
         document_id,
@@ -608,13 +671,23 @@ async def upload_document(
 
     try:
         chunk_count = await _run_upload_pipeline(tmp_path, filename, document_id)
+        _set_document_progress(document_id, 100, "completed", "문서 처리가 완료되었습니다.", status="completed")
         return {
             "status": "success",
             "filename": filename,
             "chunks": chunk_count
         }
+    except Exception:
+        _set_document_progress(document_id, 100, "failed", "문서 처리에 실패했습니다.", status="failed")
+        raise
     finally:
         os.unlink(tmp_path)
+
+
+@app.get("/documents/{document_id}/progress")
+def document_progress(document_id: int):
+    """문서 처리 진행률을 반환한다."""
+    return _get_document_progress(document_id)
 
 
 # 질의응답 요청 스키마. Pydantic BaseModel로 JSON body를 자동 파싱·검증

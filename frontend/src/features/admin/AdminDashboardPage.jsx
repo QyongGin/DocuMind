@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { logout } from '../../services/authApi.js'
 import { createCategory, listCategories } from '../../services/categoryApi.js'
-import { deleteDocument, listDocumentChunks, listDocuments, uploadDocument } from '../../services/documentApi.js'
+import {
+  deleteDocument,
+  getDocumentProgress,
+  listDocumentChunks,
+  listDocuments,
+  uploadDocument,
+} from '../../services/documentApi.js'
 import { getFeedbackStats } from '../../services/feedbackStatsApi.js'
 import { getPromptConfig, updatePromptConfig } from '../../services/promptApi.js'
 import inqLogoUrl from '../../images/inq-logo.png'
@@ -54,6 +60,12 @@ function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
+function clampPercent(value) {
+  const percent = Number(value)
+  if (!Number.isFinite(percent)) return 0
+  return Math.min(100, Math.max(0, Math.round(percent)))
+}
+
 function formatPercent(rate) {
   const percent = Number(rate) * 100
   if (!Number.isFinite(percent)) return '0%'
@@ -78,6 +90,7 @@ function AdminDashboardPage() {
   const [message, setMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
   const [lastUploadSummary, setLastUploadSummary] = useState(null)
+  const [uploadProgress, setUploadProgress] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isUploading, setIsUploading] = useState(false)
   const [isUploadDragActive, setIsUploadDragActive] = useState(false)
@@ -109,6 +122,7 @@ function AdminDashboardPage() {
 
   const totalChunks = documents.reduce((sum, document) => sum + (document.chunkCount ?? 0), 0)
   const isPromptDirty = systemPrompt !== (promptConfig?.systemPrompt ?? '')
+  const uploadProgressPercent = clampPercent(uploadProgress?.percent ?? 0)
 
   const loadDashboard = async ({ silent = false, throwOnError = false } = {}) => {
     if (!silent) {
@@ -182,18 +196,27 @@ function AdminDashboardPage() {
     const timeoutMs = 20 * 60 * 1000
 
     while (Date.now() - startedAt < timeoutMs) {
-      const nextDocuments = await loadDashboard({ silent: true, throwOnError: true })
-      const targetDocument = nextDocuments.find((document) => String(document.id) === String(documentId))
+      const progress = await getDocumentProgress(documentId)
+      setUploadProgress(progress)
 
-      if (targetDocument?.processingStatus === 'READY' || targetDocument?.processingStatus == null) {
-        return targetDocument
-      }
-
-      if (targetDocument?.processingStatus === 'FAILED') {
+      if (progress?.status === 'failed') {
         throw new Error('문서 색인 처리에 실패했습니다. ai-server 로그를 확인해야 합니다.')
       }
 
-      await sleep(2500)
+      if (progress?.status === 'completed' || clampPercent(progress?.percent) >= 100) {
+        const nextDocuments = await loadDashboard({ silent: true, throwOnError: true })
+        const targetDocument = nextDocuments.find((document) => String(document.id) === String(documentId))
+
+        if (targetDocument?.processingStatus === 'READY' || targetDocument?.processingStatus == null) {
+          return targetDocument
+        }
+
+        if (targetDocument?.processingStatus === 'FAILED') {
+          throw new Error('문서 색인 처리에 실패했습니다. ai-server 로그를 확인해야 합니다.')
+        }
+      }
+
+      await sleep(700)
     }
 
     throw new Error('문서 처리 결과 확인 시간이 초과되었습니다. 목록을 새로고침해 상태를 확인해 주세요.')
@@ -205,6 +228,7 @@ function AdminDashboardPage() {
       chunkCount: document?.chunkCount ?? 0,
       processingDurationMs: document?.processingDurationMs ?? null,
     })
+    setUploadProgress({ percent: 100, message: '문서 처리가 완료되었습니다.', status: 'completed' })
     setMessage('문서 처리가 완료되었습니다.')
   }
 
@@ -222,6 +246,7 @@ function AdminDashboardPage() {
     setMessage('')
     setErrorMessage('')
     setLastUploadSummary(null)
+    setUploadProgress(null)
   }
 
   const handleFileInputChange = (event) => {
@@ -273,6 +298,7 @@ function AdminDashboardPage() {
     setMessage('')
     setErrorMessage('')
     setLastUploadSummary(null)
+    setUploadProgress({ percent: 0, message: '파일 업로드를 준비하고 있습니다.', status: 'processing' })
 
     try {
       const uploadResult = await uploadDocument(selectedFile, { categoryId: selectedUploadCategoryId })
@@ -300,6 +326,7 @@ function AdminDashboardPage() {
     setMessage('')
     setErrorMessage('')
     setLastUploadSummary(null)
+    setUploadProgress(null)
 
     try {
       await createCategory(trimmedName)
@@ -317,6 +344,7 @@ function AdminDashboardPage() {
     setMessage('')
     setErrorMessage('')
     setLastUploadSummary(null)
+    setUploadProgress(null)
     setIsDeleting(true)
 
     try {
@@ -351,6 +379,7 @@ function AdminDashboardPage() {
     setMessage('')
     setErrorMessage('')
     setLastUploadSummary(null)
+    setUploadProgress(null)
   }
 
   const handleSavePrompt = async (event) => {
@@ -674,7 +703,18 @@ function AdminDashboardPage() {
           >
             <p>업로드 중</p>
             <h2 id="admin-uploading-title">문서를 처리하고 있습니다</h2>
-            <span>청킹과 임베딩 색인이 끝나면 결과를 표시합니다.</span>
+            <span>{uploadProgress?.message ?? '청킹과 임베딩 색인이 끝나면 결과를 표시합니다.'}</span>
+            <div
+              className="admin-progress"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={uploadProgressPercent}
+              aria-label="문서 처리 진행률"
+            >
+              <span style={{ width: `${uploadProgressPercent}%` }} />
+            </div>
+            <small className="admin-progress__value">{uploadProgressPercent}%</small>
           </section>
         </div>
       )}
