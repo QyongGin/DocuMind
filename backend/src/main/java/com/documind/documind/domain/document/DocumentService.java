@@ -9,10 +9,18 @@ import com.documind.documind.global.exception.ErrorCode;
 import com.documind.documind.global.infra.fastapi.FastApiClient;
 import com.documind.documind.global.infra.fastapi.FastApiUploadResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -30,6 +38,10 @@ public class DocumentService {
     private final UserRepository userRepository;
     private final CategoryRepository categoryRepository;
     private final FastApiClient fastApiClient;
+    private final DocumentProcessingService documentProcessingService;
+
+    @Value("${document.processing.async-enabled:false}")
+    private boolean asyncProcessingEnabled;
 
     // 허용 MIME 타입 목록. FastAPI 파서가 지원하는 형식과 동기화
     private static final List<String> ALLOWED_MIME_TYPES = Arrays.asList(
@@ -96,13 +108,20 @@ public class DocumentService {
         );
         documentRepository.save(document);
 
-        // FastAPI에 파일 전송 → 청킹·임베딩·ChromaDB 저장 요청
-        FastApiUploadResponse fastApiResponse = fastApiClient.uploadDocument(file, document.getId());
+        if (asyncProcessingEnabled) {
+            Path tempFilePath = copyToTempFile(file, extension);
+            processAfterCommit(tempFilePath, originalName, document.getId(), processingStartNanos);
+            return DocumentUploadResponse.builder()
+                    .documentId(document.getId())
+                    .originalName(document.getOriginalName())
+                    .fileSize(document.getFileSize())
+                    .chunkCount(document.getChunkCount())
+                    .processingDurationMs(document.getProcessingDurationMs())
+                    .processingStatus(document.getProcessingStatus())
+                    .build();
+        }
 
-        long processingDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - processingStartNanos);
-
-        // FastAPI 처리 완료 후 청크 수와 처리 시간을 업데이트
-        document.completeProcessing(fastApiResponse.getChunks(), processingDurationMs);
+        completeSynchronously(file, document, processingStartNanos);
 
         return DocumentUploadResponse.builder()
                 .documentId(document.getId())
@@ -110,7 +129,54 @@ public class DocumentService {
                 .fileSize(document.getFileSize())
                 .chunkCount(document.getChunkCount())
                 .processingDurationMs(document.getProcessingDurationMs())
+                .processingStatus(document.getProcessingStatus())
                 .build();
+    }
+
+    private void completeSynchronously(MultipartFile file, Document document, long processingStartNanos) {
+        // FastAPI에 파일 전송 → 청킹·임베딩·ChromaDB 저장 요청
+        FastApiUploadResponse fastApiResponse = fastApiClient.uploadDocument(file, document.getId());
+        long processingDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - processingStartNanos);
+        // FastAPI 처리 완료 후 청크 수와 처리 시간을 업데이트
+        document.completeProcessing(fastApiResponse.getChunks(), processingDurationMs);
+    }
+
+    private Path copyToTempFile(MultipartFile file, String extension) {
+        String suffix = extension == null || extension.isBlank() ? ".upload" : extension;
+        try {
+            Path tempFilePath = Files.createTempFile("documind-upload-", suffix);
+            try (InputStream inputStream = file.getInputStream()) {
+                Files.copy(inputStream, tempFilePath, StandardCopyOption.REPLACE_EXISTING);
+            }
+            return tempFilePath;
+        } catch (IOException e) {
+            throw new CustomException(ErrorCode.FILE_READ_FAILED);
+        }
+    }
+
+    private void processAfterCommit(Path tempFilePath, String originalName, Long documentId, long processingStartNanos) {
+        String filename = originalName != null ? originalName : "upload";
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                documentProcessingService.processAsync(tempFilePath, filename, documentId, processingStartNanos);
+            }
+
+            @Override
+            public void afterCompletion(int status) {
+                if (status != STATUS_COMMITTED) {
+                    deleteTempFile(tempFilePath);
+                }
+            }
+        });
+    }
+
+    private void deleteTempFile(Path tempFilePath) {
+        try {
+            Files.deleteIfExists(tempFilePath);
+        } catch (IOException ignored) {
+            // 트랜잭션 롤백 시 임시 파일 정리에 실패해도 사용자 응답을 덮어쓰지 않는다.
+        }
     }
 
     /**

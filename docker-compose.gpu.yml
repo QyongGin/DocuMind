@@ -8,6 +8,8 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+      ollama-embedding-model:
+        condition: service_completed_successfully
 
   ollama:
     deploy:
@@ -17,3 +19,12 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  ollama-embedding-model:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    command: ["ollama", "pull", "${OLLAMA_EMBEDDING_MODEL:-qwen3-embedding:4b}"]

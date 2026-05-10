@@ -50,6 +50,17 @@ function formatDuration(durationMs) {
   return `${minutes}분 ${seconds}초`
 }
 
+function formatProcessingStatus(status) {
+  if (status === 'PROCESSING') return '처리 중'
+  if (status === 'FAILED') return '실패'
+  return '완료'
+}
+
+function processingStatusClassName(status) {
+  const normalizedStatus = status === 'PROCESSING' || status === 'FAILED' ? status.toLowerCase() : 'ready'
+  return `document-status document-status--${normalizedStatus}`
+}
+
 function formatPercent(rate) {
   const percent = Number(rate) * 100
   if (!Number.isFinite(percent)) return '0%'
@@ -216,7 +227,9 @@ function AdminDashboardPage() {
       const uploadResult = await uploadDocument(selectedFile, { categoryId: selectedUploadCategoryId })
       resetSelectedFile()
       setLastUploadDurationMs(uploadResult?.processingDurationMs ?? null)
-      setMessage('문서를 업로드했습니다.')
+      setMessage(uploadResult?.processingStatus === 'PROCESSING'
+        ? '문서를 업로드했습니다. 색인 처리 중입니다.'
+        : '문서를 업로드했습니다.')
       await loadDashboard()
     } catch (error) {
       setErrorMessage(error.message)
@@ -525,13 +538,19 @@ function AdminDashboardPage() {
                       type="button"
                       className="document-row__open"
                       onClick={() => handleOpenDocumentChunks(document)}
+                      disabled={document.processingStatus !== 'READY' && document.processingStatus != null}
                     >
                       <span>
                         <strong>{document.originalName}</strong>
-                        <small>
-                          {document.categoryName || '미분류'} · {formatFileSize(document.fileSize)} · {document.chunkCount} chunks
-                          {formatDuration(document.processingDurationMs) && ` · 처리 ${formatDuration(document.processingDurationMs)}`}
-                        </small>
+                        <span className="document-row__meta">
+                          <span className={processingStatusClassName(document.processingStatus)}>
+                            {formatProcessingStatus(document.processingStatus)}
+                          </span>
+                          <small>
+                            {document.categoryName || '미분류'} · {formatFileSize(document.fileSize)} · {document.chunkCount} chunks
+                            {formatDuration(document.processingDurationMs) && ` · 처리 ${formatDuration(document.processingDurationMs)}`}
+                          </small>
+                        </span>
                       </span>
                     </button>
                     <time>{formatDate(document.createdAt)}</time>
@@ -539,7 +558,7 @@ function AdminDashboardPage() {
                       type="button"
                       className="admin-text-button admin-text-button--delete"
                       onClick={() => setDeleteTarget(document)}
-                      disabled={isUploading || isDeleting}
+                      disabled={isUploading || isDeleting || document.processingStatus === 'PROCESSING'}
                     >
                       삭제
                     </button>

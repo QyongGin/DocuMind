@@ -17,6 +17,10 @@ import logging
 import math
 import time
 
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="DocuMind AI Server", version="1.0.0")
@@ -41,6 +45,14 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
     return value
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    """boolean 환경변수를 읽는다."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # 환경변수로 로컬/Docker 환경 분기
 # 로컬: OLLAMA_BASE_URL 미설정 시 localhost 사용
 # Docker: OLLAMA_BASE_URL=http://ollama:11434
@@ -50,6 +62,7 @@ OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "exaone3.5:7.8b")
 # 환경변수로 임베딩 모델명 분기. VRAM이 작은 서버에서는 qwen3-embedding:4b를 우선 사용한다.
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:4b")
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+OLLAMA_EMBEDDING_WARMUP_ON_STARTUP = _env_bool("OLLAMA_EMBEDDING_WARMUP_ON_STARTUP")
 OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 4096)
 OLLAMA_NUM_PREDICT = _env_int("OLLAMA_NUM_PREDICT", 512)
 OLLAMA_NUM_THREAD = _env_int("OLLAMA_NUM_THREAD", 0, minimum=0) or None
@@ -93,11 +106,12 @@ else:
 collection = client.get_or_create_collection("documents")
 
 logger.info(
-    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s chroma_host=%s chroma_port=%s",
+    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s chroma_host=%s chroma_port=%s",
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
     OLLAMA_EMBEDDING_MODEL,
     OLLAMA_KEEP_ALIVE,
+    OLLAMA_EMBEDDING_WARMUP_ON_STARTUP,
     OLLAMA_NUM_CTX,
     OLLAMA_NUM_PREDICT,
     OLLAMA_NUM_THREAD or "auto",
@@ -390,6 +404,42 @@ def _embed_texts(texts: list[str]) -> tuple[list[list[float]], dict]:
     )
     response_data = response.model_dump()
     return response_data["embeddings"], response_data
+
+
+def _warm_up_embedding_model() -> None:
+    """첫 사용자 업로드가 Ollama cold load 시간을 떠안지 않도록 임베딩 모델을 미리 로딩한다."""
+    started = time.perf_counter()
+    response = ollama_client.embed(
+        model=OLLAMA_EMBEDDING_MODEL,
+        input=["warmup"],
+        options=_ollama_embedding_options(),
+        keep_alive=OLLAMA_KEEP_ALIVE,
+    )
+    elapsed = time.perf_counter() - started
+    response_data = response.model_dump()
+    logger.info(
+        "[startup_embedding_warmup_done] model=%s wall=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s prompt_eval_count=%s",
+        OLLAMA_EMBEDDING_MODEL,
+        elapsed,
+        _format_seconds(_seconds_from_nanos(response_data.get("total_duration"))),
+        _format_seconds(_seconds_from_nanos(response_data.get("load_duration"))),
+        _format_seconds(_seconds_from_nanos(response_data.get("prompt_eval_duration"))),
+        response_data.get("prompt_eval_count", "n/a"),
+    )
+
+
+@app.on_event("startup")
+async def warm_up_embedding_model_on_startup() -> None:
+    """옵션이 켜져 있으면 앱 시작 시 임베딩 모델 로딩까지 완료한다."""
+    if not OLLAMA_EMBEDDING_WARMUP_ON_STARTUP:
+        return
+
+    logger.info(
+        "[startup_embedding_warmup] model=%s keep_alive=%s",
+        OLLAMA_EMBEDDING_MODEL,
+        OLLAMA_KEEP_ALIVE,
+    )
+    await asyncio.to_thread(_warm_up_embedding_model)
 
 
 def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float]:
