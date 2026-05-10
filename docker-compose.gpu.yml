@@ -10,6 +10,8 @@ services:
         condition: service_healthy
       ollama-embedding-model:
         condition: service_completed_successfully
+      ollama-llm-model:
+        condition: service_completed_successfully
 
   ollama:
     deploy:
@@ -28,3 +30,12 @@ services:
     environment:
       OLLAMA_HOST: http://ollama:11434
     command: ["pull", "${OLLAMA_EMBEDDING_MODEL:-qwen3-embedding:4b}"]
+
+  ollama-llm-model:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    command: ["pull", "${OLLAMA_LLM_MODEL:-exaone3.5:7.8b}"]
