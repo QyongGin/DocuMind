@@ -61,6 +61,10 @@ function processingStatusClassName(status) {
   return `document-status document-status--${normalizedStatus}`
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
 function formatPercent(rate) {
   const percent = Number(rate) * 100
   if (!Number.isFinite(percent)) return '0%'
@@ -84,7 +88,7 @@ function AdminDashboardPage() {
   const [categoryName, setCategoryName] = useState('')
   const [message, setMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
-  const [lastUploadDurationMs, setLastUploadDurationMs] = useState(null)
+  const [lastUploadSummary, setLastUploadSummary] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isUploading, setIsUploading] = useState(false)
   const [isUploadDragActive, setIsUploadDragActive] = useState(false)
@@ -109,12 +113,19 @@ function AdminDashboardPage() {
     return documents.filter((document) => (document.categoryName || '미분류') === selectedCategory)
   }, [documents, selectedCategory])
 
+  const hasProcessingDocuments = useMemo(
+    () => documents.some((document) => document.processingStatus === 'PROCESSING'),
+    [documents],
+  )
+
   const totalChunks = documents.reduce((sum, document) => sum + (document.chunkCount ?? 0), 0)
   const isPromptDirty = systemPrompt !== (promptConfig?.systemPrompt ?? '')
 
-  const loadDashboard = async () => {
-    setIsLoading(true)
-    setErrorMessage('')
+  const loadDashboard = async ({ silent = false, throwOnError = false } = {}) => {
+    if (!silent) {
+      setIsLoading(true)
+      setErrorMessage('')
+    }
 
     try {
       const [nextDocuments, nextCategories, nextFeedbackStats] = await Promise.all([
@@ -122,7 +133,8 @@ function AdminDashboardPage() {
         listCategories(),
         getFeedbackStats(),
       ])
-      setDocuments(Array.isArray(nextDocuments) ? nextDocuments : [])
+      const normalizedDocuments = Array.isArray(nextDocuments) ? nextDocuments : []
+      setDocuments(normalizedDocuments)
       setCategories(Array.isArray(nextCategories) ? nextCategories : [])
       setFeedbackStats(nextFeedbackStats ?? {
         totalCount: 0,
@@ -130,10 +142,19 @@ function AdminDashboardPage() {
         negativeCount: 0,
         positiveRate: 0,
       })
+      return normalizedDocuments
     } catch (error) {
-      setErrorMessage(error.message)
+      if (!silent) {
+        setErrorMessage(error.message)
+      }
+      if (throwOnError) {
+        throw error
+      }
+      return []
     } finally {
-      setIsLoading(false)
+      if (!silent) {
+        setIsLoading(false)
+      }
     }
   }
 
@@ -157,6 +178,47 @@ function AdminDashboardPage() {
     loadPromptConfig()
   }, [])
 
+  useEffect(() => {
+    if (!hasProcessingDocuments || isUploading) return undefined
+
+    const intervalId = window.setInterval(() => {
+      loadDashboard({ silent: true })
+    }, 2500)
+
+    return () => window.clearInterval(intervalId)
+  }, [hasProcessingDocuments, isUploading])
+
+  const waitForDocumentProcessing = async (documentId) => {
+    const startedAt = Date.now()
+    const timeoutMs = 20 * 60 * 1000
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const nextDocuments = await loadDashboard({ silent: true, throwOnError: true })
+      const targetDocument = nextDocuments.find((document) => String(document.id) === String(documentId))
+
+      if (targetDocument?.processingStatus === 'READY' || targetDocument?.processingStatus == null) {
+        return targetDocument
+      }
+
+      if (targetDocument?.processingStatus === 'FAILED') {
+        throw new Error('문서 색인 처리에 실패했습니다. ai-server 로그를 확인해야 합니다.')
+      }
+
+      await sleep(2500)
+    }
+
+    throw new Error('문서 처리 결과 확인 시간이 초과되었습니다. 목록을 새로고침해 상태를 확인해 주세요.')
+  }
+
+  const showUploadComplete = (document) => {
+    setLastUploadSummary({
+      originalName: document?.originalName ?? '',
+      chunkCount: document?.chunkCount ?? 0,
+      processingDurationMs: document?.processingDurationMs ?? null,
+    })
+    setMessage('문서 처리가 완료되었습니다.')
+  }
+
   const resetSelectedFile = () => {
     setSelectedFile(null)
     if (fileInputRef.current) {
@@ -170,7 +232,7 @@ function AdminDashboardPage() {
     setSelectedFile(file)
     setMessage('')
     setErrorMessage('')
-    setLastUploadDurationMs(null)
+    setLastUploadSummary(null)
   }
 
   const handleFileInputChange = (event) => {
@@ -221,16 +283,19 @@ function AdminDashboardPage() {
     setIsUploading(true)
     setMessage('')
     setErrorMessage('')
-    setLastUploadDurationMs(null)
+    setLastUploadSummary(null)
 
     try {
       const uploadResult = await uploadDocument(selectedFile, { categoryId: selectedUploadCategoryId })
       resetSelectedFile()
-      setLastUploadDurationMs(uploadResult?.processingDurationMs ?? null)
-      setMessage(uploadResult?.processingStatus === 'PROCESSING'
-        ? '문서를 업로드했습니다. 색인 처리 중입니다.'
-        : '문서를 업로드했습니다.')
-      await loadDashboard()
+      if (uploadResult?.processingStatus === 'PROCESSING') {
+        const completedDocument = await waitForDocumentProcessing(uploadResult.documentId)
+        showUploadComplete(completedDocument)
+        return
+      }
+
+      await loadDashboard({ silent: true })
+      showUploadComplete(uploadResult)
     } catch (error) {
       setErrorMessage(error.message)
     } finally {
@@ -245,7 +310,7 @@ function AdminDashboardPage() {
 
     setMessage('')
     setErrorMessage('')
-    setLastUploadDurationMs(null)
+    setLastUploadSummary(null)
 
     try {
       await createCategory(trimmedName)
@@ -262,7 +327,7 @@ function AdminDashboardPage() {
 
     setMessage('')
     setErrorMessage('')
-    setLastUploadDurationMs(null)
+    setLastUploadSummary(null)
     setIsDeleting(true)
 
     try {
@@ -296,7 +361,7 @@ function AdminDashboardPage() {
   const handleCloseNotice = () => {
     setMessage('')
     setErrorMessage('')
-    setLastUploadDurationMs(null)
+    setLastUploadSummary(null)
   }
 
   const handleSavePrompt = async (event) => {
@@ -613,7 +678,22 @@ function AdminDashboardPage() {
         )}
       </main>
 
-      {(message || errorMessage) && (
+      {isUploading && (
+        <div className="admin-modal-backdrop" role="presentation">
+          <section
+            className="admin-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="admin-uploading-title"
+          >
+            <p>업로드 중</p>
+            <h2 id="admin-uploading-title">문서를 처리하고 있습니다</h2>
+            <span>청킹과 임베딩 색인이 끝나면 결과를 표시합니다.</span>
+          </section>
+        </div>
+      )}
+
+      {!isUploading && (message || errorMessage) && (
         <div className="admin-modal-backdrop" role="presentation">
           <section
             className={errorMessage ? 'admin-modal admin-modal--error' : 'admin-modal'}
@@ -623,8 +703,13 @@ function AdminDashboardPage() {
           >
             <p>{errorMessage ? '처리할 수 없습니다' : '완료'}</p>
             <h2 id="admin-notice-title">{errorMessage || message}</h2>
-            {!errorMessage && message === '문서를 업로드했습니다.' && formatDuration(lastUploadDurationMs) && (
-              <span>처리 시간 {formatDuration(lastUploadDurationMs)}</span>
+            {!errorMessage && lastUploadSummary && (
+              <span>
+                청크 {lastUploadSummary.chunkCount}개
+                {formatDuration(lastUploadSummary.processingDurationMs)
+                  ? ` · 처리 시간 ${formatDuration(lastUploadSummary.processingDurationMs)}`
+                  : ''}
+              </span>
             )}
             <button type="button" className="admin-primary-button" onClick={handleCloseNotice}>
               확인
