@@ -3382,32 +3382,6 @@ button:disabled {
   min-width: 0;
 }
 
-.document-status {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 0 7px;
-  border: 1px solid #d9e2f0;
-  border-radius: 999px;
-  color: #24415f;
-  background: #f4f8fb;
-  font-size: 12px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.document-status--processing {
-  border-color: #e4d7b5;
-  color: #6f531d;
-  background: #fff8e7;
-}
-
-.document-status--failed {
-  border-color: #f0c8c8;
-  color: #9c2f2f;
-  background: #fff2f2;
-}
-
 .admin-empty {
   margin: 0;
   padding: 26px 0;

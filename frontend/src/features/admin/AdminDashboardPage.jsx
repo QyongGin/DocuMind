@@ -50,17 +50,6 @@ function formatDuration(durationMs) {
   return `${minutes}분 ${seconds}초`
 }
 
-function formatProcessingStatus(status) {
-  if (status === 'PROCESSING') return '처리 중'
-  if (status === 'FAILED') return '실패'
-  return '완료'
-}
-
-function processingStatusClassName(status) {
-  const normalizedStatus = status === 'PROCESSING' || status === 'FAILED' ? status.toLowerCase() : 'ready'
-  return `document-status document-status--${normalizedStatus}`
-}
-
 function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
@@ -608,9 +597,6 @@ function AdminDashboardPage() {
                       <span>
                         <strong>{document.originalName}</strong>
                         <span className="document-row__meta">
-                          <span className={processingStatusClassName(document.processingStatus)}>
-                            {formatProcessingStatus(document.processingStatus)}
-                          </span>
                           <small>
                             {document.categoryName || '미분류'} · {formatFileSize(document.fileSize)} · {document.chunkCount} chunks
                             {formatDuration(document.processingDurationMs) && ` · 처리 ${formatDuration(document.processingDurationMs)}`}
