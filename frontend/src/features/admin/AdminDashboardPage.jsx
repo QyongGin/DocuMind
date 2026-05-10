@@ -66,6 +66,18 @@ function clampPercent(value) {
   return Math.min(100, Math.max(0, Math.round(percent)))
 }
 
+function resolveUploadProgressCeiling(progress) {
+  const targetPercent = clampPercent(progress?.percent ?? 0)
+  if (progress?.status === 'completed' || progress?.status === 'failed') return 100
+  if (targetPercent >= 95) return 99
+  if (targetPercent >= 90) return 97
+  if (targetPercent >= 70) return 92
+  if (targetPercent >= 30) return 86
+  if (targetPercent >= 18) return 34
+  if (targetPercent >= 5) return 18
+  return Math.max(targetPercent, 3)
+}
+
 function formatPercent(rate) {
   const percent = Number(rate) * 100
   if (!Number.isFinite(percent)) return '0%'
@@ -75,6 +87,7 @@ function formatPercent(rate) {
 function AdminDashboardPage() {
   const navigate = useNavigate()
   const fileInputRef = useRef(null)
+  const displayedUploadProgressPercentRef = useRef(0)
   const [documents, setDocuments] = useState([])
   const [categories, setCategories] = useState([])
   const [feedbackStats, setFeedbackStats] = useState({
@@ -123,7 +136,15 @@ function AdminDashboardPage() {
 
   const totalChunks = documents.reduce((sum, document) => sum + (document.chunkCount ?? 0), 0)
   const isPromptDirty = systemPrompt !== (promptConfig?.systemPrompt ?? '')
-  const uploadProgressTargetPercent = clampPercent(uploadProgress?.percent ?? 0)
+  const uploadProgressCeiling = resolveUploadProgressCeiling(uploadProgress)
+
+  const updateDisplayedUploadProgressPercent = (updater) => {
+    const currentPercent = displayedUploadProgressPercentRef.current
+    const nextPercent = typeof updater === 'function' ? updater(currentPercent) : updater
+    const normalizedPercent = clampPercent(nextPercent)
+    displayedUploadProgressPercentRef.current = normalizedPercent
+    setDisplayedUploadProgressPercent(normalizedPercent)
+  }
 
   const loadDashboard = async ({ silent = false, throwOnError = false } = {}) => {
     if (!silent) {
@@ -184,24 +205,21 @@ function AdminDashboardPage() {
 
   useEffect(() => {
     if (!isUploading) {
-      setDisplayedUploadProgressPercent(0)
+      updateDisplayedUploadProgressPercent(0)
       return undefined
     }
 
     const intervalId = window.setInterval(() => {
-      setDisplayedUploadProgressPercent((currentPercent) => {
-        if (currentPercent === uploadProgressTargetPercent) {
+      updateDisplayedUploadProgressPercent((currentPercent) => {
+        if (currentPercent >= uploadProgressCeiling) {
           return currentPercent
         }
-        if (currentPercent < uploadProgressTargetPercent) {
-          return Math.min(currentPercent + 1, uploadProgressTargetPercent)
-        }
-        return uploadProgressTargetPercent
+        return currentPercent + 1
       })
-    }, 45)
+    }, 180)
 
     return () => window.clearInterval(intervalId)
-  }, [isUploading, uploadProgressTargetPercent])
+  }, [isUploading, uploadProgressCeiling])
 
   useEffect(() => {
     if (!hasProcessingDocuments || isUploading) return undefined
@@ -252,6 +270,17 @@ function AdminDashboardPage() {
     })
     setUploadProgress({ percent: 100, message: '문서 처리가 완료되었습니다.', status: 'completed' })
     setMessage('문서 처리가 완료되었습니다.')
+  }
+
+  const finishUploadProgress = async () => {
+    setUploadProgress({ percent: 100, message: '문서 처리가 완료되었습니다.', status: 'completed' })
+
+    while (displayedUploadProgressPercentRef.current < 100) {
+      updateDisplayedUploadProgressPercent((currentPercent) => currentPercent + 1)
+      await sleep(18)
+    }
+
+    await sleep(250)
   }
 
   const resetSelectedFile = () => {
@@ -327,11 +356,13 @@ function AdminDashboardPage() {
       resetSelectedFile()
       if (uploadResult?.processingStatus === 'PROCESSING') {
         const completedDocument = await waitForDocumentProcessing(uploadResult.documentId)
+        await finishUploadProgress()
         showUploadComplete(completedDocument)
         return
       }
 
       await loadDashboard({ silent: true })
+      await finishUploadProgress()
       showUploadComplete(uploadResult)
     } catch (error) {
       setErrorMessage(error.message)
