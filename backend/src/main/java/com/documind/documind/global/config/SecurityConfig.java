@@ -62,6 +62,7 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.GET, "/api/auth/verify").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.GET, "/api/documents").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.GET, "/api/documents/*/chunks").hasRole("ADMIN")
+                    .requestMatchers(HttpMethod.GET, "/api/documents/*/progress").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.POST, "/api/documents").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.DELETE, "/api/documents/**").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.POST, "/api/categories").hasRole("ADMIN")
