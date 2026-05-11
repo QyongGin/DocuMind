@@ -73,8 +73,6 @@ CHUNK_MERGE_MIN_SIZE = _env_int("CHUNK_MERGE_MIN_SIZE", 300, minimum=0)
 EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 64)
 UPLOAD_READ_CHUNK_BYTES = _env_int("UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)
 DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 5)
-CONTEXT_NEIGHBOR_CHUNKS = _env_int("CONTEXT_NEIGHBOR_CHUNKS", 1, minimum=0)
-CONTEXT_NEIGHBOR_TRIGGER_MAX_CHARS = _env_int("CONTEXT_NEIGHBOR_TRIGGER_MAX_CHARS", 350, minimum=0)
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
     logger.warning(
@@ -112,7 +110,7 @@ _progress_lock = Lock()
 _document_progress: dict[int, dict] = {}
 
 logger.info(
-    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s context_neighbor_chunks=%s context_neighbor_trigger_max_chars=%s chroma_host=%s chroma_port=%s",
+    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s chroma_host=%s chroma_port=%s",
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
     OLLAMA_EMBEDDING_MODEL,
@@ -126,8 +124,6 @@ logger.info(
     CHUNK_MERGE_MIN_SIZE,
     EMBEDDING_BATCH_SIZE,
     DEFAULT_TOP_K,
-    CONTEXT_NEIGHBOR_CHUNKS,
-    CONTEXT_NEIGHBOR_TRIGGER_MAX_CHARS,
     CHROMA_HOST or "persistent",
     CHROMA_PORT
 )
@@ -1054,7 +1050,6 @@ MANDATORY_RAG_PROMPT = (
 
 
 QUERY_TERM_SYNONYMS = {
-    "어떻게": {"방법", "절차", "신청", "신청절차", "유의사항", "주의사항"},
     "방법": {"방법", "절차", "신청", "신청절차", "제출"},
     "주의사항": {"주의사항", "유의사항", "유의", "주의"},
     "전과": {"전과", "전과제도", "전과시행"},
@@ -1112,111 +1107,6 @@ def _extract_query_terms(question: str) -> set[str]:
         terms.add(normalized)
         terms.update(QUERY_TERM_SYNONYMS.get(normalized, set()))
     return terms
-
-
-def _build_retrieval_query(question: str) -> str:
-    """사용자 질문에 간단한 동의어를 붙여 절차·주의사항 청크 검색 recall을 보강한다."""
-    query_terms = sorted(_extract_query_terms(question), key=lambda term: (len(term), term))
-    normalized_question = question.lower()
-    extra_terms = [term for term in query_terms if term not in normalized_question]
-    if not extra_terms:
-        return question
-
-    return f"{question}\n관련 키워드: {' '.join(extra_terms[:12])}"
-
-
-def _neighbor_chunk_ids(meta: dict, chunk_id: str) -> list[str]:
-    """짧은 검색 청크 뒤에 이어지는 인접 청크 id를 만든다."""
-    if CONTEXT_NEIGHBOR_CHUNKS <= 0:
-        return []
-
-    document_id = meta.get("document_id")
-    chunk_index = meta.get("chunk_index", _parse_chunk_index(chunk_id))
-    if document_id is None or chunk_index is None:
-        return []
-
-    try:
-        base_index = int(chunk_index)
-    except (TypeError, ValueError):
-        return []
-
-    return [
-        f"{document_id}_{base_index + offset}"
-        for offset in range(1, CONTEXT_NEIGHBOR_CHUNKS + 1)
-    ]
-
-
-def _should_expand_neighbor_context(doc: str) -> bool:
-    """검색된 청크가 너무 짧으면 다음 청크까지 생성 context에 포함한다."""
-    return (
-        CONTEXT_NEIGHBOR_CHUNKS > 0
-        and CONTEXT_NEIGHBOR_TRIGGER_MAX_CHARS > 0
-        and len(doc.strip()) <= CONTEXT_NEIGHBOR_TRIGGER_MAX_CHARS
-    )
-
-
-def _expand_context_neighbors(docs: list[str], metadatas: list[dict], ids: list[str]) -> tuple[list[str], list[dict], list[str]]:
-    """
-    작은 검색 청크가 제목·정의만 담고 있을 때 다음 청크를 생성 context에 추가한다.
-    검색 기준은 작은 청크로 유지하되, 답변 생성에는 바로 이어지는 근거를 함께 제공한다.
-    """
-    candidate_ids: list[str] = []
-    seen_ids = set(ids)
-
-    for doc, meta, chunk_id in zip(docs, metadatas, ids):
-        if not _should_expand_neighbor_context(doc):
-            continue
-        for neighbor_id in _neighbor_chunk_ids(meta or {}, chunk_id):
-            if neighbor_id not in seen_ids:
-                candidate_ids.append(neighbor_id)
-                seen_ids.add(neighbor_id)
-
-    if not candidate_ids:
-        return docs, metadatas, ids
-
-    neighbor_results = collection.get(
-        ids=candidate_ids,
-        include=["documents", "metadatas"]
-    )
-    neighbor_by_id = {
-        neighbor_id: (doc, meta or {})
-        for neighbor_id, doc, meta in zip(
-            neighbor_results.get("ids", []),
-            neighbor_results.get("documents", []),
-            neighbor_results.get("metadatas", []),
-        )
-    }
-
-    expanded_docs: list[str] = []
-    expanded_metadatas: list[dict] = []
-    expanded_ids: list[str] = []
-    appended_ids: set[str] = set()
-
-    for doc, meta, chunk_id in zip(docs, metadatas, ids):
-        expanded_docs.append(doc)
-        expanded_metadatas.append(meta)
-        expanded_ids.append(chunk_id)
-        appended_ids.add(chunk_id)
-
-        if not _should_expand_neighbor_context(doc):
-            continue
-        for neighbor_id in _neighbor_chunk_ids(meta or {}, chunk_id):
-            if neighbor_id in appended_ids or neighbor_id not in neighbor_by_id:
-                continue
-            neighbor_doc, neighbor_meta = neighbor_by_id[neighbor_id]
-            expanded_docs.append(neighbor_doc)
-            expanded_metadatas.append(neighbor_meta)
-            expanded_ids.append(neighbor_id)
-            appended_ids.add(neighbor_id)
-
-    logger.info(
-        "[query_context_expand] retrieved_docs=%s expanded_docs=%s neighbor_candidates=%s appended_neighbors=%s",
-        len(docs),
-        len(expanded_docs),
-        len(candidate_ids),
-        len(expanded_docs) - len(docs),
-    )
-    return expanded_docs, expanded_metadatas, expanded_ids
 
 
 def _select_relevant_excerpt(text: str, query_terms: set[str], window: int = 2, max_lines: int = 18) -> str:
@@ -1282,8 +1172,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     """
     prepare_start = time.perf_counter()
     embedding_start = time.perf_counter()
-    retrieval_query = _build_retrieval_query(question)
-    question_vectors, embed_metadata = _embed_texts([retrieval_query])
+    question_vectors, embed_metadata = _embed_texts([question])
     question_vector = question_vectors[0]
     embedding_elapsed = time.perf_counter() - embedding_start
     ollama_total = _seconds_from_nanos(embed_metadata.get("total_duration"))
@@ -1302,7 +1191,6 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     metadatas = results["metadatas"][0] if results["metadatas"] else []
     ids = results["ids"][0] if results["ids"] else []
     distance_values = [float(distance) for distance in results["distances"][0]] if results.get("distances") else []
-    retrieved_docs_count = len(docs)
 
     if not docs:
         prepare_elapsed = time.perf_counter() - prepare_start
@@ -1313,15 +1201,12 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "context_build_elapsed": 0.0,
             "context_chars": 0,
             "prompt_chars": 0,
-            "retrieval_query_chars": len(retrieval_query),
-            "retrieved_docs": retrieved_docs_count,
             "source_chars": [],
             "distances": distance_values,
         }
         logger.info(
-            "[query_prepare] top_k=%s docs=0 retrieval_query_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+            "[query_prepare] top_k=%s docs=0 embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
             top_k,
-            len(retrieval_query),
             embedding_elapsed,
             _format_seconds(ollama_total),
             _format_seconds(ollama_load),
@@ -1333,7 +1218,6 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         return None, [], metrics
 
     context_build_start = time.perf_counter()
-    docs, metadatas, ids = _expand_context_neighbors(docs, metadatas, ids)
     context = _build_context(docs, metadatas, ids, question)
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
 
@@ -1389,8 +1273,6 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "context_build_elapsed": context_build_elapsed,
         "context_chars": len(context),
         "prompt_chars": len(prompt),
-        "retrieval_query_chars": len(retrieval_query),
-        "retrieved_docs": retrieved_docs_count,
         "source_chars": source_chars,
         "distances": distance_values,
         "distance_min": distance_min,
@@ -1398,9 +1280,8 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "distance_avg": distance_avg,
     }
     logger.info(
-        "[query_context] top_k=%s retrieved_docs=%s context_docs=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
+        "[query_context] top_k=%s docs=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
         top_k,
-        retrieved_docs_count,
         len(docs),
         metrics["context_chars"],
         _format_int_list(source_chars),
@@ -1410,11 +1291,9 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         _format_decimal(distance_avg),
     )
     logger.info(
-        "[query_prepare] top_k=%s retrieved_docs=%s context_docs=%s retrieval_query_chars=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+        "[query_prepare] top_k=%s docs=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
         top_k,
-        retrieved_docs_count,
         len(docs),
-        len(retrieval_query),
         metrics["context_chars"],
         metrics["prompt_chars"],
         embedding_elapsed,
