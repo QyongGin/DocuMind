@@ -1746,6 +1746,11 @@ QUERY_TERM_SYNONYMS = {
     "정원": {"정원", "모집인원", "모집정원", "인원"},
 }
 
+QUERY_GENERIC_TERMS = {
+    "방법", "절차", "신청", "주의사항", "유의사항", "모집", "인원", "정원",
+    "모집인원", "모집정원", "정보", "알려줘", "어디", "어떤", "뭐야", "무엇",
+}
+
 
 def _format_page_label(meta: dict) -> str:
     """검색 근거 context에 넣을 PDF page label을 만든다."""
@@ -1798,6 +1803,90 @@ def _extract_query_terms(question: str) -> set[str]:
         terms.add(normalized)
         terms.update(QUERY_TERM_SYNONYMS.get(normalized, set()))
     return terms
+
+
+def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
+    """table_fact lexical 보강 검색에 사용할 주제어와 의도어를 나눈다."""
+    subject_terms: set[str] = set()
+    intent_terms: set[str] = set()
+
+    for token in re.findall(r"[0-9A-Za-z가-힣]+", question):
+        raw_token = token.strip().lower()
+        normalized = _normalize_query_token(raw_token)
+        if len(normalized) < 2:
+            continue
+
+        expanded_terms = {raw_token, normalized}
+        expanded_terms.update(QUERY_TERM_SYNONYMS.get(normalized, set()))
+        if expanded_terms & {"모집", "인원", "정원", "모집인원", "모집정원"}:
+            intent_terms.update({"모집", "인원", "정원", "모집인원", "모집정원", "모집 인원 정보"})
+        else:
+            subject_terms.update(term for term in expanded_terms if len(term) >= 3 and term not in QUERY_GENERIC_TERMS)
+
+    return subject_terms, intent_terms
+
+
+def _score_table_fact_for_question(fact: str, question: str) -> int:
+    """질문과 table_fact의 lexical 관련도를 계산한다."""
+    fact_lower = fact.lower()
+    subject_terms, intent_terms = _extract_lexical_query_terms(question)
+    if subject_terms and not any(term in fact_lower for term in subject_terms):
+        return 0
+
+    score = 0
+    score += sum(12 for term in subject_terms if term in fact_lower)
+    score += sum(4 for term in intent_terms if term in fact_lower)
+
+    recruitment_query = bool(intent_terms & {"모집", "인원", "정원", "모집인원", "모집정원"})
+    if recruitment_query:
+        if "모집 인원 정보" in fact_lower or "모집 정원" in fact_lower:
+            score += 30
+        if "입시결과" in fact_lower or "경쟁" in fact_lower or "평균" in fact_lower or "예비" in fact_lower:
+            score -= 25
+
+    return max(score, 0)
+
+
+def _lookup_lexical_table_facts(question: str, limit: int = 5) -> tuple[list[str], list[dict], list[str]]:
+    """표 질의에서 벡터 검색이 놓치는 table_fact를 얇은 lexical 보강으로 찾는다."""
+    subject_terms, intent_terms = _extract_lexical_query_terms(question)
+    if not subject_terms or not intent_terms:
+        return [], [], []
+
+    try:
+        results = collection.get(
+            where={"chunk_role": "table_fact"},
+            include=["documents", "metadatas"],
+        )
+    except Exception:
+        logger.exception("[query_table_fact_lexical] failed")
+        return [], [], []
+
+    candidates: list[tuple[int, str, dict, str]] = []
+    for chunk_id, document, metadata in zip(
+        results.get("ids", []),
+        results.get("documents", []),
+        results.get("metadatas", []),
+    ):
+        score = _score_table_fact_for_question(str(document), question)
+        if score <= 0:
+            continue
+        candidates.append((score, str(chunk_id), metadata or {}, str(document)))
+
+    candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+    selected = candidates[:limit]
+    logger.info(
+        "[query_table_fact_lexical] subject_terms=%s intent_terms=%s candidates=%s selected=%s",
+        ",".join(sorted(subject_terms)) or "none",
+        ",".join(sorted(intent_terms)) or "none",
+        len(candidates),
+        len(selected),
+    )
+    return (
+        [document for _, _, _, document in selected],
+        [metadata for _, _, metadata, _ in selected],
+        [chunk_id for _, chunk_id, _, _ in selected],
+    )
 
 
 def _select_relevant_excerpt(text: str, query_terms: set[str], window: int = 2, max_lines: int = 18) -> str:
@@ -1976,6 +2065,11 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     ids = results["ids"][0] if results["ids"] else []
     distance_values = [float(distance) for distance in results["distances"][0]] if results.get("distances") else []
     raw_result_count = len(docs)
+    lexical_docs, lexical_metadatas, lexical_ids = _lookup_lexical_table_facts(question)
+    if lexical_docs:
+        docs = lexical_docs + docs
+        metadatas = lexical_metadatas + metadatas
+        ids = lexical_ids + ids
     docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
     docs = docs[:top_k]
     metadatas = metadatas[:top_k]
@@ -1992,6 +2086,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "prompt_chars": 0,
             "source_chars": [],
             "distances": distance_values,
+            "lexical_table_facts": len(lexical_docs),
         }
         logger.info(
             "[query_prepare] top_k=%s retrieval_limit=%s docs=0 embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
@@ -2069,12 +2164,14 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "distance_min": distance_min,
         "distance_max": distance_max,
         "distance_avg": distance_avg,
+        "lexical_table_facts": len(lexical_docs),
     }
     logger.info(
-        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s docs=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
+        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s lexical_table_facts=%s docs=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
         top_k,
         retrieval_limit,
         raw_result_count,
+        len(lexical_docs),
         len(docs),
         metrics["context_chars"],
         _format_int_list(source_chars),
@@ -2084,10 +2181,11 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         _format_decimal(distance_avg),
     )
     logger.info(
-        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s docs=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s lexical_table_facts=%s docs=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
         top_k,
         retrieval_limit,
         raw_result_count,
+        len(lexical_docs),
         len(docs),
         metrics["context_chars"],
         metrics["prompt_chars"],
