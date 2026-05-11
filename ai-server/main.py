@@ -1790,10 +1790,11 @@ MANDATORY_RAG_PROMPT = (
     "4. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다.\n"
     "5. 숫자, 날짜, 모집 인원, 점수, 기간은 추측하지 말고 근거의 값을 그대로 쓴다.\n"
     "6. 모집 인원을 묻는 경우 '모집 정원'을 전체 모집 인원으로 먼저 답하고, 전형별 인원이 있으면 함께 구분한다.\n"
-    "7. '입시결과', '경쟁', '평균', '최저', '예비' 표는 전년도 결과이므로 현재 모집 인원 답변에 사용하지 않는다.\n"
-    "8. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
-    "9. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
-    "10. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다."
+    "7. 질문에 정원외, 농어촌, 수급자, 전문대졸, 북한이탈주민이 없으면 정원내 전형 모집인원을 기준으로 답한다.\n"
+    "8. '입시결과', '경쟁', '평균', '최저', '예비' 표는 전년도 결과이므로 현재 모집 인원 답변에 사용하지 않는다.\n"
+    "9. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
+    "10. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
+    "11. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다."
 )
 
 
@@ -1812,6 +1813,7 @@ QUERY_GENERIC_TERMS = {
 }
 
 QUERY_RESULT_TERMS = {"입시결과", "전년도", "경쟁", "경쟁률", "평균", "최저", "예비"}
+QUERY_OUT_OF_QUOTA_TERMS = {"정원외", "정원 외", "농어촌", "수급자", "전문대졸", "북한", "북한이탈주민"}
 
 
 def _format_page_label(meta: dict) -> str:
@@ -1901,8 +1903,11 @@ def _score_table_fact_for_question(fact: str, question: str) -> int:
 
     recruitment_query = bool(intent_terms & {"모집", "인원", "정원", "모집인원", "모집정원"})
     result_query = any(term in question for term in QUERY_RESULT_TERMS)
+    out_of_quota_query = _is_out_of_quota_question(question)
     if recruitment_query:
         is_outcome_fact = any(term in fact_lower for term in QUERY_RESULT_TERMS)
+        if _looks_like_out_of_quota_recruitment_context(fact) and not out_of_quota_query:
+            return 0
         if is_outcome_fact and not result_query:
             return 0
         if "모집 인원 정보" in fact_lower or "모집 정원" in fact_lower:
@@ -1955,12 +1960,44 @@ def _lookup_lexical_table_facts(question: str, limit: int = 5) -> tuple[list[str
     )
 
 
+def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[dict]) -> list[dict]:
+    """검색된 raw 청크 안의 표에서 질문과 맞는 fact를 런타임 metadata에 붙인다."""
+    if not _is_recruitment_count_question(question):
+        return metadatas
+
+    updated_metadatas: list[dict] = []
+    for doc, meta in zip(docs, metadatas):
+        runtime_meta = dict(meta or {})
+        if runtime_meta.get("chunk_role") == "table_fact":
+            updated_metadatas.append(runtime_meta)
+            continue
+
+        scored_facts: list[tuple[int, str]] = []
+        for fact in _extract_table_facts(doc, runtime_meta):
+            score = _score_table_fact_for_question(fact, question)
+            if score > 0:
+                scored_facts.append((score, fact))
+
+        scored_facts.sort(key=lambda item: item[0], reverse=True)
+        for _, fact in scored_facts[:2]:
+            runtime_meta = _append_runtime_table_fact(runtime_meta, fact)
+        updated_metadatas.append(runtime_meta)
+
+    return updated_metadatas
+
+
 def _is_recruitment_count_question(question: str) -> bool:
     """현재 모집 인원/정원 질문인지 확인한다."""
     _, intent_terms = _extract_lexical_query_terms(question)
     asks_recruitment_count = bool(intent_terms & {"모집", "인원", "정원", "모집인원", "모집정원"})
     asks_result = any(term in question for term in QUERY_RESULT_TERMS)
     return asks_recruitment_count and not asks_result
+
+
+def _is_out_of_quota_question(question: str) -> bool:
+    """정원외 전형을 명시적으로 묻는 질문인지 확인한다."""
+    normalized = re.sub(r"\s+", "", question)
+    return any(term.replace(" ", "") in normalized for term in QUERY_OUT_OF_QUOTA_TERMS)
 
 
 def _has_recruitment_table_fact(meta: dict) -> bool:
@@ -1986,20 +2023,38 @@ def _looks_like_admission_result_context(text: str) -> bool:
     return "입시결과" in text or has_result_metrics or has_abbreviated_result_header or has_special_admission_result
 
 
+def _looks_like_out_of_quota_recruitment_context(text: str) -> bool:
+    """정원외 모집인원 표 context인지 보수적으로 확인한다."""
+    compact_text = re.sub(r"\s+", "", text)
+    return (
+        "정원외전형모집인원" in compact_text
+        or "정원외특별전형" in compact_text
+        or "전문대졸북한이탈주민" in compact_text
+        or ("수시2차농어촌수급자" in compact_text and "정시농어촌수급자" in compact_text)
+    )
+
+
 def _prioritize_query_results(docs: list[str], metadatas: list[dict], ids: list[str], question: str) -> tuple[list[str], list[dict], list[str]]:
     """모집 인원 질문에서는 현재 모집인원 fact를 입시결과 표보다 앞세운다."""
     if not _is_recruitment_count_question(question):
         return docs, metadatas, ids
 
     has_recruitment_fact = any(_has_recruitment_table_fact(meta or {}) for meta in metadatas)
+    out_of_quota_query = _is_out_of_quota_question(question)
     ranked: list[tuple[int, int, str, dict, str]] = []
     for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids)):
         meta = meta or {}
         if has_recruitment_fact and _looks_like_admission_result_context(doc):
             continue
-        if _has_recruitment_table_fact(meta):
+        if has_recruitment_fact and not out_of_quota_query and _looks_like_out_of_quota_recruitment_context(doc):
+            continue
+        if out_of_quota_query and _looks_like_out_of_quota_recruitment_context(doc):
             priority = 0
+        elif _has_recruitment_table_fact(meta):
+            priority = 1 if out_of_quota_query else 0
         elif _looks_like_admission_result_context(doc):
+            priority = 2
+        elif not out_of_quota_query and _looks_like_out_of_quota_recruitment_context(doc):
             priority = 2
         else:
             priority = 1
@@ -2195,6 +2250,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         metadatas = lexical_metadatas + metadatas
         ids = lexical_ids + ids
     docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
+    metadatas = _attach_runtime_table_facts(question, docs, metadatas)
     docs, metadatas, ids = _prioritize_query_results(docs, metadatas, ids, question)
     docs = docs[:top_k]
     metadatas = metadatas[:top_k]
