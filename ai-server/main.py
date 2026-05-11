@@ -332,6 +332,74 @@ def _is_markdown_table_row(line: str) -> bool:
     return stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2
 
 
+def _first_non_empty_line(text: str) -> str:
+    """텍스트에서 첫 번째 비어 있지 않은 line을 반환한다."""
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _starts_with_table_body_row(text: str) -> bool:
+    """청크가 table header 없이 table body row로 시작하는지 확인한다."""
+    first_line = _first_non_empty_line(text)
+    return bool(first_line) and _is_markdown_table_row(first_line) and not _is_markdown_table_separator(first_line)
+
+
+def _has_table_header_block_at_start(text: str) -> bool:
+    """청크 시작부에 Markdown table header block이 이미 있는지 확인한다."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return len(lines) >= 2 and _is_markdown_table_row(lines[0]) and _is_markdown_table_separator(lines[1])
+
+
+def _starts_with_same_table_header_block(text: str, header_block: str) -> bool:
+    """텍스트 시작부가 주어진 table header block과 같은지 확인한다."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    header_lines = [line.strip() for line in header_block.splitlines() if line.strip()]
+    if len(lines) < 2 or len(header_lines) < 2:
+        return False
+    return (
+        _normalize_line_for_dedupe(lines[0]) == _normalize_line_for_dedupe(header_lines[0])
+        and _normalize_line_for_dedupe(lines[1]) == _normalize_line_for_dedupe(header_lines[1])
+    )
+
+
+def _find_active_table_header_block(text: str) -> str:
+    """
+    이전 청크 끝까지 이어지는 table의 마지막 header block을 찾는다.
+    header 뒤에 일반 문단이 나오면 이미 끝난 표로 보고 carry-forward하지 않는다.
+    """
+    lines = text.splitlines()
+    last_header_block = ""
+
+    for index in range(len(lines) - 1):
+        if not (_is_markdown_table_row(lines[index]) and _is_markdown_table_separator(lines[index + 1])):
+            continue
+
+        has_body_row = False
+        has_non_table_after_header = False
+        for tail_line in lines[index + 2:]:
+            if not tail_line.strip():
+                continue
+            if _is_markdown_table_row(tail_line) or _is_markdown_table_separator(tail_line):
+                has_body_row = has_body_row or not _is_markdown_table_separator(tail_line)
+                continue
+            has_non_table_after_header = True
+            break
+
+        if has_body_row and not has_non_table_after_header:
+            last_header_block = f"{lines[index].strip()}\n{lines[index + 1].strip()}"
+
+    return last_header_block
+
+
+def _select_table_header_overlap(previous_text: str, current_text: str) -> str:
+    """표가 청크 경계에서 이어질 때 다음 청크 앞에 붙일 table header block을 선택한다."""
+    if not _starts_with_table_body_row(current_text) or _has_table_header_block_at_start(current_text):
+        return ""
+    return _find_active_table_header_block(previous_text)
+
+
 def _dedupe_adjacent_lines(text: str) -> str:
     """
     같은 청크 안에서 바로 반복되는 동일 line 또는 동일 table header block만 제거한다.
@@ -566,6 +634,7 @@ def _merge_short_chunks(docs: list[Document]) -> list[Document]:
 def _apply_overlap(docs: list[Document]) -> list[Document]:
     """
     이전 청크의 마지막 완성 line들을 다음 청크 앞에 prepend하는 수동 overlap 후처리.
+    표가 청크 경계에서 끊기면 이전 청크의 활성 table header block도 함께 prepend한다.
     RecursiveCharacterTextSplitter의 내장 overlap은 서로 다른 헤더 구간 간에
     작동하지 않으므로 전체 청크 리스트에 수동으로 적용한다. 문자 중간을 자르지 않는다.
     """
@@ -577,12 +646,21 @@ def _apply_overlap(docs: list[Document]) -> list[Document]:
         if i == 0:
             overlapped.append(doc)
         else:
+            context_parts = []
             overlap_text = _select_overlap_text(docs[i - 1].page_content, CHUNK_OVERLAP)
-            if not overlap_text:
+            table_header_overlap = _select_table_header_overlap(docs[i - 1].page_content, doc.page_content)
+            if table_header_overlap and not _starts_with_same_table_header_block(overlap_text, table_header_overlap):
+                context_parts.append(table_header_overlap)
+
+            if overlap_text:
+                context_parts.append(overlap_text)
+
+            if not context_parts:
                 overlapped.append(doc)
                 continue
+            context_text = "\n\n".join(context_parts)
             overlapped.append(Document(
-                page_content=_dedupe_adjacent_lines(overlap_text + "\n\n" + doc.page_content),
+                page_content=_dedupe_adjacent_lines(context_text + "\n\n" + doc.page_content),
                 metadata=doc.metadata
             ))
     return overlapped
