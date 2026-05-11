@@ -272,6 +272,57 @@ def _resolve_page_range(content: str, page_lookup: list[dict]) -> tuple[int | No
     return min(matched_pages), max(matched_pages)
 
 
+def _normalize_loaded_documents(raw_docs: list[Document]) -> list[Document]:
+    """로더가 반환한 Document의 본문은 정규화하되 metadata는 보존한다."""
+    return [
+        Document(page_content=_normalize_text(doc.page_content), metadata=dict(doc.metadata))
+        for doc in raw_docs
+        if doc.page_content and doc.page_content.strip()
+    ]
+
+
+def _has_page_metadata(docs: list[Document]) -> bool:
+    """PDF처럼 page metadata가 있는 Document 목록인지 확인한다."""
+    return any(doc.metadata.get("page") is not None for doc in docs)
+
+
+def _update_active_headers(active_headers: dict[str, str], chunk_metadata: dict) -> None:
+    """페이지가 바뀌어도 직전 Markdown header 경로를 이어가기 위해 현재 chunk의 header를 반영한다."""
+    for level in range(1, 7):
+        key = f"Header {level}"
+        value = str(chunk_metadata.get(key, "")).strip()
+        if not value:
+            continue
+
+        active_headers[key] = value
+        for lower_level in range(level + 1, 7):
+            active_headers.pop(f"Header {lower_level}", None)
+
+
+def _split_loaded_documents(docs: list[Document]) -> list[Document]:
+    """
+    로더 Document를 청킹한다.
+    PDF는 page metadata를 가진 raw Document를 페이지별 구조 범위로 사용하고,
+    DOCX/PPTX/XLSX처럼 page 개념이 없는 문서는 기존처럼 전체 Markdown을 청킹한다.
+    """
+    if not _has_page_metadata(docs):
+        full_text = "\n".join(doc.page_content for doc in docs)
+        return _two_pass_split(full_text)
+
+    split_docs: list[Document] = []
+    active_headers: dict[str, str] = {}
+    for raw_doc in docs:
+        page_chunks = _two_pass_split(raw_doc.page_content)
+        for chunk in page_chunks:
+            _update_active_headers(active_headers, chunk.metadata)
+            metadata = dict(raw_doc.metadata)
+            metadata.update(active_headers)
+            metadata.update(chunk.metadata)
+            split_docs.append(Document(page_content=chunk.page_content, metadata=metadata))
+
+    return split_docs
+
+
 def _two_pass_split(full_text: str) -> list[Document]:
     """
     Two-Pass 청킹: MarkdownHeaderTextSplitter → RecursiveCharacterTextSplitter.
@@ -286,7 +337,7 @@ def _two_pass_split(full_text: str) -> list[Document]:
     result: list[Document] = []
     for doc in header_chunks:
         if len(doc.page_content) > CHUNK_SIZE:
-            sub_docs = _char_splitter.split_documents([doc])
+            sub_docs = _split_large_chunk_preserving_tables(doc)
             result.extend(sub_docs)
         else:
             result.append(doc)
@@ -308,12 +359,33 @@ def _combine_chunk_documents(docs: list[Document]) -> Document:
                 common_metadata[key] = value
 
     common_metadata["merged_chunk_count"] = len(docs)
+    if any(doc.metadata.get("block_type") == "table" for doc in docs):
+        common_metadata["block_type"] = "table"
     return Document(page_content=page_content, metadata=common_metadata)
 
 
 def _header_signature(doc: Document) -> tuple[str, ...]:
     """청크의 상위 Markdown header 경로를 짧은 청크 병합 경계 판단용 tuple로 반환한다."""
     return tuple(str(doc.metadata.get(f"Header {level}", "")) for level in range(1, 4))
+
+
+def _chunk_block_signature(doc: Document) -> str:
+    """짧은 청크 병합 시 표와 일반 문단이 섞이지 않도록 block 성격을 반환한다."""
+    if doc.metadata.get("block_type") == "table":
+        return "table"
+    return "text"
+
+
+def _can_merge_text_prefix_into_table(buffer: list[Document], doc: Document, next_length: int, short_threshold: int) -> bool:
+    """표 바로 앞의 짧은 제목·설명 청크는 table chunk와 함께 보존한다."""
+    if not buffer:
+        return False
+    if _chunk_block_signature(buffer[-1]) != "text" or _chunk_block_signature(doc) != "table":
+        return False
+    buffer_text = "\n\n".join(item.page_content for item in buffer if item.page_content)
+    if len(buffer_text) >= short_threshold:
+        return False
+    return next_length <= CHUNK_SIZE + CHUNK_OVERLAP
 
 
 def _normalize_line_for_dedupe(line: str) -> str:
@@ -422,26 +494,43 @@ def _contains_table_block_near_start(text: str, max_lines: int = 12) -> bool:
 
 
 def _is_table_context_line(line: str) -> bool:
-    """표 해석에 필요한 직전 범례·주의 문구 후보인지 확인한다."""
+    """표 해석에 필요한 범례·주의 문구 후보인지 확인한다."""
     stripped = line.strip()
     if not stripped or _is_markdown_table_row(stripped) or _is_markdown_table_separator(stripped):
         return False
 
+    note_prefixes = (
+        "※",
+        "- ※",
+        "* ※",
+        "주)",
+        "주:",
+        "비고",
+        "참고",
+        "단위",
+        "범례",
+        "legend",
+    )
+    marker_symbols = ("♣", "■", "□", "◈", "○", "●", "★", "☆")
     keywords = (
         "표시",
-        "전공심화",
-        "학사학위",
-        "면접학과",
-        "모집단위",
-        "모집인원",
-        "수업 연한",
-        "야간 학과",
-        "자유전공",
-        "지원할 수 없음",
-        "지원 횟수",
-        "복수지원",
+        "기호",
+        "해당",
+        "제외",
+        "제한",
+        "불가",
+        "가능",
+        "선택",
+        "필수",
+        "모집",
+        "전형",
     )
-    return stripped.startswith(("※", "- ※", "* ※")) or any(keyword in stripped for keyword in keywords)
+    normalized = stripped.lower()
+    return (
+        stripped.startswith(note_prefixes)
+        or any(symbol in stripped for symbol in marker_symbols)
+        or any(keyword in normalized for keyword in keywords)
+    )
 
 
 def _select_table_context_overlap(
@@ -469,6 +558,152 @@ def _select_table_context_overlap(
             break
 
     return "\n".join(selected)
+
+
+def _select_table_context_from_start(text: str, max_lines: int = 8, max_chars: int = 700) -> str:
+    """표 뒤에 이어지는 범례·주의 문구를 앞쪽 line부터 선택한다."""
+    selected: list[str] = []
+    for line in [line.strip() for line in text.splitlines() if line.strip()]:
+        if _is_table_context_line(line):
+            selected.append(line)
+            selected_text = "\n".join(selected)
+            if len(selected) >= max_lines or len(selected_text) >= max_chars:
+                break
+            continue
+        if selected:
+            break
+        if _is_markdown_table_line(line):
+            break
+
+    return "\n".join(selected)
+
+
+def _is_table_like_document(doc: Document) -> bool:
+    """현재 Document가 표 본문 성격인지 확인한다."""
+    return doc.metadata.get("block_type") == "table" or _contains_table_block_near_start(doc.page_content, max_lines=20)
+
+
+def _select_following_table_context(docs: list[Document], index: int) -> str:
+    """연속된 표 chunk 뒤에 있는 범례·주의 문구를 현재 표 chunk에 붙일 context로 선택한다."""
+    if not _is_table_like_document(docs[index]):
+        return ""
+
+    next_index = index + 1
+    while next_index < len(docs) and _is_table_like_document(docs[next_index]):
+        next_index += 1
+
+    if next_index >= len(docs):
+        return ""
+    return _select_table_context_from_start(docs[next_index].page_content)
+
+
+def _is_markdown_table_line(line: str) -> bool:
+    """Markdown table row 또는 separator line인지 확인한다."""
+    stripped = line.strip()
+    return _is_markdown_table_row(stripped) or _is_markdown_table_separator(stripped)
+
+
+def _split_markdown_table_blocks(text: str) -> list[tuple[str, str]]:
+    """Markdown 본문을 text/table block으로 나눈다."""
+    blocks: list[tuple[str, str]] = []
+    current_type: str | None = None
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_type, current_lines
+        if current_type and any(line.strip() for line in current_lines):
+            blocks.append((current_type, "\n".join(current_lines).strip()))
+        current_type = None
+        current_lines = []
+
+    for line in text.splitlines():
+        line_type = "table" if _is_markdown_table_line(line) else "text"
+        if current_type is None:
+            current_type = line_type
+        if line_type != current_type and line.strip():
+            flush()
+            current_type = line_type
+        current_lines.append(line)
+
+    flush()
+    return blocks
+
+
+def _document_with_metadata(page_content: str, metadata: dict, **extra_metadata) -> Document:
+    """본문과 metadata를 함께 가진 Document를 만든다."""
+    merged_metadata = dict(metadata)
+    merged_metadata.update(extra_metadata)
+    return Document(page_content=page_content, metadata=merged_metadata)
+
+
+def _split_text_block(block_text: str, metadata: dict) -> list[Document]:
+    """일반 text block은 기존 RecursiveCharacterTextSplitter로 분할한다."""
+    document = Document(page_content=block_text, metadata=dict(metadata))
+    if len(block_text) <= CHUNK_SIZE:
+        return [document]
+    return _char_splitter.split_documents([document])
+
+
+def _split_table_block(block_text: str, metadata: dict) -> list[Document]:
+    """
+    Markdown table block은 문자 중간에서 자르지 않고 row group 단위로 분할한다.
+    header row와 separator가 있으면 각 분할 table 앞에 반복한다.
+    """
+    lines = [line.strip() for line in block_text.splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    table_metadata = dict(metadata)
+    table_metadata["block_type"] = "table"
+
+    if len(block_text) <= CHUNK_SIZE:
+        return [_document_with_metadata(block_text, table_metadata)]
+
+    header_lines: list[str] = []
+    body_lines = lines
+    if len(lines) >= 2 and _is_markdown_table_row(lines[0]) and _is_markdown_table_separator(lines[1]):
+        header_lines = lines[:2]
+        body_lines = lines[2:]
+
+    if not body_lines:
+        return [_document_with_metadata(block_text, table_metadata)]
+
+    chunks: list[Document] = []
+    current_rows: list[str] = []
+
+    def build_table(rows: list[str]) -> str:
+        if header_lines:
+            return "\n".join(header_lines + rows)
+        return "\n".join(rows)
+
+    for row in body_lines:
+        candidate_rows = current_rows + [row]
+        candidate = build_table(candidate_rows)
+        if current_rows and len(candidate) > CHUNK_SIZE:
+            chunks.append(_document_with_metadata(build_table(current_rows), table_metadata))
+            current_rows = [row]
+            continue
+        current_rows = candidate_rows
+
+    if current_rows:
+        chunks.append(_document_with_metadata(build_table(current_rows), table_metadata))
+
+    return chunks
+
+
+def _split_large_chunk_preserving_tables(doc: Document) -> list[Document]:
+    """큰 청크를 나눌 때 Markdown table은 row group 단위로 보존한다."""
+    blocks = _split_markdown_table_blocks(doc.page_content)
+    if not any(block_type == "table" for block_type, _ in blocks):
+        return _char_splitter.split_documents([doc])
+
+    split_docs: list[Document] = []
+    for block_type, block_text in blocks:
+        if block_type == "table":
+            split_docs.extend(_split_table_block(block_text, doc.metadata))
+        else:
+            split_docs.extend(_split_text_block(block_text, doc.metadata))
+    return split_docs
 
 
 def _starts_with_structural_boundary(text: str) -> bool:
@@ -553,6 +788,8 @@ def _select_overlap_text(previous_text: str, max_chars: int) -> str:
     selected: list[str] = []
     selected_length = 0
     lines = [line.rstrip() for line in previous_text.splitlines() if line.strip()]
+    if lines and _is_markdown_table_line(lines[-1]):
+        return ""
 
     for line in reversed(lines):
         normalized_line = line.strip()
@@ -715,8 +952,20 @@ def _merge_short_chunks(docs: list[Document]) -> list[Document]:
         doc_length = len(doc.page_content)
         next_length = buffer_length + (2 if buffer else 0) + doc_length
         header_changed = bool(buffer) and _header_signature(buffer[0]) != _header_signature(doc)
+        block_type_changed = bool(buffer) and _chunk_block_signature(buffer[-1]) != _chunk_block_signature(doc)
+        can_merge_text_prefix_into_table = _can_merge_text_prefix_into_table(
+            buffer,
+            doc,
+            next_length,
+            short_threshold,
+        )
 
-        if buffer and (header_changed or buffer_length >= CHUNK_MERGE_MIN_SIZE or next_length > CHUNK_SIZE):
+        if buffer and (
+            header_changed
+            or (block_type_changed and not can_merge_text_prefix_into_table)
+            or buffer_length >= CHUNK_MERGE_MIN_SIZE
+            or (next_length > CHUNK_SIZE and not can_merge_text_prefix_into_table)
+        ):
             merged.append(_combine_chunk_documents(buffer))
             buffer = []
             buffer_length = 0
@@ -734,36 +983,48 @@ def _apply_overlap(docs: list[Document]) -> list[Document]:
     """
     이전 청크의 마지막 완성 line들을 다음 청크 앞에 prepend하는 수동 overlap 후처리.
     표가 청크 경계에서 끊기면 이전 청크의 활성 table header block도 함께 prepend한다.
-    표의 범례·주의 문구가 직전 청크에 있고 표 본문이 다음 청크에 있으면 해당 문구도 함께 prepend한다.
+    표의 범례·주의 문구가 표 앞이나 뒤에 분리되어 있으면 해당 문구도 표 청크에 붙인다.
     RecursiveCharacterTextSplitter의 내장 overlap은 서로 다른 헤더 구간 간에
     작동하지 않으므로 전체 청크 리스트에 수동으로 적용한다. 문자 중간을 자르지 않는다.
     """
     overlapped: list[Document] = []
     for i, doc in enumerate(docs):
+        following_table_context = _select_following_table_context(docs, i)
+        content_text = doc.page_content
+        if following_table_context and following_table_context not in content_text:
+            content_text = f"{content_text}\n\n{following_table_context}"
+
         if i == 0:
+            if following_table_context:
+                overlapped.append(Document(
+                    page_content=_dedupe_adjacent_lines(content_text),
+                    metadata=doc.metadata
+                ))
+                continue
             overlapped.append(doc)
         else:
             context_parts = []
             overlap_text = ""
-            if CHUNK_OVERLAP > 0 and _should_apply_general_overlap(doc.page_content):
+            if CHUNK_OVERLAP > 0 and _should_apply_general_overlap(content_text):
                 overlap_text = _select_overlap_text(docs[i - 1].page_content, CHUNK_OVERLAP)
-            table_context_overlap = _select_table_context_overlap(docs[i - 1].page_content, doc.page_content)
+            table_context_overlap = _select_table_context_overlap(docs[i - 1].page_content, content_text)
             if table_context_overlap:
                 context_parts.append(table_context_overlap)
 
-            table_header_overlap = _select_table_header_overlap(docs[i - 1].page_content, doc.page_content)
+            table_header_overlap = _select_table_header_overlap(docs[i - 1].page_content, content_text)
             if table_header_overlap and not _starts_with_same_table_header_block(overlap_text, table_header_overlap):
                 context_parts.append(table_header_overlap)
 
-            if overlap_text:
+            if overlap_text and not table_context_overlap and not table_header_overlap:
                 context_parts.append(overlap_text)
 
-            if not context_parts:
+            if not context_parts and not following_table_context:
                 overlapped.append(doc)
                 continue
             context_text = "\n\n".join(context_parts)
+            combined_text = f"{context_text}\n\n{content_text}" if context_text else content_text
             overlapped.append(Document(
-                page_content=_dedupe_adjacent_lines(context_text + "\n\n" + doc.page_content),
+                page_content=_dedupe_adjacent_lines(combined_text),
                 metadata=doc.metadata
             ))
     return overlapped
@@ -972,16 +1233,15 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         page_lookup_elapsed = time.perf_counter() - page_lookup_start
         _set_document_progress(document_id, 22, "page_lookup", "페이지 정보를 분석하고 있습니다.")
 
-        # 전체 텍스트 병합 후 정규화
+        # 로더 Document 단위 정규화. PDF는 page metadata를 보존해 구조 단서로 활용한다.
         normalize_start = time.perf_counter()
-        full_text = "\n".join([doc.page_content for doc in raw_docs])
-        full_text = _normalize_text(full_text)
+        normalized_docs = _normalize_loaded_documents(raw_docs)
         normalize_elapsed = time.perf_counter() - normalize_start
         _set_document_progress(document_id, 25, "normalize", "문서 텍스트를 정리했습니다.")
 
         # Two-Pass 청킹 + 연속 중복 line 정리 + 수동 overlap 후처리
         split_start = time.perf_counter()
-        split_docs = _two_pass_split(full_text)
+        split_docs = _split_loaded_documents(normalized_docs)
         split_elapsed = time.perf_counter() - split_start
         _log_chunk_stats(document_id, filename, "split", split_docs)
 
