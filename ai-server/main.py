@@ -400,6 +400,25 @@ def _select_table_header_overlap(previous_text: str, current_text: str) -> str:
     return _find_active_table_header_block(previous_text)
 
 
+def _starts_with_structural_boundary(text: str) -> bool:
+    """현재 청크가 새 장·조·부칙 같은 강한 문서 경계에서 시작하는지 확인한다."""
+    first_line = _first_non_empty_line(text)
+    if not first_line:
+        return False
+
+    normalized = re.sub(r"\s+", "", first_line)
+    if first_line.startswith("#"):
+        return True
+    if normalized.startswith("부칙"):
+        return True
+    return bool(re.match(r"^[-*ㆍ·]?(제\d+(장|절|조|조의\d+))", normalized))
+
+
+def _should_apply_general_overlap(current_text: str) -> bool:
+    """표 header carry-forward와 별개로 일반 line overlap을 붙일지 판단한다."""
+    return not _starts_with_structural_boundary(current_text)
+
+
 def _dedupe_adjacent_lines(text: str) -> str:
     """
     같은 청크 안에서 바로 반복되는 동일 line 또는 동일 table header block만 제거한다.
@@ -647,7 +666,9 @@ def _apply_overlap(docs: list[Document]) -> list[Document]:
             overlapped.append(doc)
         else:
             context_parts = []
-            overlap_text = _select_overlap_text(docs[i - 1].page_content, CHUNK_OVERLAP)
+            overlap_text = ""
+            if _should_apply_general_overlap(doc.page_content):
+                overlap_text = _select_overlap_text(docs[i - 1].page_content, CHUNK_OVERLAP)
             table_header_overlap = _select_table_header_overlap(docs[i - 1].page_content, doc.page_content)
             if table_header_overlap and not _starts_with_same_table_header_block(overlap_text, table_header_overlap):
                 context_parts.append(table_header_overlap)
