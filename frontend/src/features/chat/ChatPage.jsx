@@ -118,7 +118,7 @@ function getSourceTitle(source, index) {
 }
 
 function getSourcePath(source) {
-  return ['Header 1', 'Header 2', 'Header 3']
+  return ['Header 1', 'Header 2', 'Header 3', 'Header 4', 'Header 5', 'Header 6']
     .map((key) => source[key])
     .filter(Boolean)
     .join(' · ')

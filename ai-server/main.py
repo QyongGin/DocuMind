@@ -129,9 +129,17 @@ logger.info(
 )
 
 # Two-Pass 청킹 설정
-# 1단계: 마크다운 헤더(#, ##, ###) 경계에서 분할, 헤더 경로를 메타데이터로 자동 부여
-_MD_HEADERS = [("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")]
-_md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_MD_HEADERS)
+# 1단계: 마크다운 헤더(# ~ ######) 경계에서 분할, 헤더 경로를 메타데이터로 자동 부여
+# PDF 파서가 실제 소제목을 ######로 내보내는 경우가 있어 H6까지 주제 경계로 반영한다.
+_MD_HEADERS = [
+    ("#", "Header 1"),
+    ("##", "Header 2"),
+    ("###", "Header 3"),
+    ("####", "Header 4"),
+    ("#####", "Header 5"),
+    ("######", "Header 6"),
+]
+_md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_MD_HEADERS, strip_headers=False)
 
 # 2단계: CHUNK_SIZE 초과 청크만 재분할. 내장 overlap은 서로 다른 헤더 구간 간 미적용 버그가
 # 있으므로 0으로 두고 수동 후처리(_apply_overlap)로 대체한다.
@@ -303,13 +311,9 @@ def _combine_chunk_documents(docs: list[Document]) -> Document:
     return Document(page_content=page_content, metadata=common_metadata)
 
 
-def _header_signature(doc: Document) -> tuple[str, str, str]:
-    """청크의 Markdown header 경로를 병합 경계 판단용 tuple로 반환한다."""
-    return (
-        str(doc.metadata.get("Header 1", "")),
-        str(doc.metadata.get("Header 2", "")),
-        str(doc.metadata.get("Header 3", "")),
-    )
+def _header_signature(doc: Document) -> tuple[str, ...]:
+    """청크의 전체 Markdown header 경로를 짧은 청크 병합 경계 판단용 tuple로 반환한다."""
+    return tuple(str(doc.metadata.get(f"Header {level}", "")) for level in range(1, 7))
 
 
 def _normalize_line_for_dedupe(line: str) -> str:
@@ -1067,7 +1071,7 @@ def _format_header_path(meta: dict) -> str:
     """검색 근거 context에 넣을 Markdown header 경로를 만든다."""
     headers = [
         str(meta.get(header_key, "")).strip()
-        for header_key in ("Header 1", "Header 2", "Header 3")
+        for header_key in ("Header 1", "Header 2", "Header 3", "Header 4", "Header 5", "Header 6")
         if str(meta.get(header_key, "")).strip()
     ]
     return " > ".join(headers)
