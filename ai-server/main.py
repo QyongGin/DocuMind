@@ -845,67 +845,9 @@ def _build_matrix_facts(caption: str, row: list[str], column_labels: list[str]) 
     return facts
 
 
-def _is_recruitment_table(caption: str, column_labels: list[str]) -> bool:
-    """모집 인원·정원 성격의 표인지 확인한다."""
-    haystack = " ".join([caption] + column_labels)
-    normalized = re.sub(r"\s+", "", haystack)
-    return "모집인원" in normalized or "모집정원" in normalized
-
-
 def _clean_table_subject(subject: str) -> str:
     """검색 fact의 행 주어에서 범례 기호를 제거한다."""
     return re.sub(r"\s*[♣■◈◆◇□●○▲△★☆]\s*", "", subject).strip() or subject.strip()
-
-
-def _normalize_recruitment_label(label: str) -> str:
-    """모집인원 표의 다중 header가 깨져도 사람이 읽는 열 이름으로 보정한다."""
-    normalized = re.sub(r"\s+", " ", label.replace("<br>", " ")).strip()
-    for period in ("수시1차", "수시2차"):
-        if period in normalized:
-            if "일반고" in normalized:
-                return f"{period} 일반고"
-            if "특성화고" in normalized:
-                return f"{period} 특성화고"
-            if "어학" in normalized:
-                return f"{period} 특기자(어학)"
-    if "정시" in normalized and "수능" in normalized:
-        return "정시 일반(수능)"
-    return normalized
-
-
-def _build_recruitment_row_fact(caption: str, row: list[str], column_labels: list[str]) -> str:
-    """모집인원 표의 한 행을 총 정원과 전형별 인원으로 풀어쓴다."""
-    subject, _ = _select_row_subject(row, column_labels)
-    subject = _clean_table_subject(subject)
-    raw_pairs: list[str] = []
-    total_count = ""
-    detail_counts: list[str] = []
-
-    for index, value in enumerate(row):
-        if _is_empty_table_cell(value):
-            continue
-        label = column_labels[index] if index < len(column_labels) else f"열 {index + 1}"
-        if label.startswith("열 "):
-            continue
-
-        normalized_label = _normalize_recruitment_label(label)
-        raw_pairs.append(f"{normalized_label}={value}")
-        if "모집 정원" in normalized_label or "모집인원" in normalized_label:
-            total_count = value
-            continue
-        if any(keyword in normalized_label for keyword in ("수시", "정시")):
-            detail_counts.append(f"{normalized_label} {value}명")
-
-    if not raw_pairs:
-        return ""
-
-    sentences = [f"{caption}: {subject} 모집 인원 정보."]
-    if total_count:
-        sentences.append(f"{subject}의 모집 정원은 {total_count}명이다.")
-    if detail_counts:
-        sentences.append(f"전형별 모집 인원은 {', '.join(detail_counts)}이다.")
-    sentences.append(f"원본 행 정보는 {'; '.join(raw_pairs)}이다.")
-    return " ".join(sentences)
 
 
 def _should_generate_matrix_facts(column_labels: list[str]) -> bool:
@@ -918,11 +860,9 @@ def _should_generate_matrix_facts(column_labels: list[str]) -> bool:
 
 def _build_row_summary_fact(caption: str, row: list[str], column_labels: list[str]) -> str:
     """표의 한 행을 key=value 형태의 검색 가능한 문장으로 만든다."""
-    if _is_recruitment_table(caption, column_labels):
-        return _build_recruitment_row_fact(caption, row, column_labels)
-
     pairs: list[str] = []
     subject, _ = _select_row_subject(row, column_labels)
+    subject = _clean_table_subject(subject)
     for index, value in enumerate(row):
         if _is_empty_table_cell(value):
             continue
@@ -1788,13 +1728,12 @@ MANDATORY_RAG_PROMPT = (
     "2. [검색 근거]에 없는 절차, 조건, 날짜, 숫자, 서류, 주의사항, 조언은 만들지 않는다.\n"
     "3. 질문이 방법, 절차, 주의사항을 묻는 경우 [검색 근거]의 절차, 유의사항, 안내 문구를 우선 추출한다.\n"
     "4. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다.\n"
-    "5. 숫자, 날짜, 모집 인원, 점수, 기간은 추측하지 말고 근거의 값을 그대로 쓴다.\n"
-    "6. 모집 인원을 묻는 경우 '모집 정원'을 전체 모집 인원으로 먼저 답하고, 전형별 인원이 있으면 함께 구분한다.\n"
-    "7. 질문에 정원외, 농어촌, 수급자, 전문대졸, 북한이탈주민이 없으면 정원내 전형 모집인원을 기준으로 답한다.\n"
-    "8. '입시결과', '경쟁', '평균', '최저', '예비' 표는 전년도 결과이므로 현재 모집 인원 답변에 사용하지 않는다.\n"
-    "9. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
-    "10. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
-    "11. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다."
+    "5. 표에서 숫자, 날짜, 인원, 점수, 기간을 답할 때는 질문의 행 이름과 열 이름에 직접 대응하는 값만 사용한다.\n"
+    "6. 여러 표가 검색되면 질문의 단어와 가장 많이 겹치는 표 제목, 행 이름, 열 이름을 가진 근거를 우선한다.\n"
+    "7. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
+    "8. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
+    "9. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
+    "10. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다."
 )
 
 
@@ -1805,6 +1744,14 @@ QUERY_TERM_SYNONYMS = {
     "모집": {"모집", "모집인원", "모집정원", "정원"},
     "인원": {"인원", "모집인원", "모집정원", "정원"},
     "정원": {"정원", "모집인원", "모집정원", "인원"},
+    "공식": {"공식", "수식"},
+    "수식": {"수식", "공식"},
+    "상수": {"상수", "계수", "값"},
+    "계수": {"계수", "상수", "값"},
+    "값": {"값", "수치"},
+    "일정": {"일정", "기간", "날짜"},
+    "기간": {"기간", "일정", "날짜"},
+    "날짜": {"날짜", "일정", "기간"},
 }
 
 QUERY_GENERIC_TERMS = {
@@ -1812,8 +1759,12 @@ QUERY_GENERIC_TERMS = {
     "모집인원", "모집정원", "정보", "알려줘", "어디", "어떤", "뭐야", "무엇",
 }
 
-QUERY_RESULT_TERMS = {"입시결과", "전년도", "경쟁", "경쟁률", "평균", "최저", "예비"}
-QUERY_OUT_OF_QUOTA_TERMS = {"정원외", "정원 외", "농어촌", "수급자", "전문대졸", "북한", "북한이탈주민"}
+QUERY_TABLE_INTENT_TERMS = {
+    "값", "수치", "공식", "수식", "상수", "계수", "인원", "정원", "모집", "모집인원", "모집정원",
+    "점수", "가산점", "등급", "기간", "날짜", "일정", "서류", "자격", "학과", "과목", "항목",
+}
+
+TABLE_STATISTIC_TERMS = {"결과", "평균", "최저", "최고", "경쟁", "경쟁률", "예비", "순위", "등급"}
 
 
 def _format_page_label(meta: dict) -> str:
@@ -1852,7 +1803,7 @@ def _normalize_query_token(token: str) -> str:
     """조사와 어미가 붙은 질문 token을 검색 발췌용 핵심어로 정리한다."""
     normalized = token.strip().lower()
     for suffix in ("으로", "에서", "에게", "한테", "부터", "까지", "은", "는", "이", "가", "을", "를", "의", "도", "만", "와", "과"):
-        if len(normalized) > len(suffix) + 1 and normalized.endswith(suffix):
+        if len(normalized) > len(suffix) and normalized.endswith(suffix):
             return normalized[: -len(suffix)]
     return normalized
 
@@ -1877,13 +1828,13 @@ def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
     for token in re.findall(r"[0-9A-Za-z가-힣]+", question):
         raw_token = token.strip().lower()
         normalized = _normalize_query_token(raw_token)
-        if len(normalized) < 2:
+        if len(normalized) < 2 and normalized not in QUERY_TABLE_INTENT_TERMS:
             continue
 
         expanded_terms = {raw_token, normalized}
         expanded_terms.update(QUERY_TERM_SYNONYMS.get(normalized, set()))
-        if expanded_terms & {"모집", "인원", "정원", "모집인원", "모집정원"}:
-            intent_terms.update({"모집", "인원", "정원", "모집인원", "모집정원", "모집 인원 정보"})
+        if expanded_terms & QUERY_TABLE_INTENT_TERMS:
+            intent_terms.update(term for term in expanded_terms if len(term) >= 2)
         else:
             subject_terms.update(term for term in expanded_terms if len(term) >= 3 and term not in QUERY_GENERIC_TERMS)
 
@@ -1901,19 +1852,12 @@ def _score_table_fact_for_question(fact: str, question: str) -> int:
     score += sum(12 for term in subject_terms if term in fact_lower)
     score += sum(4 for term in intent_terms if term in fact_lower)
 
-    recruitment_query = bool(intent_terms & {"모집", "인원", "정원", "모집인원", "모집정원"})
-    result_query = any(term in question for term in QUERY_RESULT_TERMS)
-    out_of_quota_query = _is_out_of_quota_question(question)
-    if recruitment_query:
-        is_outcome_fact = any(term in fact_lower for term in QUERY_RESULT_TERMS)
-        if _looks_like_out_of_quota_recruitment_context(fact) and not out_of_quota_query:
-            return 0
-        if is_outcome_fact and not result_query:
-            return 0
-        if "모집 인원 정보" in fact_lower or "모집 정원" in fact_lower:
-            score += 30
-        if is_outcome_fact:
-            score -= 25
+    asks_count_value = bool(intent_terms & {"모집", "인원", "정원", "모집인원", "모집정원"})
+    has_primary_count_column = bool(re.search(r"(모집\s*정원|모집정원|합계|총|전체|total)\s*=", fact_lower))
+    if asks_count_value and has_primary_count_column:
+        score += 20
+    if asks_count_value and any(term in fact_lower for term in TABLE_STATISTIC_TERMS):
+        score -= 10
 
     return max(score, 0)
 
@@ -1960,9 +1904,15 @@ def _lookup_lexical_table_facts(question: str, limit: int = 5) -> tuple[list[str
     )
 
 
+def _is_table_value_question(question: str) -> bool:
+    """표 행/열 값을 묻는 질문인지 보수적으로 판단한다."""
+    subject_terms, intent_terms = _extract_lexical_query_terms(question)
+    return bool(subject_terms and intent_terms)
+
+
 def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[dict]) -> list[dict]:
     """검색된 raw 청크 안의 표에서 질문과 맞는 fact를 런타임 metadata에 붙인다."""
-    if not _is_recruitment_count_question(question):
+    if not _is_table_value_question(question):
         return metadatas
 
     updated_metadatas: list[dict] = []
@@ -1986,78 +1936,37 @@ def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[
     return updated_metadatas
 
 
-def _is_recruitment_count_question(question: str) -> bool:
-    """현재 모집 인원/정원 질문인지 확인한다."""
-    _, intent_terms = _extract_lexical_query_terms(question)
-    asks_recruitment_count = bool(intent_terms & {"모집", "인원", "정원", "모집인원", "모집정원"})
-    asks_result = any(term in question for term in QUERY_RESULT_TERMS)
-    return asks_recruitment_count and not asks_result
-
-
-def _is_out_of_quota_question(question: str) -> bool:
-    """정원외 전형을 명시적으로 묻는 질문인지 확인한다."""
-    normalized = re.sub(r"\s+", "", question)
-    return any(term.replace(" ", "") in normalized for term in QUERY_OUT_OF_QUOTA_TERMS)
-
-
-def _has_recruitment_table_fact(meta: dict) -> bool:
-    """runtime metadata에 현재 모집인원 fact가 붙었는지 확인한다."""
+def _best_runtime_table_fact_score(meta: dict, question: str) -> int:
+    """runtime metadata에 붙은 table_fact 중 질문과 가장 관련 높은 점수를 반환한다."""
     matched_table_facts = meta.get("matched_table_facts", "")
     if isinstance(matched_table_facts, list):
-        fact_text = " ".join(str(fact) for fact in matched_table_facts)
+        facts = [str(fact) for fact in matched_table_facts]
+    elif matched_table_facts:
+        facts = [str(matched_table_facts)]
     else:
-        fact_text = str(matched_table_facts)
-    return "모집 인원 정보" in fact_text or "모집 정원" in fact_text
-
-
-def _looks_like_admission_result_context(text: str) -> bool:
-    """입시결과 표 context인지 보수적으로 확인한다."""
-    compact_text = re.sub(r"\s+", " ", text)
-    has_abbreviated_result_header = bool(re.search(r"(일반고|특성화고|특기자|일반전형).*모\s*경\s*평\s*최\s*예", compact_text))
-    has_result_metrics = "경쟁" in text and "예비" in text and ("평균" in text or "최저" in text)
-    has_special_admission_result = (
-        "수시2차 농어촌 수급자" in compact_text
-        and "정시 농어촌 수급자" in compact_text
-        and bool(re.search(r"\d+\.\d+", compact_text))
-    )
-    return "입시결과" in text or has_result_metrics or has_abbreviated_result_header or has_special_admission_result
-
-
-def _looks_like_out_of_quota_recruitment_context(text: str) -> bool:
-    """정원외 모집인원 표 context인지 보수적으로 확인한다."""
-    compact_text = re.sub(r"\s+", "", text)
-    return (
-        "정원외전형모집인원" in compact_text
-        or "정원외특별전형" in compact_text
-        or "전문대졸북한이탈주민" in compact_text
-        or ("수시2차농어촌수급자" in compact_text and "정시농어촌수급자" in compact_text)
-    )
+        facts = []
+    return max((_score_table_fact_for_question(fact, question) for fact in facts), default=0)
 
 
 def _prioritize_query_results(docs: list[str], metadatas: list[dict], ids: list[str], question: str) -> tuple[list[str], list[dict], list[str]]:
-    """모집 인원 질문에서는 현재 모집인원 fact를 입시결과 표보다 앞세운다."""
-    if not _is_recruitment_count_question(question):
+    """표 값 질문에서는 질문과 가장 잘 맞는 table_fact context를 앞세운다."""
+    if not _is_table_value_question(question):
         return docs, metadatas, ids
 
-    has_recruitment_fact = any(_has_recruitment_table_fact(meta or {}) for meta in metadatas)
-    out_of_quota_query = _is_out_of_quota_question(question)
+    scores = [_best_runtime_table_fact_score(meta or {}, question) for meta in metadatas]
+    best_score = max(scores, default=0)
+    if best_score <= 0:
+        return docs, metadatas, ids
+
     ranked: list[tuple[int, int, str, dict, str]] = []
     for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids)):
         meta = meta or {}
-        if has_recruitment_fact and _looks_like_admission_result_context(doc):
+        score = scores[index]
+        if best_score >= 40 and score < best_score - 15:
             continue
-        if has_recruitment_fact and not out_of_quota_query and _looks_like_out_of_quota_recruitment_context(doc):
+        if score == 0 and best_score >= 20:
             continue
-        if out_of_quota_query and _looks_like_out_of_quota_recruitment_context(doc):
-            priority = 0
-        elif _has_recruitment_table_fact(meta):
-            priority = 1 if out_of_quota_query else 0
-        elif _looks_like_admission_result_context(doc):
-            priority = 2
-        elif not out_of_quota_query and _looks_like_out_of_quota_recruitment_context(doc):
-            priority = 2
-        else:
-            priority = 1
+        priority = -score
         ranked.append((priority, index, doc, meta, chunk_id))
 
     ranked.sort(key=lambda item: (item[0], item[1]))
