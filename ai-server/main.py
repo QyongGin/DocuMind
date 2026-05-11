@@ -1045,6 +1045,13 @@ MANDATORY_RAG_PROMPT = (
 )
 
 
+QUERY_TERM_SYNONYMS = {
+    "방법": {"방법", "절차", "신청", "신청절차", "제출"},
+    "주의사항": {"주의사항", "유의사항", "유의", "주의"},
+    "전과": {"전과", "전과제도", "전과시행"},
+}
+
+
 def _format_page_label(meta: dict) -> str:
     """검색 근거 context에 넣을 PDF page label을 만든다."""
     start_page = meta.get("page_start") or meta.get("page")
@@ -1077,7 +1084,51 @@ def _format_chunk_label(meta: dict, chunk_id: str) -> str:
         return f"문서 내 {chunk_index}번째 청크"
 
 
-def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str) -> str:
+def _normalize_query_token(token: str) -> str:
+    """조사와 어미가 붙은 질문 token을 검색 발췌용 핵심어로 정리한다."""
+    normalized = token.strip().lower()
+    for suffix in ("으로", "에서", "에게", "한테", "부터", "까지", "은", "는", "이", "가", "을", "를", "의", "도", "만", "와", "과"):
+        if len(normalized) > len(suffix) + 1 and normalized.endswith(suffix):
+            return normalized[: -len(suffix)]
+    return normalized
+
+
+def _extract_query_terms(question: str) -> set[str]:
+    """질문에서 검색 context 발췌에 사용할 핵심어와 간단한 동의어를 추출한다."""
+    terms: set[str] = set()
+    for token in re.findall(r"[0-9A-Za-z가-힣]+", question):
+        normalized = _normalize_query_token(token)
+        if len(normalized) < 2:
+            continue
+        terms.add(normalized)
+        terms.update(QUERY_TERM_SYNONYMS.get(normalized, set()))
+    return terms
+
+
+def _select_relevant_excerpt(text: str, query_terms: set[str], window: int = 2, max_lines: int = 18) -> str:
+    """청크 안에서 질문 핵심어와 가까운 실제 line들을 골라 LLM 주의 집중용 발췌를 만든다."""
+    if not query_terms:
+        return ""
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    selected_indexes: set[int] = set()
+
+    for index, line in enumerate(lines):
+        normalized_line = line.lower()
+        if not any(term in normalized_line for term in query_terms):
+            continue
+        start = max(0, index - window)
+        end = min(len(lines), index + window + 1)
+        selected_indexes.update(range(start, end))
+
+    if not selected_indexes:
+        return ""
+
+    selected_lines = [lines[index] for index in sorted(selected_indexes)]
+    return "\n".join(selected_lines[:max_lines])
+
+
+def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, query_terms: set[str]) -> str:
     """LLM이 검색 근거 단위를 구분할 수 있도록 출처 metadata와 청크 본문을 함께 포맷한다."""
     source_name = str(meta.get("source", "")).strip() or "알 수 없는 문서"
     metadata_lines = [f"문서: {source_name}"]
@@ -1095,14 +1146,18 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str) -> st
         metadata_lines.append(f"섹션: {header_path}")
 
     metadata = "\n".join(metadata_lines)
-    return f"[출처 {index}]\n{metadata}\n내용:\n{doc.strip()}"
+    relevant_excerpt = _select_relevant_excerpt(doc, query_terms)
+    if relevant_excerpt:
+        return f"[출처 {index}]\n{metadata}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
+    return f"[출처 {index}]\n{metadata}\n전체 내용:\n{doc.strip()}"
 
 
-def _build_context(docs: list[str], metadatas: list[dict], ids: list[str]) -> str:
+def _build_context(docs: list[str], metadatas: list[dict], ids: list[str], question: str) -> str:
     """검색된 청크들을 출처 단위 context로 변환한다."""
+    query_terms = _extract_query_terms(question)
     blocks = []
     for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids), start=1):
-        blocks.append(_format_context_block(index, doc, meta or {}, chunk_id))
+        blocks.append(_format_context_block(index, doc, meta or {}, chunk_id, query_terms))
     return "\n\n".join(blocks)
 
 
@@ -1159,7 +1214,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         return None, [], metrics
 
     context_build_start = time.perf_counter()
-    context = _build_context(docs, metadatas, ids)
+    context = _build_context(docs, metadatas, ids, question)
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
 
     # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
@@ -1172,6 +1227,11 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
 
 [사용자 질문]
 {question}
+
+[답변 직전 확인]
+- 답변은 [검색 근거]에 직접 적힌 내용만 사용한다.
+- [검색 근거]의 '질문 관련 발췌'가 있으면 그 내용을 우선 사용한다.
+- 근거에 없는 일반적인 대학 행정 절차나 조언은 쓰지 않는다.
 
 [답변 작성]
 """
