@@ -68,11 +68,11 @@ OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 4096)
 OLLAMA_NUM_PREDICT = _env_int("OLLAMA_NUM_PREDICT", 512)
 OLLAMA_NUM_THREAD = _env_int("OLLAMA_NUM_THREAD", 0, minimum=0) or None
 CHUNK_SIZE = _env_int("CHUNK_SIZE", 800, minimum=100)
-CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 50, minimum=0)
+CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 80, minimum=0)
 CHUNK_MERGE_MIN_SIZE = _env_int("CHUNK_MERGE_MIN_SIZE", 300, minimum=0)
 EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 64)
 UPLOAD_READ_CHUNK_BYTES = _env_int("UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)
-DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 3)
+DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 5)
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
     logger.warning(
@@ -303,6 +303,198 @@ def _combine_chunk_documents(docs: list[Document]) -> Document:
     return Document(page_content=page_content, metadata=common_metadata)
 
 
+def _header_signature(doc: Document) -> tuple[str, str, str]:
+    """청크의 Markdown header 경로를 병합 경계 판단용 tuple로 반환한다."""
+    return (
+        str(doc.metadata.get("Header 1", "")),
+        str(doc.metadata.get("Header 2", "")),
+        str(doc.metadata.get("Header 3", "")),
+    )
+
+
+def _normalize_line_for_dedupe(line: str) -> str:
+    """연속 중복 판단을 위해 line 내부 공백을 정규화한다."""
+    return re.sub(r"\s+", " ", line).strip()
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    """Markdown table 구분선인지 확인한다."""
+    stripped = line.strip()
+    if "|" not in stripped or "-" not in stripped:
+        return False
+    cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell or "") for cell in cells)
+
+
+def _is_markdown_table_row(line: str) -> bool:
+    """Markdown table row 형태인지 확인한다."""
+    stripped = line.strip()
+    return stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2
+
+
+def _dedupe_adjacent_lines(text: str) -> str:
+    """
+    같은 청크 안에서 바로 반복되는 동일 line 또는 동일 table header block만 제거한다.
+    표 구조 자체는 보존하고, 페이지 반복 header/footer 후보처럼 떨어져 반복되는 line은 제거하지 않는다.
+    """
+    lines = text.splitlines()
+    deduped: list[str] = []
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+        normalized_line = _normalize_line_for_dedupe(line)
+
+        if normalized_line and deduped and normalized_line == _normalize_line_for_dedupe(deduped[-1]):
+            index += 1
+            continue
+
+        has_table_header_block = (
+            index + 1 < len(lines)
+            and _is_markdown_table_row(line)
+            and _is_markdown_table_separator(lines[index + 1])
+        )
+        has_same_previous_header_block = (
+            has_table_header_block
+            and len(deduped) >= 2
+            and normalized_line == _normalize_line_for_dedupe(deduped[-2])
+            and _normalize_line_for_dedupe(lines[index + 1]) == _normalize_line_for_dedupe(deduped[-1])
+        )
+        if has_same_previous_header_block:
+            index += 2
+            continue
+
+        deduped.append(line)
+        index += 1
+
+    return "\n".join(deduped).strip()
+
+
+def _dedupe_chunk_documents(docs: list[Document]) -> list[Document]:
+    """청크별 연속 중복 line을 제거하되 metadata는 유지한다."""
+    return [
+        Document(page_content=_dedupe_adjacent_lines(doc.page_content), metadata=doc.metadata)
+        for doc in docs
+    ]
+
+
+def _select_overlap_text(previous_text: str, max_chars: int) -> str:
+    """이전 청크의 마지막 완성 line들을 max_chars 안에서 overlap 문맥으로 선택한다."""
+    if max_chars <= 0:
+        return ""
+
+    selected: list[str] = []
+    selected_length = 0
+    lines = [line.rstrip() for line in previous_text.splitlines() if line.strip()]
+
+    for line in reversed(lines):
+        normalized_line = line.strip()
+        next_length = selected_length + (1 if selected else 0) + len(normalized_line)
+        if selected and next_length > max_chars:
+            break
+        if not selected and len(normalized_line) > max_chars:
+            break
+        selected.insert(0, normalized_line)
+        selected_length = next_length
+
+    return "\n".join(selected)
+
+
+def _percentile(sorted_values: list[int], percentile: int) -> int:
+    """정렬된 숫자 목록에서 지정한 백분위 값을 반환한다."""
+    if not sorted_values:
+        return 0
+
+    index = math.ceil((percentile / 100) * len(sorted_values)) - 1
+    bounded_index = max(0, min(index, len(sorted_values) - 1))
+    return sorted_values[bounded_index]
+
+
+def _duplicate_line_metrics(docs: list[Document]) -> dict:
+    """
+    반복 header/footer 후보를 찾기 위한 line 중복 통계를 만든다.
+    원문 line은 운영 로그에 남기지 않고 후보 개수와 비율만 기록한다.
+    """
+    line_counts: dict[str, int] = {}
+    line_candidates = 0
+
+    for doc in docs:
+        for line in doc.page_content.splitlines():
+            normalized_line = re.sub(r"\s+", " ", line).strip()
+            if len(normalized_line) < 8 or len(normalized_line) > 120:
+                continue
+            line_candidates += 1
+            line_counts[normalized_line] = line_counts.get(normalized_line, 0) + 1
+
+    duplicate_counts = [count for count in line_counts.values() if count > 1]
+    duplicate_occurrences = sum(count - 1 for count in duplicate_counts)
+    duplicate_ratio = duplicate_occurrences / line_candidates if line_candidates else 0.0
+    return {
+        "line_candidates": line_candidates,
+        "duplicate_line_candidates": len(duplicate_counts),
+        "duplicate_line_occurrences": duplicate_occurrences,
+        "duplicate_line_ratio": duplicate_ratio,
+    }
+
+
+def _chunk_stats(docs: list[Document]) -> dict:
+    """청크 길이 분포와 반복 line 후보 통계를 계산한다."""
+    lengths = sorted(len(doc.page_content) for doc in docs)
+    duplicate_metrics = _duplicate_line_metrics(docs)
+    short_threshold = CHUNK_MERGE_MIN_SIZE if CHUNK_MERGE_MIN_SIZE > 0 else max(1, CHUNK_SIZE // 3)
+
+    if not lengths:
+        return {
+            "chunks": 0,
+            "total_chars": 0,
+            "avg_chars": 0.0,
+            "min_chars": 0,
+            "p50_chars": 0,
+            "p90_chars": 0,
+            "max_chars": 0,
+            "short_chunks": 0,
+            "short_threshold": short_threshold,
+            **duplicate_metrics,
+        }
+
+    return {
+        "chunks": len(lengths),
+        "total_chars": sum(lengths),
+        "avg_chars": sum(lengths) / len(lengths),
+        "min_chars": lengths[0],
+        "p50_chars": _percentile(lengths, 50),
+        "p90_chars": _percentile(lengths, 90),
+        "max_chars": lengths[-1],
+        "short_chunks": sum(1 for length in lengths if length < short_threshold),
+        "short_threshold": short_threshold,
+        **duplicate_metrics,
+    }
+
+
+def _log_chunk_stats(document_id: int, filename: str, stage: str, docs: list[Document]) -> None:
+    """청크 정책 실험 비교에 필요한 통계형 로그를 남긴다."""
+    stats = _chunk_stats(docs)
+    logger.info(
+        "[chunk_stats] document_id=%s filename=%s stage=%s chunks=%s total_chars=%s avg_chars=%.1f min_chars=%s p50_chars=%s p90_chars=%s max_chars=%s short_chunks=%s short_threshold=%s line_candidates=%s duplicate_line_candidates=%s duplicate_line_occurrences=%s duplicate_line_ratio=%.3f",
+        document_id,
+        filename,
+        stage,
+        stats["chunks"],
+        stats["total_chars"],
+        stats["avg_chars"],
+        stats["min_chars"],
+        stats["p50_chars"],
+        stats["p90_chars"],
+        stats["max_chars"],
+        stats["short_chunks"],
+        stats["short_threshold"],
+        stats["line_candidates"],
+        stats["duplicate_line_candidates"],
+        stats["duplicate_line_occurrences"],
+        stats["duplicate_line_ratio"],
+    )
+
+
 def _set_document_progress(document_id: int | None, percent: int, stage: str, message: str, status: str = "processing") -> None:
     """문서 처리 진행률을 메모리에 기록한다."""
     if document_id is None:
@@ -339,7 +531,7 @@ def _get_document_progress(document_id: int) -> dict:
 
 def _merge_short_chunks(docs: list[Document]) -> list[Document]:
     """
-    너무 짧은 인접 청크를 CHUNK_SIZE를 넘지 않는 범위에서 병합한다.
+    같은 header 경로의 짧은 인접 청크를 CHUNK_SIZE를 넘지 않는 범위에서 병합한다.
     LlamaIndex ingestion pipeline의 node 관리처럼 embedding 대상 수를 줄이는 목적이다.
     """
     if CHUNK_MERGE_MIN_SIZE <= 0:
@@ -350,10 +542,14 @@ def _merge_short_chunks(docs: list[Document]) -> list[Document]:
     buffer_length = 0
 
     for doc in docs:
+        if not doc.page_content.strip():
+            continue
+
         doc_length = len(doc.page_content)
         next_length = buffer_length + (2 if buffer else 0) + doc_length
+        header_changed = bool(buffer) and _header_signature(buffer[0]) != _header_signature(doc)
 
-        if buffer and (buffer_length >= CHUNK_MERGE_MIN_SIZE or next_length > CHUNK_SIZE):
+        if buffer and (header_changed or buffer_length >= CHUNK_MERGE_MIN_SIZE or next_length > CHUNK_SIZE):
             merged.append(_combine_chunk_documents(buffer))
             buffer = []
             buffer_length = 0
@@ -369,9 +565,9 @@ def _merge_short_chunks(docs: list[Document]) -> list[Document]:
 
 def _apply_overlap(docs: list[Document]) -> list[Document]:
     """
-    이전 청크 마지막 CHUNK_OVERLAP 글자를 다음 청크 앞에 prepend하는 수동 overlap 후처리.
+    이전 청크의 마지막 완성 line들을 다음 청크 앞에 prepend하는 수동 overlap 후처리.
     RecursiveCharacterTextSplitter의 내장 overlap은 서로 다른 헤더 구간 간에
-    작동하지 않으므로 전체 청크 리스트에 수동으로 적용한다.
+    작동하지 않으므로 전체 청크 리스트에 수동으로 적용한다. 문자 중간을 자르지 않는다.
     """
     if CHUNK_OVERLAP <= 0:
         return docs
@@ -381,9 +577,12 @@ def _apply_overlap(docs: list[Document]) -> list[Document]:
         if i == 0:
             overlapped.append(doc)
         else:
-            overlap_text = docs[i - 1].page_content[-CHUNK_OVERLAP:]
+            overlap_text = _select_overlap_text(docs[i - 1].page_content, CHUNK_OVERLAP)
+            if not overlap_text:
+                overlapped.append(doc)
+                continue
             overlapped.append(Document(
-                page_content=overlap_text + "\n" + doc.page_content,
+                page_content=_dedupe_adjacent_lines(overlap_text + "\n\n" + doc.page_content),
                 metadata=doc.metadata
             ))
     return overlapped
@@ -427,6 +626,21 @@ def _seconds_from_nanos(value: int | None) -> float | None:
 def _format_seconds(value: float | None) -> str:
     """로그에 남길 duration 문자열을 만든다."""
     return f"{value:.2f}s" if value is not None else "n/a"
+
+
+def _format_int_list(values: list[int]) -> str:
+    """짧은 숫자 목록을 로그용 문자열로 만든다."""
+    return ",".join(str(value) for value in values) if values else "none"
+
+
+def _format_distance_list(values: list[float]) -> str:
+    """Chroma distance 목록을 로그용 문자열로 만든다."""
+    return ",".join(f"{value:.4f}" for value in values) if values else "none"
+
+
+def _format_decimal(value: float | None) -> str:
+    """소수 로그 값을 고정 폭 문자열로 만든다."""
+    return f"{value:.4f}" if value is not None else "n/a"
 
 
 def _embed_texts(texts: list[str]) -> tuple[list[list[float]], dict]:
@@ -584,19 +798,27 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         normalize_elapsed = time.perf_counter() - normalize_start
         _set_document_progress(document_id, 25, "normalize", "문서 텍스트를 정리했습니다.")
 
-        # Two-Pass 청킹 + 수동 overlap 후처리
+        # Two-Pass 청킹 + 연속 중복 line 정리 + 수동 overlap 후처리
         split_start = time.perf_counter()
         split_docs = _two_pass_split(full_text)
         split_elapsed = time.perf_counter() - split_start
+        _log_chunk_stats(document_id, filename, "split", split_docs)
+
+        dedupe_start = time.perf_counter()
+        deduped_docs = _dedupe_chunk_documents(split_docs)
+        dedupe_elapsed = time.perf_counter() - dedupe_start
+        _log_chunk_stats(document_id, filename, "deduped", deduped_docs)
         _set_document_progress(document_id, 28, "chunking", "문서를 청크로 나누고 있습니다.")
 
         merge_start = time.perf_counter()
-        merged_docs = _merge_short_chunks(split_docs)
+        merged_docs = _merge_short_chunks(deduped_docs)
         merge_elapsed = time.perf_counter() - merge_start
+        _log_chunk_stats(document_id, filename, "merged", merged_docs)
 
         overlap_start = time.perf_counter()
         final_docs = _apply_overlap(merged_docs)
         overlap_elapsed = time.perf_counter() - overlap_start
+        _log_chunk_stats(document_id, filename, "final", final_docs)
         _set_document_progress(document_id, 30, "chunking", f"청킹을 완료했습니다. ({len(final_docs)} chunks)")
 
         # 임베딩 + ChromaDB 저장. 청크별 호출 대신 batch 단위로 처리해 HTTP 왕복과 저장 오버헤드를 줄인다.
@@ -609,11 +831,12 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
-            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s merged_chunks=%s chunks=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
             len(raw_docs),
             len(split_docs),
+            len(deduped_docs),
             len(merged_docs),
             len(final_docs),
             CHUNK_SIZE,
@@ -624,6 +847,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             page_lookup_elapsed,
             normalize_elapsed,
             split_elapsed,
+            dedupe_elapsed,
             merge_elapsed,
             overlap_elapsed,
             page_match_elapsed,
@@ -702,10 +926,10 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
-def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) -> tuple[str | None, list]:
+def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) -> tuple[str | None, list, dict]:
     """
     질문 임베딩 → ChromaDB 검색 → 프롬프트 + 출처 조합.
-    문서가 없으면 (None, []) 반환. 호출자가 빈 응답 처리를 담당한다.
+    문서가 없으면 prompt를 None으로 반환한다. 호출자가 빈 응답 처리를 담당한다.
     """
     prepare_start = time.perf_counter()
     embedding_start = time.perf_counter()
@@ -727,20 +951,34 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     docs = results["documents"][0] if results["documents"] else []
     metadatas = results["metadatas"][0] if results["metadatas"] else []
     ids = results["ids"][0] if results["ids"] else []
+    distance_values = [float(distance) for distance in results["distances"][0]] if results.get("distances") else []
 
     if not docs:
+        prepare_elapsed = time.perf_counter() - prepare_start
+        metrics = {
+            "prepare_elapsed": prepare_elapsed,
+            "embedding_elapsed": embedding_elapsed,
+            "chroma_elapsed": chroma_elapsed,
+            "context_build_elapsed": 0.0,
+            "context_chars": 0,
+            "prompt_chars": 0,
+            "source_chars": [],
+            "distances": distance_values,
+        }
         logger.info(
-            "[query_prepare] top_k=%s docs=0 embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs total=%.2fs",
+            "[query_prepare] top_k=%s docs=0 embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
             top_k,
             embedding_elapsed,
             _format_seconds(ollama_total),
             _format_seconds(ollama_load),
             _format_seconds(ollama_prompt_eval),
             chroma_elapsed,
-            time.perf_counter() - prepare_start
+            metrics["context_build_elapsed"],
+            prepare_elapsed
         )
-        return None, []
+        return None, [], metrics
 
+    context_build_start = time.perf_counter()
     context = "\n\n".join(docs)
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
 
@@ -759,7 +997,9 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
 
     # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 헤더 메타데이터 포함
     sources = []
+    source_chars = [len(doc) for doc in docs]
     for doc, meta, chunk_id in zip(docs, metadatas, ids):
+        meta = meta or {}
         source: dict = {
             "document_id": meta.get("document_id", ""),
             "source": meta.get("source", ""),
@@ -776,19 +1016,50 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
                 source[k] = v
         sources.append(source)
 
+    context_build_elapsed = time.perf_counter() - context_build_start
+    prepare_elapsed = time.perf_counter() - prepare_start
+    distance_min = min(distance_values) if distance_values else None
+    distance_max = max(distance_values) if distance_values else None
+    distance_avg = sum(distance_values) / len(distance_values) if distance_values else None
+    metrics = {
+        "prepare_elapsed": prepare_elapsed,
+        "embedding_elapsed": embedding_elapsed,
+        "chroma_elapsed": chroma_elapsed,
+        "context_build_elapsed": context_build_elapsed,
+        "context_chars": len(context),
+        "prompt_chars": len(prompt),
+        "source_chars": source_chars,
+        "distances": distance_values,
+        "distance_min": distance_min,
+        "distance_max": distance_max,
+        "distance_avg": distance_avg,
+    }
     logger.info(
-        "[query_prepare] top_k=%s docs=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs total=%.2fs",
+        "[query_context] top_k=%s docs=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
         top_k,
         len(docs),
-        len(prompt),
+        metrics["context_chars"],
+        _format_int_list(source_chars),
+        _format_distance_list(distance_values),
+        _format_decimal(distance_min),
+        _format_decimal(distance_max),
+        _format_decimal(distance_avg),
+    )
+    logger.info(
+        "[query_prepare] top_k=%s docs=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+        top_k,
+        len(docs),
+        metrics["context_chars"],
+        metrics["prompt_chars"],
         embedding_elapsed,
         _format_seconds(ollama_total),
         _format_seconds(ollama_load),
         _format_seconds(ollama_prompt_eval),
         chroma_elapsed,
-        time.perf_counter() - prepare_start
+        context_build_elapsed,
+        prepare_elapsed
     )
-    return prompt, sources
+    return prompt, sources, metrics
 
 
 def _parse_chunk_index(chunk_id: str) -> int | None:
@@ -866,7 +1137,7 @@ async def query_document(request: QueryRequest):
     # _prepare_query는 embed_query·Chroma 조회가 모두 동기 블로킹이다.
     # async 핸들러에서 직접 호출하면 이벤트 루프가 묶여 다른 요청이 대기하므로
     # asyncio.to_thread()로 별도 스레드에서 실행한다.
-    prompt, sources = await asyncio.to_thread(
+    prompt, sources, query_metrics = await asyncio.to_thread(
         _prepare_query,
         request.question,
         request.top_k,
@@ -881,10 +1152,12 @@ async def query_document(request: QueryRequest):
     answer = await llm.ainvoke(prompt)
     llm_elapsed = time.perf_counter() - llm_start
     logger.info(
-        "[query] top_k=%s sources=%s prompt_chars=%s llm=%.2fs total=%.2fs",
+        "[query] top_k=%s sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs llm=%.2fs total=%.2fs",
         request.top_k,
         len(sources),
-        len(prompt),
+        query_metrics["context_chars"],
+        query_metrics["prompt_chars"],
+        query_metrics["prepare_elapsed"],
         llm_elapsed,
         time.perf_counter() - query_start
     )
@@ -902,7 +1175,7 @@ async def query_stream(request: QueryRequest):
     클라이언트 연결 종료 시 asyncio.CancelledError로 자동 중단된다.
     """
     stream_start = time.perf_counter()
-    prompt, sources = await asyncio.to_thread(
+    prompt, sources, query_metrics = await asyncio.to_thread(
         _prepare_query,
         request.question,
         request.top_k,
@@ -925,26 +1198,36 @@ async def query_stream(request: QueryRequest):
 
     async def token_stream():
         first_token_elapsed = None
+        llm_first_token_elapsed = None
         chunk_count = 0
+        llm_start = time.perf_counter()
         try:
             async for chunk in llm.astream(prompt):
                 if chunk:
                     if first_token_elapsed is None:
                         first_token_elapsed = time.perf_counter() - stream_start
+                        llm_first_token_elapsed = time.perf_counter() - llm_start
                         logger.info(
-                            "[query_stream] first_token top_k=%s sources=%s prompt_chars=%s first_token=%.2fs",
+                            "[query_stream] first_token top_k=%s sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs llm_first_token=%.2fs first_token=%.2fs",
                             request.top_k,
                             len(sources),
-                            len(prompt),
+                            query_metrics["context_chars"],
+                            query_metrics["prompt_chars"],
+                            query_metrics["prepare_elapsed"],
+                            llm_first_token_elapsed,
                             first_token_elapsed
                         )
                     chunk_count += 1
                     yield f"data: {json.dumps({'token': chunk}, ensure_ascii=False)}\n\n"
             logger.info(
-                "[query_stream] done top_k=%s sources=%s chunks=%s first_token=%s total=%.2fs",
+                "[query_stream] done top_k=%s sources=%s chunks=%s context_chars=%s prompt_chars=%s prepare=%.2fs llm_first_token=%s first_token=%s total=%.2fs",
                 request.top_k,
                 len(sources),
                 chunk_count,
+                query_metrics["context_chars"],
+                query_metrics["prompt_chars"],
+                query_metrics["prepare_elapsed"],
+                f"{llm_first_token_elapsed:.2f}s" if llm_first_token_elapsed is not None else "none",
                 f"{first_token_elapsed:.2f}s" if first_token_elapsed is not None else "none",
                 time.perf_counter() - stream_start
             )
