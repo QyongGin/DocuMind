@@ -944,6 +944,7 @@ def _merge_short_chunks(docs: list[Document]) -> list[Document]:
     merged: list[Document] = []
     buffer: list[Document] = []
     buffer_length = 0
+    short_threshold = CHUNK_MERGE_MIN_SIZE if CHUNK_MERGE_MIN_SIZE > 0 else max(1, CHUNK_SIZE // 3)
 
     for doc in docs:
         if not doc.page_content.strip():
