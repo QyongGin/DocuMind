@@ -1975,7 +1975,15 @@ def _has_recruitment_table_fact(meta: dict) -> bool:
 
 def _looks_like_admission_result_context(text: str) -> bool:
     """입시결과 표 context인지 보수적으로 확인한다."""
-    return "입시결과" in text or ("경쟁" in text and "예비" in text and ("평균" in text or "최저" in text))
+    compact_text = re.sub(r"\s+", " ", text)
+    has_abbreviated_result_header = bool(re.search(r"(일반고|특성화고|특기자|일반전형).*모\s*경\s*평\s*최\s*예", compact_text))
+    has_result_metrics = "경쟁" in text and "예비" in text and ("평균" in text or "최저" in text)
+    has_special_admission_result = (
+        "수시2차 농어촌 수급자" in compact_text
+        and "정시 농어촌 수급자" in compact_text
+        and bool(re.search(r"\d+\.\d+", compact_text))
+    )
+    return "입시결과" in text or has_result_metrics or has_abbreviated_result_header or has_special_admission_result
 
 
 def _prioritize_query_results(docs: list[str], metadatas: list[dict], ids: list[str], question: str) -> tuple[list[str], list[dict], list[str]]:
@@ -1983,9 +1991,12 @@ def _prioritize_query_results(docs: list[str], metadatas: list[dict], ids: list[
     if not _is_recruitment_count_question(question):
         return docs, metadatas, ids
 
+    has_recruitment_fact = any(_has_recruitment_table_fact(meta or {}) for meta in metadatas)
     ranked: list[tuple[int, int, str, dict, str]] = []
     for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids)):
         meta = meta or {}
+        if has_recruitment_fact and _looks_like_admission_result_context(doc):
+            continue
         if _has_recruitment_table_fact(meta):
             priority = 0
         elif _looks_like_admission_result_context(doc):
