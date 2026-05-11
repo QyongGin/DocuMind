@@ -465,6 +465,15 @@ def _dedupe_chunk_documents(docs: list[Document]) -> list[Document]:
     ]
 
 
+def _select_long_line_suffix(line: str, max_chars: int) -> str:
+    """완성된 줄 하나가 overlap 예산보다 길 때 마지막 일부를 fallback 문맥으로 선택한다."""
+    normalized_line = line.strip()
+    if len(normalized_line) <= max_chars:
+        return normalized_line
+
+    return normalized_line[-max_chars:].strip()
+
+
 def _select_overlap_text(previous_text: str, max_chars: int) -> str:
     """이전 청크의 마지막 완성 line들을 max_chars 안에서 overlap 문맥으로 선택한다."""
     if max_chars <= 0:
@@ -480,7 +489,7 @@ def _select_overlap_text(previous_text: str, max_chars: int) -> str:
         if selected and next_length > max_chars:
             break
         if not selected and len(normalized_line) > max_chars:
-            break
+            return _select_long_line_suffix(normalized_line, max_chars)
         selected.insert(0, normalized_line)
         selected_length = next_length
 
