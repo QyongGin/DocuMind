@@ -312,8 +312,8 @@ def _combine_chunk_documents(docs: list[Document]) -> Document:
 
 
 def _header_signature(doc: Document) -> tuple[str, ...]:
-    """청크의 전체 Markdown header 경로를 짧은 청크 병합 경계 판단용 tuple로 반환한다."""
-    return tuple(str(doc.metadata.get(f"Header {level}", "")) for level in range(1, 7))
+    """청크의 상위 Markdown header 경로를 짧은 청크 병합 경계 판단용 tuple로 반환한다."""
+    return tuple(str(doc.metadata.get(f"Header {level}", "")) for level in range(1, 4))
 
 
 def _normalize_line_for_dedupe(line: str) -> str:
