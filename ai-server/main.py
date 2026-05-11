@@ -1030,8 +1030,80 @@ class QueryRequest(BaseModel):
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "주어진 문서를 참고하여 질문에 답변하세요."
+    "너는 인하공업전문대학 문서를 근거로 답변하는 안내 챗봇이다."
 )
+
+MANDATORY_RAG_PROMPT = (
+    "필수 답변 규칙:\n"
+    "1. 반드시 [검색 근거]에 있는 내용만 사용한다.\n"
+    "2. [검색 근거]에 없는 절차, 조건, 날짜, 숫자, 서류, 주의사항, 조언은 만들지 않는다.\n"
+    "3. 질문이 방법, 절차, 주의사항을 묻는 경우 [검색 근거]의 절차, 유의사항, 안내 문구를 우선 추출한다.\n"
+    "4. 숫자, 날짜, 모집 인원, 점수, 기간은 추측하지 말고 근거의 값을 그대로 쓴다.\n"
+    "5. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
+    "6. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
+    "7. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다."
+)
+
+
+def _format_page_label(meta: dict) -> str:
+    """검색 근거 context에 넣을 PDF page label을 만든다."""
+    start_page = meta.get("page_start") or meta.get("page")
+    end_page = meta.get("page_end")
+    if start_page is None:
+        return ""
+    if end_page is not None and str(end_page) != str(start_page):
+        return f"PDF {start_page}-{end_page}페이지"
+    return f"PDF {start_page}페이지"
+
+
+def _format_header_path(meta: dict) -> str:
+    """검색 근거 context에 넣을 Markdown header 경로를 만든다."""
+    headers = [
+        str(meta.get(header_key, "")).strip()
+        for header_key in ("Header 1", "Header 2", "Header 3")
+        if str(meta.get(header_key, "")).strip()
+    ]
+    return " > ".join(headers)
+
+
+def _format_chunk_label(meta: dict, chunk_id: str) -> str:
+    """검색 근거 context에 넣을 문서 내 청크 순번 label을 만든다."""
+    chunk_index = meta.get("chunk_index", _parse_chunk_index(chunk_id))
+    if chunk_index is None:
+        return ""
+    try:
+        return f"문서 내 {int(chunk_index) + 1}번째 청크"
+    except (TypeError, ValueError):
+        return f"문서 내 {chunk_index}번째 청크"
+
+
+def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str) -> str:
+    """LLM이 검색 근거 단위를 구분할 수 있도록 출처 metadata와 청크 본문을 함께 포맷한다."""
+    source_name = str(meta.get("source", "")).strip() or "알 수 없는 문서"
+    metadata_lines = [f"문서: {source_name}"]
+
+    page_label = _format_page_label(meta)
+    if page_label:
+        metadata_lines.append(f"위치: {page_label}")
+
+    chunk_label = _format_chunk_label(meta, chunk_id)
+    if chunk_label:
+        metadata_lines.append(f"청크: {chunk_label}")
+
+    header_path = _format_header_path(meta)
+    if header_path:
+        metadata_lines.append(f"섹션: {header_path}")
+
+    metadata = "\n".join(metadata_lines)
+    return f"[출처 {index}]\n{metadata}\n내용:\n{doc.strip()}"
+
+
+def _build_context(docs: list[str], metadatas: list[dict], ids: list[str]) -> str:
+    """검색된 청크들을 출처 단위 context로 변환한다."""
+    blocks = []
+    for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids), start=1):
+        blocks.append(_format_context_block(index, doc, meta or {}, chunk_id))
+    return "\n\n".join(blocks)
 
 
 def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) -> tuple[str | None, list, dict]:
@@ -1087,20 +1159,21 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         return None, [], metrics
 
     context_build_start = time.perf_counter()
-    context = "\n\n".join(docs)
+    context = _build_context(docs, metadatas, ids)
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
 
-    # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다
+    # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
     prompt = f"""{prompt_policy}
-문서에 없는 내용은 "관련 내용을 문서에서 찾을 수 없습니다."라고 답하세요.
 
-[문서]
+{MANDATORY_RAG_PROMPT}
+
+[검색 근거]
 {context}
 
-[질문]
+[사용자 질문]
 {question}
 
-[답변]
+[답변 작성]
 """
 
     # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 헤더 메타데이터 포함

@@ -16,7 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class PromptConfigService {
 
     public static final String DEFAULT_SYSTEM_PROMPT =
-            "인하공업전문대학 홈페이지와 학사 안내 문서에 근거해서 간결하고 정확하게 답변한다.";
+            "너는 인하공업전문대학 문서를 근거로 답변하는 안내 챗봇이다.";
 
     private final PromptConfigRepository promptConfigRepository;
     private final UserRepository userRepository;
