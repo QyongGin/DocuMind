@@ -403,60 +403,20 @@ def _select_table_header_overlap(previous_text: str, current_text: str) -> str:
 def _starts_with_structural_boundary(text: str) -> bool:
     """현재 청크가 새 장·조·부칙 같은 강한 문서 경계에서 시작하는지 확인한다."""
     first_line = _first_non_empty_line(text)
-    return _is_structural_boundary_line(first_line)
-
-
-def _is_structural_boundary_line(line: str) -> bool:
-    """line 하나가 새 장·절·조·부칙 시작인지 확인한다."""
-    if not line.strip():
+    if not first_line:
         return False
 
-    normalized = re.sub(r"\s+", "", line.strip())
-    if line.strip().startswith("#"):
+    normalized = re.sub(r"\s+", "", first_line)
+    if first_line.startswith("#"):
         return True
     if normalized.startswith("부칙"):
         return True
-    return bool(re.match(r"^[-*ㆍ·]?(제\d+(조의\d+|장|절|조))", normalized))
+    return bool(re.match(r"^[-*ㆍ·]?(제\d+(장|절|조|조의\d+))", normalized))
 
 
 def _should_apply_general_overlap(current_text: str) -> bool:
     """표 header carry-forward와 별개로 일반 line overlap을 붙일지 판단한다."""
     return not _starts_with_structural_boundary(current_text)
-
-
-def _split_document_on_structural_boundaries(doc: Document) -> list[Document]:
-    """하나의 청크 안에 새 장·조 경계가 섞여 있으면 그 경계에서 실제 저장 청크를 나눈다."""
-    lines = doc.page_content.splitlines()
-    if len(lines) <= 1:
-        return [doc]
-
-    split_docs: list[Document] = []
-    start_index = 0
-
-    for index, line in enumerate(lines):
-        if index == start_index:
-            continue
-        if not _is_structural_boundary_line(line):
-            continue
-
-        prefix = "\n".join(lines[start_index:index]).strip()
-        if prefix:
-            split_docs.append(Document(page_content=prefix, metadata=doc.metadata))
-        start_index = index
-
-    tail = "\n".join(lines[start_index:]).strip()
-    if tail:
-        split_docs.append(Document(page_content=tail, metadata=doc.metadata))
-
-    return split_docs or [doc]
-
-
-def _split_structural_boundary_documents(docs: list[Document]) -> list[Document]:
-    """청크 내부에 섞인 새 장·조 경계를 별도 청크로 분리한다."""
-    result: list[Document] = []
-    for doc in docs:
-        result.extend(_split_document_on_structural_boundaries(doc))
-    return result
 
 
 def _dedupe_adjacent_lines(text: str) -> str:
@@ -675,14 +635,8 @@ def _merge_short_chunks(docs: list[Document]) -> list[Document]:
         doc_length = len(doc.page_content)
         next_length = buffer_length + (2 if buffer else 0) + doc_length
         header_changed = bool(buffer) and _header_signature(buffer[0]) != _header_signature(doc)
-        structural_boundary_started = bool(buffer) and _starts_with_structural_boundary(doc.page_content)
 
-        if buffer and (
-            header_changed
-            or structural_boundary_started
-            or buffer_length >= CHUNK_MERGE_MIN_SIZE
-            or next_length > CHUNK_SIZE
-        ):
+        if buffer and (header_changed or buffer_length >= CHUNK_MERGE_MIN_SIZE or next_length > CHUNK_SIZE):
             merged.append(_combine_chunk_documents(buffer))
             buffer = []
             buffer_length = 0
@@ -955,13 +909,8 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         _log_chunk_stats(document_id, filename, "deduped", deduped_docs)
         _set_document_progress(document_id, 28, "chunking", "문서를 청크로 나누고 있습니다.")
 
-        structural_start = time.perf_counter()
-        structural_docs = _split_structural_boundary_documents(deduped_docs)
-        structural_elapsed = time.perf_counter() - structural_start
-        _log_chunk_stats(document_id, filename, "structured", structural_docs)
-
         merge_start = time.perf_counter()
-        merged_docs = _merge_short_chunks(structural_docs)
+        merged_docs = _merge_short_chunks(deduped_docs)
         merge_elapsed = time.perf_counter() - merge_start
         _log_chunk_stats(document_id, filename, "merged", merged_docs)
 
@@ -981,13 +930,12 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
-            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s structured_chunks=%s merged_chunks=%s chunks=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs structural=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
             len(raw_docs),
             len(split_docs),
             len(deduped_docs),
-            len(structural_docs),
             len(merged_docs),
             len(final_docs),
             CHUNK_SIZE,
@@ -999,7 +947,6 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             normalize_elapsed,
             split_elapsed,
             dedupe_elapsed,
-            structural_elapsed,
             merge_elapsed,
             overlap_elapsed,
             page_match_elapsed,
