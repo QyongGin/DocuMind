@@ -404,6 +404,73 @@ def _select_table_header_overlap(previous_text: str, current_text: str) -> str:
     return _find_active_table_header_block(previous_text)
 
 
+def _contains_table_block_near_start(text: str, max_lines: int = 12) -> bool:
+    """청크 시작부에 표 block이 있는지 확인한다."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()][:max_lines]
+    table_rows = 0
+    for index, line in enumerate(lines):
+        if _is_markdown_table_row(line):
+            table_rows += 1
+        next_line_is_separator = (
+            index + 1 < len(lines)
+            and _is_markdown_table_row(line)
+            and _is_markdown_table_separator(lines[index + 1])
+        )
+        if next_line_is_separator:
+            return True
+    return table_rows >= 3
+
+
+def _is_table_context_line(line: str) -> bool:
+    """표 해석에 필요한 직전 범례·주의 문구 후보인지 확인한다."""
+    stripped = line.strip()
+    if not stripped or _is_markdown_table_row(stripped) or _is_markdown_table_separator(stripped):
+        return False
+
+    keywords = (
+        "표시",
+        "전공심화",
+        "학사학위",
+        "면접학과",
+        "모집단위",
+        "모집인원",
+        "수업 연한",
+        "야간 학과",
+        "자유전공",
+        "지원할 수 없음",
+        "지원 횟수",
+        "복수지원",
+    )
+    return stripped.startswith(("※", "- ※", "* ※")) or any(keyword in stripped for keyword in keywords)
+
+
+def _select_table_context_overlap(
+    previous_text: str,
+    current_text: str,
+    max_lines: int = 8,
+    max_chars: int = 700,
+) -> str:
+    """
+    표 본문과 분리된 직전 범례·주의 문구를 현재 표 청크 앞에 붙인다.
+    예: '♣표시 : 4년제 학사학위(전공심화)과정 개설 학과' + 다음 모집인원 표.
+    """
+    if not _contains_table_block_near_start(current_text):
+        return ""
+
+    selected: list[str] = []
+    for line in reversed([line.strip() for line in previous_text.splitlines() if line.strip()]):
+        if _is_table_context_line(line):
+            selected.insert(0, line)
+            selected_text = "\n".join(selected)
+            if len(selected) >= max_lines or len(selected_text) >= max_chars:
+                break
+            continue
+        if selected:
+            break
+
+    return "\n".join(selected)
+
+
 def _starts_with_structural_boundary(text: str) -> bool:
     """현재 청크가 새 장·조·부칙 같은 강한 문서 경계에서 시작하는지 확인한다."""
     first_line = _first_non_empty_line(text)
@@ -667,12 +734,10 @@ def _apply_overlap(docs: list[Document]) -> list[Document]:
     """
     이전 청크의 마지막 완성 line들을 다음 청크 앞에 prepend하는 수동 overlap 후처리.
     표가 청크 경계에서 끊기면 이전 청크의 활성 table header block도 함께 prepend한다.
+    표의 범례·주의 문구가 직전 청크에 있고 표 본문이 다음 청크에 있으면 해당 문구도 함께 prepend한다.
     RecursiveCharacterTextSplitter의 내장 overlap은 서로 다른 헤더 구간 간에
     작동하지 않으므로 전체 청크 리스트에 수동으로 적용한다. 문자 중간을 자르지 않는다.
     """
-    if CHUNK_OVERLAP <= 0:
-        return docs
-
     overlapped: list[Document] = []
     for i, doc in enumerate(docs):
         if i == 0:
@@ -680,8 +745,12 @@ def _apply_overlap(docs: list[Document]) -> list[Document]:
         else:
             context_parts = []
             overlap_text = ""
-            if _should_apply_general_overlap(doc.page_content):
+            if CHUNK_OVERLAP > 0 and _should_apply_general_overlap(doc.page_content):
                 overlap_text = _select_overlap_text(docs[i - 1].page_content, CHUNK_OVERLAP)
+            table_context_overlap = _select_table_context_overlap(docs[i - 1].page_content, doc.page_content)
+            if table_context_overlap:
+                context_parts.append(table_context_overlap)
+
             table_header_overlap = _select_table_header_overlap(docs[i - 1].page_content, doc.page_content)
             if table_header_overlap and not _starts_with_same_table_header_block(overlap_text, table_header_overlap):
                 context_parts.append(table_header_overlap)
