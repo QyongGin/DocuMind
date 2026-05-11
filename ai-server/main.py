@@ -68,11 +68,13 @@ OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 4096)
 OLLAMA_NUM_PREDICT = _env_int("OLLAMA_NUM_PREDICT", 512)
 OLLAMA_NUM_THREAD = _env_int("OLLAMA_NUM_THREAD", 0, minimum=0) or None
 CHUNK_SIZE = _env_int("CHUNK_SIZE", 800, minimum=100)
-CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 50, minimum=0)
+CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 80, minimum=0)
 CHUNK_MERGE_MIN_SIZE = _env_int("CHUNK_MERGE_MIN_SIZE", 300, minimum=0)
 EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 64)
 UPLOAD_READ_CHUNK_BYTES = _env_int("UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)
-DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 3)
+DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 5)
+TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
+TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
     logger.warning(
@@ -129,9 +131,17 @@ logger.info(
 )
 
 # Two-Pass 청킹 설정
-# 1단계: 마크다운 헤더(#, ##, ###) 경계에서 분할, 헤더 경로를 메타데이터로 자동 부여
-_MD_HEADERS = [("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")]
-_md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_MD_HEADERS)
+# 1단계: 마크다운 헤더(# ~ ######) 경계에서 분할, 헤더 경로를 메타데이터로 자동 부여
+# PDF 파서가 실제 소제목을 ######로 내보내는 경우가 있어 H6까지 주제 경계로 반영한다.
+_MD_HEADERS = [
+    ("#", "Header 1"),
+    ("##", "Header 2"),
+    ("###", "Header 3"),
+    ("####", "Header 4"),
+    ("#####", "Header 5"),
+    ("######", "Header 6"),
+]
+_md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_MD_HEADERS, strip_headers=False)
 
 # 2단계: CHUNK_SIZE 초과 청크만 재분할. 내장 overlap은 서로 다른 헤더 구간 간 미적용 버그가
 # 있으므로 0으로 두고 수동 후처리(_apply_overlap)로 대체한다.
@@ -264,6 +274,57 @@ def _resolve_page_range(content: str, page_lookup: list[dict]) -> tuple[int | No
     return min(matched_pages), max(matched_pages)
 
 
+def _normalize_loaded_documents(raw_docs: list[Document]) -> list[Document]:
+    """로더가 반환한 Document의 본문은 정규화하되 metadata는 보존한다."""
+    return [
+        Document(page_content=_normalize_text(doc.page_content), metadata=dict(doc.metadata))
+        for doc in raw_docs
+        if doc.page_content and doc.page_content.strip()
+    ]
+
+
+def _has_page_metadata(docs: list[Document]) -> bool:
+    """PDF처럼 page metadata가 있는 Document 목록인지 확인한다."""
+    return any(doc.metadata.get("page") is not None for doc in docs)
+
+
+def _update_active_headers(active_headers: dict[str, str], chunk_metadata: dict) -> None:
+    """페이지가 바뀌어도 직전 Markdown header 경로를 이어가기 위해 현재 chunk의 header를 반영한다."""
+    for level in range(1, 7):
+        key = f"Header {level}"
+        value = str(chunk_metadata.get(key, "")).strip()
+        if not value:
+            continue
+
+        active_headers[key] = value
+        for lower_level in range(level + 1, 7):
+            active_headers.pop(f"Header {lower_level}", None)
+
+
+def _split_loaded_documents(docs: list[Document]) -> list[Document]:
+    """
+    로더 Document를 청킹한다.
+    PDF는 page metadata를 가진 raw Document를 페이지별 구조 범위로 사용하고,
+    DOCX/PPTX/XLSX처럼 page 개념이 없는 문서는 기존처럼 전체 Markdown을 청킹한다.
+    """
+    if not _has_page_metadata(docs):
+        full_text = "\n".join(doc.page_content for doc in docs)
+        return _two_pass_split(full_text)
+
+    split_docs: list[Document] = []
+    active_headers: dict[str, str] = {}
+    for raw_doc in docs:
+        page_chunks = _two_pass_split(raw_doc.page_content)
+        for chunk in page_chunks:
+            _update_active_headers(active_headers, chunk.metadata)
+            metadata = dict(raw_doc.metadata)
+            metadata.update(active_headers)
+            metadata.update(chunk.metadata)
+            split_docs.append(Document(page_content=chunk.page_content, metadata=metadata))
+
+    return split_docs
+
+
 def _two_pass_split(full_text: str) -> list[Document]:
     """
     Two-Pass 청킹: MarkdownHeaderTextSplitter → RecursiveCharacterTextSplitter.
@@ -278,7 +339,7 @@ def _two_pass_split(full_text: str) -> list[Document]:
     result: list[Document] = []
     for doc in header_chunks:
         if len(doc.page_content) > CHUNK_SIZE:
-            sub_docs = _char_splitter.split_documents([doc])
+            sub_docs = _split_large_chunk_preserving_tables(doc)
             result.extend(sub_docs)
         else:
             result.append(doc)
@@ -300,7 +361,849 @@ def _combine_chunk_documents(docs: list[Document]) -> Document:
                 common_metadata[key] = value
 
     common_metadata["merged_chunk_count"] = len(docs)
+    if any(doc.metadata.get("block_type") == "table" for doc in docs):
+        common_metadata["block_type"] = "table"
     return Document(page_content=page_content, metadata=common_metadata)
+
+
+def _header_signature(doc: Document) -> tuple[str, ...]:
+    """청크의 상위 Markdown header 경로를 짧은 청크 병합 경계 판단용 tuple로 반환한다."""
+    return tuple(str(doc.metadata.get(f"Header {level}", "")) for level in range(1, 4))
+
+
+def _chunk_block_signature(doc: Document) -> str:
+    """짧은 청크 병합 시 표와 일반 문단이 섞이지 않도록 block 성격을 반환한다."""
+    if doc.metadata.get("block_type") == "table":
+        return "table"
+    return "text"
+
+
+def _can_merge_text_prefix_into_table(buffer: list[Document], doc: Document, next_length: int, short_threshold: int) -> bool:
+    """표 바로 앞의 짧은 제목·설명 청크는 table chunk와 함께 보존한다."""
+    if not buffer:
+        return False
+    if _chunk_block_signature(buffer[-1]) != "text" or _chunk_block_signature(doc) != "table":
+        return False
+    buffer_text = "\n\n".join(item.page_content for item in buffer if item.page_content)
+    if len(buffer_text) >= short_threshold:
+        return False
+    return next_length <= CHUNK_SIZE + CHUNK_OVERLAP
+
+
+def _normalize_line_for_dedupe(line: str) -> str:
+    """연속 중복 판단을 위해 line 내부 공백을 정규화한다."""
+    return re.sub(r"\s+", " ", line).strip()
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    """Markdown table 구분선인지 확인한다."""
+    stripped = line.strip()
+    if "|" not in stripped or "-" not in stripped:
+        return False
+    cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell or "") for cell in cells)
+
+
+def _is_markdown_table_row(line: str) -> bool:
+    """Markdown table row 형태인지 확인한다."""
+    stripped = line.strip()
+    return stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2
+
+
+def _first_non_empty_line(text: str) -> str:
+    """텍스트에서 첫 번째 비어 있지 않은 line을 반환한다."""
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _starts_with_table_body_row(text: str) -> bool:
+    """청크가 table header 없이 table body row로 시작하는지 확인한다."""
+    first_line = _first_non_empty_line(text)
+    return bool(first_line) and _is_markdown_table_row(first_line) and not _is_markdown_table_separator(first_line)
+
+
+def _has_table_header_block_at_start(text: str) -> bool:
+    """청크 시작부에 Markdown table header block이 이미 있는지 확인한다."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return len(lines) >= 2 and _is_markdown_table_row(lines[0]) and _is_markdown_table_separator(lines[1])
+
+
+def _starts_with_same_table_header_block(text: str, header_block: str) -> bool:
+    """텍스트 시작부가 주어진 table header block과 같은지 확인한다."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    header_lines = [line.strip() for line in header_block.splitlines() if line.strip()]
+    if len(lines) < 2 or len(header_lines) < 2:
+        return False
+    return (
+        _normalize_line_for_dedupe(lines[0]) == _normalize_line_for_dedupe(header_lines[0])
+        and _normalize_line_for_dedupe(lines[1]) == _normalize_line_for_dedupe(header_lines[1])
+    )
+
+
+def _find_active_table_header_block(text: str) -> str:
+    """
+    이전 청크 끝까지 이어지는 table의 마지막 header block을 찾는다.
+    header 뒤에 일반 문단이 나오면 이미 끝난 표로 보고 carry-forward하지 않는다.
+    """
+    lines = text.splitlines()
+    last_header_block = ""
+
+    for index in range(len(lines) - 1):
+        if not (_is_markdown_table_row(lines[index]) and _is_markdown_table_separator(lines[index + 1])):
+            continue
+
+        has_body_row = False
+        has_non_table_after_header = False
+        for tail_line in lines[index + 2:]:
+            if not tail_line.strip():
+                continue
+            if _is_markdown_table_row(tail_line) or _is_markdown_table_separator(tail_line):
+                has_body_row = has_body_row or not _is_markdown_table_separator(tail_line)
+                continue
+            has_non_table_after_header = True
+            break
+
+        if has_body_row and not has_non_table_after_header:
+            last_header_block = f"{lines[index].strip()}\n{lines[index + 1].strip()}"
+
+    return last_header_block
+
+
+def _select_table_header_overlap(previous_text: str, current_text: str) -> str:
+    """표가 청크 경계에서 이어질 때 다음 청크 앞에 붙일 table header block을 선택한다."""
+    if not _starts_with_table_body_row(current_text) or _has_table_header_block_at_start(current_text):
+        return ""
+    return _find_active_table_header_block(previous_text)
+
+
+def _contains_table_block_near_start(text: str, max_lines: int = 12) -> bool:
+    """청크 시작부에 표 block이 있는지 확인한다."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()][:max_lines]
+    table_rows = 0
+    for index, line in enumerate(lines):
+        if _is_markdown_table_row(line):
+            table_rows += 1
+        next_line_is_separator = (
+            index + 1 < len(lines)
+            and _is_markdown_table_row(line)
+            and _is_markdown_table_separator(lines[index + 1])
+        )
+        if next_line_is_separator:
+            return True
+    return table_rows >= 3
+
+
+def _is_table_context_line(line: str) -> bool:
+    """표 해석에 필요한 범례·주의 문구 후보인지 확인한다."""
+    stripped = line.strip()
+    if not stripped or _is_markdown_table_row(stripped) or _is_markdown_table_separator(stripped):
+        return False
+
+    note_prefixes = (
+        "※",
+        "- ※",
+        "* ※",
+        "주)",
+        "주:",
+        "비고",
+        "참고",
+        "단위",
+        "범례",
+        "legend",
+    )
+    marker_symbols = ("♣", "■", "□", "◈", "○", "●", "★", "☆")
+    keywords = (
+        "표시",
+        "기호",
+        "해당",
+        "제외",
+        "제한",
+        "불가",
+        "가능",
+        "선택",
+        "필수",
+        "모집",
+        "전형",
+    )
+    normalized = stripped.lower()
+    return (
+        stripped.startswith(note_prefixes)
+        or any(symbol in stripped for symbol in marker_symbols)
+        or any(keyword in normalized for keyword in keywords)
+    )
+
+
+def _select_table_context_overlap(
+    previous_text: str,
+    current_text: str,
+    max_lines: int = 8,
+    max_chars: int = 700,
+) -> str:
+    """
+    표 본문과 분리된 직전 범례·주의 문구를 현재 표 청크 앞에 붙인다.
+    예: '♣표시 : 4년제 학사학위(전공심화)과정 개설 학과' + 다음 모집인원 표.
+    """
+    if not _contains_table_block_near_start(current_text):
+        return ""
+
+    selected: list[str] = []
+    for line in reversed([line.strip() for line in previous_text.splitlines() if line.strip()]):
+        if _is_table_context_line(line):
+            selected.insert(0, line)
+            selected_text = "\n".join(selected)
+            if len(selected) >= max_lines or len(selected_text) >= max_chars:
+                break
+            continue
+        if selected:
+            break
+
+    return "\n".join(selected)
+
+
+def _select_table_context_from_start(text: str, max_lines: int = 8, max_chars: int = 700) -> str:
+    """표 뒤에 이어지는 범례·주의 문구를 앞쪽 line부터 선택한다."""
+    selected: list[str] = []
+    for line in [line.strip() for line in text.splitlines() if line.strip()]:
+        if _is_table_context_line(line):
+            selected.append(line)
+            selected_text = "\n".join(selected)
+            if len(selected) >= max_lines or len(selected_text) >= max_chars:
+                break
+            continue
+        if selected:
+            break
+        if _is_markdown_table_line(line):
+            break
+
+    return "\n".join(selected)
+
+
+def _is_table_like_document(doc: Document) -> bool:
+    """현재 Document가 표 본문 성격인지 확인한다."""
+    return doc.metadata.get("block_type") == "table" or _contains_table_block_near_start(doc.page_content, max_lines=20)
+
+
+def _select_following_table_context(docs: list[Document], index: int) -> str:
+    """연속된 표 chunk 뒤에 있는 범례·주의 문구를 현재 표 chunk에 붙일 context로 선택한다."""
+    if not _is_table_like_document(docs[index]):
+        return ""
+
+    next_index = index + 1
+    while next_index < len(docs) and _is_table_like_document(docs[next_index]):
+        next_index += 1
+
+    if next_index >= len(docs):
+        return ""
+    return _select_table_context_from_start(docs[next_index].page_content)
+
+
+def _is_markdown_table_line(line: str) -> bool:
+    """Markdown table row 또는 separator line인지 확인한다."""
+    stripped = line.strip()
+    return _is_markdown_table_row(stripped) or _is_markdown_table_separator(stripped)
+
+
+def _split_markdown_table_blocks(text: str) -> list[tuple[str, str]]:
+    """Markdown 본문을 text/table block으로 나눈다."""
+    blocks: list[tuple[str, str]] = []
+    current_type: str | None = None
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_type, current_lines
+        if current_type and any(line.strip() for line in current_lines):
+            blocks.append((current_type, "\n".join(current_lines).strip()))
+        current_type = None
+        current_lines = []
+
+    for line in text.splitlines():
+        line_type = "table" if _is_markdown_table_line(line) else "text"
+        if current_type is None:
+            current_type = line_type
+        if line_type != current_type and line.strip():
+            flush()
+            current_type = line_type
+        current_lines.append(line)
+
+    flush()
+    return blocks
+
+
+def _document_with_metadata(page_content: str, metadata: dict, **extra_metadata) -> Document:
+    """본문과 metadata를 함께 가진 Document를 만든다."""
+    merged_metadata = dict(metadata)
+    merged_metadata.update(extra_metadata)
+    return Document(page_content=page_content, metadata=merged_metadata)
+
+
+def _split_markdown_cells(line: str) -> list[str]:
+    """Markdown table row를 cell 목록으로 분해한다."""
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [_clean_table_cell(cell) for cell in stripped.split("|")]
+
+
+def _clean_table_cell(cell: str) -> str:
+    """표 cell 내부의 HTML 줄바꿈과 불필요한 공백을 정리한다."""
+    cleaned = re.sub(r"<br\s*/?>", " ", cell, flags=re.IGNORECASE)
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    cleaned = cleaned.replace("&nbsp;", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _is_empty_table_cell(cell: str) -> bool:
+    """Markdown 파싱 과정에서 생긴 빈 cell인지 확인한다."""
+    return not cell or cell in {"-", "–", "—"}
+
+
+def _normalize_table_symbol(symbol: str) -> str:
+    """범례 symbol 표기를 정리한다."""
+    return re.sub(r"\s+", "", symbol.strip())
+
+
+def _extract_table_legends(text: str) -> dict[str, str]:
+    """표 주변의 '기호 표시: 의미' 형태 범례를 추출한다."""
+    legends: dict[str, str] = {}
+    symbol_pattern = r"([♣■□◆◇◈●○◎△▲▣★☆※]+)"
+    for raw_line in text.splitlines():
+        line = re.sub(r"^[-*ㆍ·]\s*", "", raw_line.strip())
+        if not line or "표시" not in line:
+            continue
+
+        match = re.search(symbol_pattern + r"\s*표시\s*[:：]?\s*(.+)", line)
+        if not match:
+            continue
+
+        symbol = _normalize_table_symbol(match.group(1))
+        description = match.group(2).strip()
+        if not symbol or not description:
+            continue
+        legends[symbol] = description
+
+    return legends
+
+
+def _extract_table_caption(text: str, metadata: dict) -> str:
+    """표 fact에 붙일 문서 내 표 제목 또는 섹션 경로를 찾는다."""
+    caption_candidates: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _is_markdown_table_line(stripped):
+            break
+        if stripped.startswith("######"):
+            caption_candidates.append(stripped.lstrip("#").strip())
+            continue
+        if re.match(r"^(표|Table)\s*\d", stripped, flags=re.IGNORECASE):
+            caption_candidates.append(stripped)
+            continue
+        if (
+            len(stripped) <= 80
+            and not stripped.startswith("- ※")
+            and not stripped.endswith(">")
+            and len(re.findall(r"\d{4}\.\d", stripped)) < 2
+        ):
+            caption_candidates.append(stripped.lstrip("- ").strip())
+
+    if caption_candidates:
+        return caption_candidates[-1]
+
+    header_path = _format_header_path(metadata)
+    return header_path or "문서 표"
+
+
+def _parse_markdown_table(block_text: str) -> tuple[list[list[str]], list[list[str]]]:
+    """Markdown table block에서 header row와 body row를 분리한다."""
+    lines = [line.strip() for line in block_text.splitlines() if _is_markdown_table_line(line)]
+    if len(lines) < 2:
+        return [], []
+
+    separator_index = next((index for index, line in enumerate(lines) if _is_markdown_table_separator(line)), -1)
+    if separator_index <= 0:
+        return [], []
+
+    header_rows = [_split_markdown_cells(line) for line in lines[:separator_index]]
+    body_rows = [_split_markdown_cells(line) for line in lines[separator_index + 1:]]
+    column_count = max((len(row) for row in header_rows + body_rows), default=0)
+    if column_count == 0:
+        return [], []
+
+    padded_headers = [row + [""] * (column_count - len(row)) for row in header_rows]
+    padded_body = [row + [""] * (column_count - len(row)) for row in body_rows]
+    return padded_headers, padded_body
+
+
+def _is_probable_subheader_row(row: list[str]) -> bool:
+    """본문 첫 줄이 실제 데이터가 아니라 병합 header 보강 row인지 추정한다."""
+    non_empty_cells = [cell for cell in row if not _is_empty_table_cell(cell)]
+    if len(non_empty_cells) < 2:
+        return False
+    if any(re.search(r"\d", cell) for cell in non_empty_cells):
+        return False
+    return True
+
+
+def _compose_column_labels(header_rows: list[list[str]], subheader_row: list[str] | None = None) -> list[str]:
+    """다중 header row와 보강 header row를 합쳐 column label을 만든다."""
+    if not header_rows:
+        return []
+
+    column_count = len(header_rows[0])
+    labels: list[str] = []
+    last_seen_by_depth = [""] * len(header_rows)
+
+    for column_index in range(column_count):
+        parts: list[str] = []
+        for depth, header_row in enumerate(header_rows):
+            cell = header_row[column_index] if column_index < len(header_row) else ""
+            if not _is_empty_table_cell(cell):
+                last_seen_by_depth[depth] = cell
+            value = last_seen_by_depth[depth]
+            if value and value not in parts:
+                parts.append(value)
+
+        if subheader_row and column_index < len(subheader_row):
+            subheader = subheader_row[column_index]
+            if not _is_empty_table_cell(subheader) and subheader not in parts:
+                parts.append(subheader)
+
+        labels.append(" ".join(parts).strip() or f"열 {column_index + 1}")
+
+    return labels
+
+
+def _select_row_subject(row: list[str], column_labels: list[str]) -> tuple[str, list[str]]:
+    """행 fact의 주어와 앞쪽 식별 cell 설명을 만든다."""
+    descriptors: list[str] = []
+    subject = ""
+    preferred_subject = ""
+    for index, cell in enumerate(row):
+        if _is_empty_table_cell(cell):
+            continue
+        label = column_labels[index] if index < len(column_labels) else f"열 {index + 1}"
+        descriptors.append(f"{label}={cell}")
+        if (
+            not preferred_subject
+            and any(keyword in label for keyword in ("모집단위", "학과", "항목", "요소", "구분", "전형", "프로젝트 유형"))
+            and not re.fullmatch(r"[\d.,]+", cell)
+        ):
+            preferred_subject = cell
+        if not subject and not re.fullmatch(r"[\d.,]+", cell):
+            subject = cell
+        if len(descriptors) >= 3:
+            break
+
+    return preferred_subject or subject or "해당 행", descriptors
+
+
+def _build_symbol_facts(caption: str, row: list[str], column_labels: list[str], legends: dict[str, str]) -> list[str]:
+    """범례 기호가 들어간 행을 검색 가능한 fact 문장으로 바꾼다."""
+    facts: list[str] = []
+    if not legends:
+        return facts
+
+    subject, descriptors = _select_row_subject(row, column_labels)
+    row_text = " ".join(cell for cell in row if cell)
+    descriptor_text = ", ".join(descriptors)
+    for symbol, description in legends.items():
+        if symbol not in row_text:
+            continue
+        fact = f"{caption}: {subject} 행에는 {symbol} 표시가 있으며, {symbol} 표시는 {description}를 의미한다."
+        if descriptor_text:
+            fact = f"{fact} 행 정보: {descriptor_text}."
+        facts.append(fact)
+
+    return facts
+
+
+def _build_matrix_facts(caption: str, row: list[str], column_labels: list[str]) -> list[str]:
+    """행/열/값 관계가 있는 표를 cell 단위 fact로 바꾼다."""
+    facts: list[str] = []
+    subject, descriptors = _select_row_subject(row, column_labels)
+    descriptor_text = ", ".join(descriptor for descriptor in descriptors if not re.search(r"=[\d.,]+$", descriptor))
+
+    for index, value in enumerate(row):
+        if index >= len(column_labels) or _is_empty_table_cell(value):
+            continue
+        if index < 2:
+            continue
+        column_label = column_labels[index]
+        if not column_label or column_label.startswith("열 "):
+            continue
+        fact = f"{caption}: {subject}의 {column_label} 값은 {value}이다."
+        if descriptor_text:
+            fact = f"{fact} 행 정보: {descriptor_text}."
+        facts.append(fact)
+
+    return facts
+
+
+def _clean_table_subject(subject: str) -> str:
+    """검색 fact의 행 주어에서 범례 기호를 제거한다."""
+    return re.sub(r"\s*[♣■◈◆◇□●○▲△★☆]\s*", "", subject).strip() or subject.strip()
+
+
+def _should_generate_matrix_facts(column_labels: list[str]) -> bool:
+    """등급/단계 열을 가진 매트릭스 표인지 보수적으로 판단한다."""
+    matrix_keywords = ("매우 낮음", "낮음", "정상", "높음", "매우 높음", "극히 높음")
+    if any(any(keyword in label for keyword in matrix_keywords) for label in column_labels):
+        return True
+    return False
+
+
+def _build_row_summary_fact(caption: str, row: list[str], column_labels: list[str]) -> str:
+    """표의 한 행을 key=value 형태의 검색 가능한 문장으로 만든다."""
+    pairs: list[str] = []
+    subject, _ = _select_row_subject(row, column_labels)
+    subject = _clean_table_subject(subject)
+    for index, value in enumerate(row):
+        if _is_empty_table_cell(value):
+            continue
+        label = column_labels[index] if index < len(column_labels) else f"열 {index + 1}"
+        if label.startswith("열 "):
+            continue
+        pairs.append(f"{label}={value}")
+
+    if not pairs:
+        return ""
+    return f"{caption}: {subject} 행 정보는 {'; '.join(pairs)}이다."
+
+
+def _truncate_table_fact(fact: str) -> str:
+    """너무 긴 fact는 임베딩 품질과 토큰 비용을 위해 잘라낸다."""
+    normalized = re.sub(r"\s+", " ", fact).strip()
+    if len(normalized) <= TABLE_FACT_MAX_CHARS:
+        return normalized
+    return normalized[:TABLE_FACT_MAX_CHARS].rstrip() + "..."
+
+
+def _extract_table_facts(text: str, metadata: dict) -> list[str]:
+    """Markdown 표에서 원본 청크와 별도로 색인할 구조화 fact를 생성한다."""
+    legends = _extract_table_legends(text)
+    caption = _extract_table_caption(text, metadata)
+    facts: list[str] = []
+    seen: set[str] = set()
+
+    def append_fact(fact: str) -> None:
+        if len(facts) >= TABLE_FACT_MAX_PER_CHUNK:
+            return
+        normalized = _truncate_table_fact(fact)
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        facts.append(normalized)
+
+    for block_type, block_text in _split_markdown_table_blocks(text):
+        if block_type != "table":
+            continue
+
+        header_rows, body_rows = _parse_markdown_table(block_text)
+        if not header_rows or not body_rows:
+            continue
+
+        subheader_row = body_rows[0] if body_rows and _is_probable_subheader_row(body_rows[0]) else None
+        data_rows = body_rows[1:] if subheader_row else body_rows
+        column_labels = _compose_column_labels(header_rows, subheader_row)
+        generate_matrix_facts = _should_generate_matrix_facts(column_labels)
+        previous_values: dict[int, str] = {}
+        symbol_facts: list[str] = []
+        row_summary_facts: list[str] = []
+        matrix_facts: list[str] = []
+
+        for row in data_rows:
+            if not any(not _is_empty_table_cell(cell) for cell in row):
+                continue
+
+            filled_row = list(row)
+            for index in range(min(2, len(filled_row))):
+                if _is_empty_table_cell(filled_row[index]) and previous_values.get(index):
+                    filled_row[index] = previous_values[index]
+                elif not _is_empty_table_cell(filled_row[index]):
+                    previous_values[index] = filled_row[index]
+
+            symbol_facts.extend(_build_symbol_facts(caption, filled_row, column_labels, legends))
+
+            row_summary = _build_row_summary_fact(caption, filled_row, column_labels)
+            if row_summary:
+                row_summary_facts.append(row_summary)
+
+            if generate_matrix_facts:
+                matrix_facts.extend(_build_matrix_facts(caption, filled_row, column_labels))
+
+        for fact in symbol_facts + row_summary_facts + matrix_facts:
+            append_fact(fact)
+
+    return facts
+
+
+def _split_text_block(block_text: str, metadata: dict) -> list[Document]:
+    """일반 text block은 기존 RecursiveCharacterTextSplitter로 분할한다."""
+    document = Document(page_content=block_text, metadata=dict(metadata))
+    if len(block_text) <= CHUNK_SIZE:
+        return [document]
+    return _char_splitter.split_documents([document])
+
+
+def _split_table_block(block_text: str, metadata: dict) -> list[Document]:
+    """
+    Markdown table block은 문자 중간에서 자르지 않고 row group 단위로 분할한다.
+    header row와 separator가 있으면 각 분할 table 앞에 반복한다.
+    """
+    lines = [line.strip() for line in block_text.splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    table_metadata = dict(metadata)
+    table_metadata["block_type"] = "table"
+
+    if len(block_text) <= CHUNK_SIZE:
+        return [_document_with_metadata(block_text, table_metadata)]
+
+    header_lines: list[str] = []
+    body_lines = lines
+    if len(lines) >= 2 and _is_markdown_table_row(lines[0]) and _is_markdown_table_separator(lines[1]):
+        header_lines = lines[:2]
+        body_lines = lines[2:]
+
+    if not body_lines:
+        return [_document_with_metadata(block_text, table_metadata)]
+
+    chunks: list[Document] = []
+    current_rows: list[str] = []
+
+    def build_table(rows: list[str]) -> str:
+        if header_lines:
+            return "\n".join(header_lines + rows)
+        return "\n".join(rows)
+
+    for row in body_lines:
+        candidate_rows = current_rows + [row]
+        candidate = build_table(candidate_rows)
+        if current_rows and len(candidate) > CHUNK_SIZE:
+            chunks.append(_document_with_metadata(build_table(current_rows), table_metadata))
+            current_rows = [row]
+            continue
+        current_rows = candidate_rows
+
+    if current_rows:
+        chunks.append(_document_with_metadata(build_table(current_rows), table_metadata))
+
+    return chunks
+
+
+def _split_large_chunk_preserving_tables(doc: Document) -> list[Document]:
+    """큰 청크를 나눌 때 Markdown table은 row group 단위로 보존한다."""
+    blocks = _split_markdown_table_blocks(doc.page_content)
+    if not any(block_type == "table" for block_type, _ in blocks):
+        return _char_splitter.split_documents([doc])
+
+    split_docs: list[Document] = []
+    for block_type, block_text in blocks:
+        if block_type == "table":
+            split_docs.extend(_split_table_block(block_text, doc.metadata))
+        else:
+            split_docs.extend(_split_text_block(block_text, doc.metadata))
+    return split_docs
+
+
+def _starts_with_structural_boundary(text: str) -> bool:
+    """현재 청크가 새 장·조·부칙 같은 강한 문서 경계에서 시작하는지 확인한다."""
+    first_line = _first_non_empty_line(text)
+    if not first_line:
+        return False
+
+    normalized = re.sub(r"\s+", "", first_line)
+    if first_line.startswith("#"):
+        return True
+    if normalized.startswith("부칙"):
+        return True
+    return bool(re.match(r"^[-*ㆍ·]?(제\d+(장|절|조|조의\d+))", normalized))
+
+
+def _should_apply_general_overlap(current_text: str) -> bool:
+    """표 header carry-forward와 별개로 일반 line overlap을 붙일지 판단한다."""
+    return not _starts_with_structural_boundary(current_text)
+
+
+def _dedupe_adjacent_lines(text: str) -> str:
+    """
+    같은 청크 안에서 바로 반복되는 동일 line 또는 동일 table header block만 제거한다.
+    표 구조 자체는 보존하고, 페이지 반복 header/footer 후보처럼 떨어져 반복되는 line은 제거하지 않는다.
+    """
+    lines = text.splitlines()
+    deduped: list[str] = []
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+        normalized_line = _normalize_line_for_dedupe(line)
+
+        if normalized_line and deduped and normalized_line == _normalize_line_for_dedupe(deduped[-1]):
+            index += 1
+            continue
+
+        has_table_header_block = (
+            index + 1 < len(lines)
+            and _is_markdown_table_row(line)
+            and _is_markdown_table_separator(lines[index + 1])
+        )
+        has_same_previous_header_block = (
+            has_table_header_block
+            and len(deduped) >= 2
+            and normalized_line == _normalize_line_for_dedupe(deduped[-2])
+            and _normalize_line_for_dedupe(lines[index + 1]) == _normalize_line_for_dedupe(deduped[-1])
+        )
+        if has_same_previous_header_block:
+            index += 2
+            continue
+
+        deduped.append(line)
+        index += 1
+
+    return "\n".join(deduped).strip()
+
+
+def _dedupe_chunk_documents(docs: list[Document]) -> list[Document]:
+    """청크별 연속 중복 line을 제거하되 metadata는 유지한다."""
+    return [
+        Document(page_content=_dedupe_adjacent_lines(doc.page_content), metadata=doc.metadata)
+        for doc in docs
+    ]
+
+
+def _select_long_line_suffix(line: str, max_chars: int) -> str:
+    """완성된 줄 하나가 overlap 예산보다 길 때 마지막 일부를 fallback 문맥으로 선택한다."""
+    normalized_line = line.strip()
+    if len(normalized_line) <= max_chars:
+        return normalized_line
+
+    return normalized_line[-max_chars:].strip()
+
+
+def _select_overlap_text(previous_text: str, max_chars: int) -> str:
+    """이전 청크의 마지막 완성 line들을 max_chars 안에서 overlap 문맥으로 선택한다."""
+    if max_chars <= 0:
+        return ""
+
+    selected: list[str] = []
+    selected_length = 0
+    lines = [line.rstrip() for line in previous_text.splitlines() if line.strip()]
+    if lines and _is_markdown_table_line(lines[-1]):
+        return ""
+
+    for line in reversed(lines):
+        normalized_line = line.strip()
+        next_length = selected_length + (1 if selected else 0) + len(normalized_line)
+        if selected and next_length > max_chars:
+            break
+        if not selected and len(normalized_line) > max_chars:
+            return _select_long_line_suffix(normalized_line, max_chars)
+        selected.insert(0, normalized_line)
+        selected_length = next_length
+
+    return "\n".join(selected)
+
+
+def _percentile(sorted_values: list[int], percentile: int) -> int:
+    """정렬된 숫자 목록에서 지정한 백분위 값을 반환한다."""
+    if not sorted_values:
+        return 0
+
+    index = math.ceil((percentile / 100) * len(sorted_values)) - 1
+    bounded_index = max(0, min(index, len(sorted_values) - 1))
+    return sorted_values[bounded_index]
+
+
+def _duplicate_line_metrics(docs: list[Document]) -> dict:
+    """
+    반복 header/footer 후보를 찾기 위한 line 중복 통계를 만든다.
+    원문 line은 운영 로그에 남기지 않고 후보 개수와 비율만 기록한다.
+    """
+    line_counts: dict[str, int] = {}
+    line_candidates = 0
+
+    for doc in docs:
+        for line in doc.page_content.splitlines():
+            normalized_line = re.sub(r"\s+", " ", line).strip()
+            if len(normalized_line) < 8 or len(normalized_line) > 120:
+                continue
+            line_candidates += 1
+            line_counts[normalized_line] = line_counts.get(normalized_line, 0) + 1
+
+    duplicate_counts = [count for count in line_counts.values() if count > 1]
+    duplicate_occurrences = sum(count - 1 for count in duplicate_counts)
+    duplicate_ratio = duplicate_occurrences / line_candidates if line_candidates else 0.0
+    return {
+        "line_candidates": line_candidates,
+        "duplicate_line_candidates": len(duplicate_counts),
+        "duplicate_line_occurrences": duplicate_occurrences,
+        "duplicate_line_ratio": duplicate_ratio,
+    }
+
+
+def _chunk_stats(docs: list[Document]) -> dict:
+    """청크 길이 분포와 반복 line 후보 통계를 계산한다."""
+    lengths = sorted(len(doc.page_content) for doc in docs)
+    duplicate_metrics = _duplicate_line_metrics(docs)
+    short_threshold = CHUNK_MERGE_MIN_SIZE if CHUNK_MERGE_MIN_SIZE > 0 else max(1, CHUNK_SIZE // 3)
+
+    if not lengths:
+        return {
+            "chunks": 0,
+            "total_chars": 0,
+            "avg_chars": 0.0,
+            "min_chars": 0,
+            "p50_chars": 0,
+            "p90_chars": 0,
+            "max_chars": 0,
+            "short_chunks": 0,
+            "short_threshold": short_threshold,
+            **duplicate_metrics,
+        }
+
+    return {
+        "chunks": len(lengths),
+        "total_chars": sum(lengths),
+        "avg_chars": sum(lengths) / len(lengths),
+        "min_chars": lengths[0],
+        "p50_chars": _percentile(lengths, 50),
+        "p90_chars": _percentile(lengths, 90),
+        "max_chars": lengths[-1],
+        "short_chunks": sum(1 for length in lengths if length < short_threshold),
+        "short_threshold": short_threshold,
+        **duplicate_metrics,
+    }
+
+
+def _log_chunk_stats(document_id: int, filename: str, stage: str, docs: list[Document]) -> None:
+    """청크 정책 실험 비교에 필요한 통계형 로그를 남긴다."""
+    stats = _chunk_stats(docs)
+    logger.info(
+        "[chunk_stats] document_id=%s filename=%s stage=%s chunks=%s total_chars=%s avg_chars=%.1f min_chars=%s p50_chars=%s p90_chars=%s max_chars=%s short_chunks=%s short_threshold=%s line_candidates=%s duplicate_line_candidates=%s duplicate_line_occurrences=%s duplicate_line_ratio=%.3f",
+        document_id,
+        filename,
+        stage,
+        stats["chunks"],
+        stats["total_chars"],
+        stats["avg_chars"],
+        stats["min_chars"],
+        stats["p50_chars"],
+        stats["p90_chars"],
+        stats["max_chars"],
+        stats["short_chunks"],
+        stats["short_threshold"],
+        stats["line_candidates"],
+        stats["duplicate_line_candidates"],
+        stats["duplicate_line_occurrences"],
+        stats["duplicate_line_ratio"],
+    )
 
 
 def _set_document_progress(document_id: int | None, percent: int, stage: str, message: str, status: str = "processing") -> None:
@@ -339,7 +1242,7 @@ def _get_document_progress(document_id: int) -> dict:
 
 def _merge_short_chunks(docs: list[Document]) -> list[Document]:
     """
-    너무 짧은 인접 청크를 CHUNK_SIZE를 넘지 않는 범위에서 병합한다.
+    같은 header 경로의 짧은 인접 청크를 CHUNK_SIZE를 넘지 않는 범위에서 병합한다.
     LlamaIndex ingestion pipeline의 node 관리처럼 embedding 대상 수를 줄이는 목적이다.
     """
     if CHUNK_MERGE_MIN_SIZE <= 0:
@@ -348,12 +1251,29 @@ def _merge_short_chunks(docs: list[Document]) -> list[Document]:
     merged: list[Document] = []
     buffer: list[Document] = []
     buffer_length = 0
+    short_threshold = CHUNK_MERGE_MIN_SIZE if CHUNK_MERGE_MIN_SIZE > 0 else max(1, CHUNK_SIZE // 3)
 
     for doc in docs:
+        if not doc.page_content.strip():
+            continue
+
         doc_length = len(doc.page_content)
         next_length = buffer_length + (2 if buffer else 0) + doc_length
+        header_changed = bool(buffer) and _header_signature(buffer[0]) != _header_signature(doc)
+        block_type_changed = bool(buffer) and _chunk_block_signature(buffer[-1]) != _chunk_block_signature(doc)
+        can_merge_text_prefix_into_table = _can_merge_text_prefix_into_table(
+            buffer,
+            doc,
+            next_length,
+            short_threshold,
+        )
 
-        if buffer and (buffer_length >= CHUNK_MERGE_MIN_SIZE or next_length > CHUNK_SIZE):
+        if buffer and (
+            header_changed
+            or (block_type_changed and not can_merge_text_prefix_into_table)
+            or buffer_length >= CHUNK_MERGE_MIN_SIZE
+            or (next_length > CHUNK_SIZE and not can_merge_text_prefix_into_table)
+        ):
             merged.append(_combine_chunk_documents(buffer))
             buffer = []
             buffer_length = 0
@@ -369,21 +1289,50 @@ def _merge_short_chunks(docs: list[Document]) -> list[Document]:
 
 def _apply_overlap(docs: list[Document]) -> list[Document]:
     """
-    이전 청크 마지막 CHUNK_OVERLAP 글자를 다음 청크 앞에 prepend하는 수동 overlap 후처리.
+    이전 청크의 마지막 완성 line들을 다음 청크 앞에 prepend하는 수동 overlap 후처리.
+    표가 청크 경계에서 끊기면 이전 청크의 활성 table header block도 함께 prepend한다.
+    표의 범례·주의 문구가 표 앞이나 뒤에 분리되어 있으면 해당 문구도 표 청크에 붙인다.
     RecursiveCharacterTextSplitter의 내장 overlap은 서로 다른 헤더 구간 간에
-    작동하지 않으므로 전체 청크 리스트에 수동으로 적용한다.
+    작동하지 않으므로 전체 청크 리스트에 수동으로 적용한다. 문자 중간을 자르지 않는다.
     """
-    if CHUNK_OVERLAP <= 0:
-        return docs
-
     overlapped: list[Document] = []
     for i, doc in enumerate(docs):
+        following_table_context = _select_following_table_context(docs, i)
+        content_text = doc.page_content
+        if following_table_context and following_table_context not in content_text:
+            content_text = f"{content_text}\n\n{following_table_context}"
+
         if i == 0:
+            if following_table_context:
+                overlapped.append(Document(
+                    page_content=_dedupe_adjacent_lines(content_text),
+                    metadata=doc.metadata
+                ))
+                continue
             overlapped.append(doc)
         else:
-            overlap_text = docs[i - 1].page_content[-CHUNK_OVERLAP:]
+            context_parts = []
+            overlap_text = ""
+            if CHUNK_OVERLAP > 0 and _should_apply_general_overlap(content_text):
+                overlap_text = _select_overlap_text(docs[i - 1].page_content, CHUNK_OVERLAP)
+            table_context_overlap = _select_table_context_overlap(docs[i - 1].page_content, content_text)
+            if table_context_overlap:
+                context_parts.append(table_context_overlap)
+
+            table_header_overlap = _select_table_header_overlap(docs[i - 1].page_content, content_text)
+            if table_header_overlap and not _starts_with_same_table_header_block(overlap_text, table_header_overlap):
+                context_parts.append(table_header_overlap)
+
+            if overlap_text and not table_context_overlap and not table_header_overlap:
+                context_parts.append(overlap_text)
+
+            if not context_parts and not following_table_context:
+                overlapped.append(doc)
+                continue
+            context_text = "\n\n".join(context_parts)
+            combined_text = f"{context_text}\n\n{content_text}" if context_text else content_text
             overlapped.append(Document(
-                page_content=overlap_text + "\n" + doc.page_content,
+                page_content=_dedupe_adjacent_lines(combined_text),
                 metadata=doc.metadata
             ))
     return overlapped
@@ -427,6 +1376,21 @@ def _seconds_from_nanos(value: int | None) -> float | None:
 def _format_seconds(value: float | None) -> str:
     """로그에 남길 duration 문자열을 만든다."""
     return f"{value:.2f}s" if value is not None else "n/a"
+
+
+def _format_int_list(values: list[int]) -> str:
+    """짧은 숫자 목록을 로그용 문자열로 만든다."""
+    return ",".join(str(value) for value in values) if values else "none"
+
+
+def _format_distance_list(values: list[float]) -> str:
+    """Chroma distance 목록을 로그용 문자열로 만든다."""
+    return ",".join(f"{value:.4f}" for value in values) if values else "none"
+
+
+def _format_decimal(value: float | None) -> str:
+    """소수 로그 값을 고정 폭 문자열로 만든다."""
+    return f"{value:.4f}" if value is not None else "n/a"
 
 
 def _embed_texts(texts: list[str]) -> tuple[list[list[float]], dict]:
@@ -480,41 +1444,87 @@ async def warm_up_embedding_model_on_startup() -> None:
     await asyncio.to_thread(_warm_up_embedding_model)
 
 
-def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float]:
+def _build_index_documents(
+    final_docs: list[Document],
+    filename: str,
+    document_id: int,
+    page_lookup: list[dict],
+) -> tuple[list[Document], float, int]:
+    """원본 청크와 검색용 table fact 문서를 함께 만든다."""
+    index_docs: list[Document] = []
+    page_match_elapsed = 0.0
+    table_fact_count = 0
+
+    for chunk_index, doc in enumerate(final_docs):
+        metadata_start = time.perf_counter()
+        raw_metadata = _build_chunk_metadata(doc, filename, document_id, chunk_index, page_lookup)
+        page_match_elapsed += time.perf_counter() - metadata_start
+        raw_metadata["chunk_role"] = "raw"
+
+        parent_chunk_id = f"{document_id}_{chunk_index}"
+        index_docs.append(Document(page_content=doc.page_content, metadata=raw_metadata))
+
+        for fact_index, fact in enumerate(_extract_table_facts(doc.page_content, raw_metadata)):
+            fact_metadata = dict(raw_metadata)
+            fact_metadata.update({
+                "chunk_role": "table_fact",
+                "parent_chunk_id": parent_chunk_id,
+                "parent_chunk_index": chunk_index,
+                "fact_index": fact_index,
+            })
+            index_docs.append(Document(page_content=fact, metadata=fact_metadata))
+            table_fact_count += 1
+
+    return index_docs, page_match_elapsed, table_fact_count
+
+
+def _build_index_document_id(document_id: int, metadata: dict, fallback_index: int) -> str:
+    """ChromaDB에 저장할 원본 청크와 파생 fact id를 만든다."""
+    if metadata.get("chunk_role") == "table_fact":
+        parent_index = metadata.get("parent_chunk_index", fallback_index)
+        fact_index = metadata.get("fact_index", 0)
+        return f"{document_id}_{parent_index}_fact_{fact_index}"
+    chunk_index = metadata.get("chunk_index", fallback_index)
+    return f"{document_id}_{chunk_index}"
+
+
+def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float, int, int]:
     """
     문서 청크를 batch embedding 후 ChromaDB에 batch 저장한다.
     청크별 HTTP 호출을 피하기 위해 EMBEDDING_BATCH_SIZE 단위로 묶어 처리한다.
     """
-    page_match_elapsed = 0.0
+    index_docs, page_match_elapsed, table_fact_count = _build_index_documents(
+        final_docs,
+        filename,
+        document_id,
+        page_lookup,
+    )
     embedding_elapsed = 0.0
     chroma_elapsed = 0.0
-    total_chunks = len(final_docs)
-    if total_chunks == 0:
-        return page_match_elapsed, embedding_elapsed, chroma_elapsed
+    total_entries = len(index_docs)
+    if total_entries == 0:
+        return page_match_elapsed, embedding_elapsed, chroma_elapsed, 0, 0
 
-    for start in range(0, len(final_docs), EMBEDDING_BATCH_SIZE):
+    for start in range(0, len(index_docs), EMBEDDING_BATCH_SIZE):
         batch_number = start // EMBEDDING_BATCH_SIZE + 1
-        total_batches = math.ceil(len(final_docs) / EMBEDDING_BATCH_SIZE)
-        batch_docs = final_docs[start:start + EMBEDDING_BATCH_SIZE]
-        batch_ids = [f"{document_id}_{start + offset}" for offset in range(len(batch_docs))]
-        batch_texts = [doc.page_content for doc in batch_docs]
-
-        metadata_start = time.perf_counter()
-        batch_metadatas = [
-            _build_chunk_metadata(doc, filename, document_id, start + offset, page_lookup)
+        total_batches = math.ceil(len(index_docs) / EMBEDDING_BATCH_SIZE)
+        batch_docs = index_docs[start:start + EMBEDDING_BATCH_SIZE]
+        batch_ids = [
+            _build_index_document_id(document_id, doc.metadata, start + offset)
             for offset, doc in enumerate(batch_docs)
         ]
-        page_match_elapsed += time.perf_counter() - metadata_start
+        batch_texts = [doc.page_content for doc in batch_docs]
+        batch_metadatas = [doc.metadata for doc in batch_docs]
 
         embedding_start = time.perf_counter()
         _set_document_progress(
             document_id,
-            30 + round((start / total_chunks) * 60),
+            30 + round((start / total_entries) * 60),
             "embedding",
-            f"임베딩 중입니다. ({start}/{total_chunks} chunks)"
+            f"임베딩 중입니다. ({start}/{total_entries} index entries)"
         )
         logger.info(
-            "[upload_embed] document_id=%s batch=%s/%s chunks=%s model=%s num_thread=%s",
+            "[upload_embed] document_id=%s batch=%s/%s entries=%s model=%s num_thread=%s",
             document_id,
             batch_number,
             total_batches,
@@ -548,15 +1558,15 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
             metadatas=batch_metadatas
         )
         chroma_elapsed += time.perf_counter() - chroma_start
-        completed_chunks = min(start + len(batch_docs), total_chunks)
+        completed_entries = min(start + len(batch_docs), total_entries)
         _set_document_progress(
             document_id,
-            30 + round((completed_chunks / total_chunks) * 60),
+            30 + round((completed_entries / total_entries) * 60),
             "embedding",
-            f"임베딩과 벡터 저장을 진행 중입니다. ({completed_chunks}/{total_chunks} chunks)"
+            f"임베딩과 벡터 저장을 진행 중입니다. ({completed_entries}/{total_entries} index entries)"
         )
 
-    return page_match_elapsed, embedding_elapsed, chroma_elapsed
+    return page_match_elapsed, embedding_elapsed, chroma_elapsed, total_entries, table_fact_count
 
 
 async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -> int:
@@ -577,30 +1587,37 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         page_lookup_elapsed = time.perf_counter() - page_lookup_start
         _set_document_progress(document_id, 22, "page_lookup", "페이지 정보를 분석하고 있습니다.")
 
-        # 전체 텍스트 병합 후 정규화
+        # 로더 Document 단위 정규화. PDF는 page metadata를 보존해 구조 단서로 활용한다.
         normalize_start = time.perf_counter()
-        full_text = "\n".join([doc.page_content for doc in raw_docs])
-        full_text = _normalize_text(full_text)
+        normalized_docs = _normalize_loaded_documents(raw_docs)
         normalize_elapsed = time.perf_counter() - normalize_start
         _set_document_progress(document_id, 25, "normalize", "문서 텍스트를 정리했습니다.")
 
-        # Two-Pass 청킹 + 수동 overlap 후처리
+        # Two-Pass 청킹 + 연속 중복 line 정리 + 수동 overlap 후처리
         split_start = time.perf_counter()
-        split_docs = _two_pass_split(full_text)
+        split_docs = _split_loaded_documents(normalized_docs)
         split_elapsed = time.perf_counter() - split_start
+        _log_chunk_stats(document_id, filename, "split", split_docs)
+
+        dedupe_start = time.perf_counter()
+        deduped_docs = _dedupe_chunk_documents(split_docs)
+        dedupe_elapsed = time.perf_counter() - dedupe_start
+        _log_chunk_stats(document_id, filename, "deduped", deduped_docs)
         _set_document_progress(document_id, 28, "chunking", "문서를 청크로 나누고 있습니다.")
 
         merge_start = time.perf_counter()
-        merged_docs = _merge_short_chunks(split_docs)
+        merged_docs = _merge_short_chunks(deduped_docs)
         merge_elapsed = time.perf_counter() - merge_start
+        _log_chunk_stats(document_id, filename, "merged", merged_docs)
 
         overlap_start = time.perf_counter()
         final_docs = _apply_overlap(merged_docs)
         overlap_elapsed = time.perf_counter() - overlap_start
+        _log_chunk_stats(document_id, filename, "final", final_docs)
         _set_document_progress(document_id, 30, "chunking", f"청킹을 완료했습니다. ({len(final_docs)} chunks)")
 
         # 임베딩 + ChromaDB 저장. 청크별 호출 대신 batch 단위로 처리해 HTTP 왕복과 저장 오버헤드를 줄인다.
-        page_match_elapsed, embedding_elapsed, chroma_elapsed = _store_document_chunks(
+        page_match_elapsed, embedding_elapsed, chroma_elapsed, index_entries, table_fact_entries = _store_document_chunks(
             final_docs,
             filename,
             document_id,
@@ -609,13 +1626,16 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
-            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s merged_chunks=%s chunks=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
             len(raw_docs),
             len(split_docs),
+            len(deduped_docs),
             len(merged_docs),
             len(final_docs),
+            index_entries,
+            table_fact_entries,
             CHUNK_SIZE,
             CHUNK_OVERLAP,
             CHUNK_MERGE_MIN_SIZE,
@@ -624,6 +1644,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             page_lookup_elapsed,
             normalize_elapsed,
             split_elapsed,
+            dedupe_elapsed,
             merge_elapsed,
             overlap_elapsed,
             page_match_elapsed,
@@ -698,14 +1719,416 @@ class QueryRequest(BaseModel):
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "주어진 문서를 참고하여 질문에 답변하세요."
+    "너는 인하공업전문대학 문서를 근거로 답변하는 안내 챗봇이다."
+)
+
+MANDATORY_RAG_PROMPT = (
+    "필수 답변 규칙:\n"
+    "1. 반드시 [검색 근거]에 있는 내용만 사용한다.\n"
+    "2. [검색 근거]에 없는 절차, 조건, 날짜, 숫자, 서류, 주의사항, 조언은 만들지 않는다.\n"
+    "3. 질문이 방법, 절차, 주의사항을 묻는 경우 [검색 근거]의 절차, 유의사항, 안내 문구를 우선 추출한다.\n"
+    "4. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다.\n"
+    "5. 표에서 숫자, 날짜, 인원, 점수, 기간을 답할 때는 질문의 행 이름과 열 이름에 직접 대응하는 값만 사용한다.\n"
+    "6. 여러 표가 검색되면 질문의 단어와 가장 많이 겹치는 표 제목, 행 이름, 열 이름을 가진 근거를 우선한다.\n"
+    "7. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
+    "8. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
+    "9. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
+    "10. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다."
 )
 
 
-def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) -> tuple[str | None, list]:
+QUERY_TERM_SYNONYMS = {
+    "방법": {"방법", "절차", "신청", "신청절차", "제출"},
+    "주의사항": {"주의사항", "유의사항", "유의", "주의"},
+    "전과": {"전과", "전과제도", "전과시행"},
+    "모집": {"모집", "모집인원", "모집정원", "정원"},
+    "인원": {"인원", "모집인원", "모집정원", "정원"},
+    "정원": {"정원", "모집인원", "모집정원", "인원"},
+    "공식": {"공식", "수식"},
+    "수식": {"수식", "공식"},
+    "상수": {"상수", "계수", "값"},
+    "계수": {"계수", "상수", "값"},
+    "값": {"값", "수치"},
+    "일정": {"일정", "기간", "날짜"},
+    "기간": {"기간", "일정", "날짜"},
+    "날짜": {"날짜", "일정", "기간"},
+}
+
+QUERY_GENERIC_TERMS = {
+    "방법", "절차", "신청", "주의사항", "유의사항", "모집", "인원", "정원",
+    "모집인원", "모집정원", "정보", "알려줘", "어디", "어떤", "뭐야", "무엇",
+}
+
+QUERY_TABLE_INTENT_TERMS = {
+    "값", "수치", "공식", "수식", "상수", "계수", "인원", "정원", "모집", "모집인원", "모집정원",
+    "점수", "가산점", "등급", "기간", "날짜", "일정", "서류", "자격", "학과", "과목", "항목",
+}
+
+TABLE_STATISTIC_TERMS = {"결과", "평균", "최저", "최고", "경쟁", "경쟁률", "예비", "순위", "등급"}
+
+
+def _format_page_label(meta: dict) -> str:
+    """검색 근거 context에 넣을 PDF page label을 만든다."""
+    start_page = meta.get("page_start") or meta.get("page")
+    end_page = meta.get("page_end")
+    if start_page is None:
+        return ""
+    if end_page is not None and str(end_page) != str(start_page):
+        return f"PDF {start_page}-{end_page}페이지"
+    return f"PDF {start_page}페이지"
+
+
+def _format_header_path(meta: dict) -> str:
+    """검색 근거 context에 넣을 Markdown header 경로를 만든다."""
+    headers = [
+        str(meta.get(header_key, "")).strip()
+        for header_key in ("Header 1", "Header 2", "Header 3", "Header 4", "Header 5", "Header 6")
+        if str(meta.get(header_key, "")).strip()
+    ]
+    return " > ".join(headers)
+
+
+def _format_chunk_label(meta: dict, chunk_id: str) -> str:
+    """검색 근거 context에 넣을 문서 내 청크 순번 label을 만든다."""
+    chunk_index = meta.get("chunk_index", _parse_chunk_index(chunk_id))
+    if chunk_index is None:
+        return ""
+    try:
+        return f"문서 내 {int(chunk_index) + 1}번째 청크"
+    except (TypeError, ValueError):
+        return f"문서 내 {chunk_index}번째 청크"
+
+
+def _normalize_query_token(token: str) -> str:
+    """조사와 어미가 붙은 질문 token을 검색 발췌용 핵심어로 정리한다."""
+    normalized = token.strip().lower()
+    for suffix in ("으로", "에서", "에게", "한테", "부터", "까지", "은", "는", "이", "가", "을", "를", "의", "도", "만", "와", "과"):
+        if len(normalized) > len(suffix) and normalized.endswith(suffix):
+            return normalized[: -len(suffix)]
+    return normalized
+
+
+def _extract_query_terms(question: str) -> set[str]:
+    """질문에서 검색 context 발췌에 사용할 핵심어와 간단한 동의어를 추출한다."""
+    terms: set[str] = set()
+    for token in re.findall(r"[0-9A-Za-z가-힣]+", question):
+        normalized = _normalize_query_token(token)
+        if len(normalized) < 2:
+            continue
+        terms.add(normalized)
+        terms.update(QUERY_TERM_SYNONYMS.get(normalized, set()))
+    return terms
+
+
+def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
+    """table_fact lexical 보강 검색에 사용할 주제어와 의도어를 나눈다."""
+    subject_terms: set[str] = set()
+    intent_terms: set[str] = set()
+
+    for token in re.findall(r"[0-9A-Za-z가-힣]+", question):
+        raw_token = token.strip().lower()
+        normalized = _normalize_query_token(raw_token)
+        if len(normalized) < 2 and normalized not in QUERY_TABLE_INTENT_TERMS:
+            continue
+
+        expanded_terms = {raw_token, normalized}
+        expanded_terms.update(QUERY_TERM_SYNONYMS.get(normalized, set()))
+        if expanded_terms & QUERY_TABLE_INTENT_TERMS:
+            intent_terms.update(term for term in expanded_terms if len(term) >= 2)
+        else:
+            subject_terms.update(term for term in expanded_terms if len(term) >= 3 and term not in QUERY_GENERIC_TERMS)
+
+    return subject_terms, intent_terms
+
+
+def _score_table_fact_for_question(fact: str, question: str) -> int:
+    """질문과 table_fact의 lexical 관련도를 계산한다."""
+    fact_lower = fact.lower()
+    subject_terms, intent_terms = _extract_lexical_query_terms(question)
+    if subject_terms and not any(term in fact_lower for term in subject_terms):
+        return 0
+
+    score = 0
+    score += sum(12 for term in subject_terms if term in fact_lower)
+    score += sum(4 for term in intent_terms if term in fact_lower)
+
+    asks_count_value = bool(intent_terms & {"모집", "인원", "정원", "모집인원", "모집정원"})
+    has_primary_count_column = bool(re.search(r"(모집\s*정원|모집정원|합계|총|전체|total)\s*=", fact_lower))
+    if asks_count_value and has_primary_count_column:
+        score += 20
+    if asks_count_value and any(term in fact_lower for term in TABLE_STATISTIC_TERMS):
+        score -= 10
+
+    return max(score, 0)
+
+
+def _lookup_lexical_table_facts(question: str, limit: int = 5) -> tuple[list[str], list[dict], list[str]]:
+    """표 질의에서 벡터 검색이 놓치는 table_fact를 얇은 lexical 보강으로 찾는다."""
+    subject_terms, intent_terms = _extract_lexical_query_terms(question)
+    if not subject_terms or not intent_terms:
+        return [], [], []
+
+    try:
+        results = collection.get(
+            where={"chunk_role": "table_fact"},
+            include=["documents", "metadatas"],
+        )
+    except Exception:
+        logger.exception("[query_table_fact_lexical] failed")
+        return [], [], []
+
+    candidates: list[tuple[int, str, dict, str]] = []
+    for chunk_id, document, metadata in zip(
+        results.get("ids", []),
+        results.get("documents", []),
+        results.get("metadatas", []),
+    ):
+        score = _score_table_fact_for_question(str(document), question)
+        if score <= 0:
+            continue
+        candidates.append((score, str(chunk_id), metadata or {}, str(document)))
+
+    candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+    selected = candidates[:limit]
+    logger.info(
+        "[query_table_fact_lexical] subject_terms=%s intent_terms=%s candidates=%s selected=%s",
+        ",".join(sorted(subject_terms)) or "none",
+        ",".join(sorted(intent_terms)) or "none",
+        len(candidates),
+        len(selected),
+    )
+    return (
+        [document for _, _, _, document in selected],
+        [metadata for _, _, metadata, _ in selected],
+        [chunk_id for _, chunk_id, _, _ in selected],
+    )
+
+
+def _is_table_value_question(question: str) -> bool:
+    """표 행/열 값을 묻는 질문인지 보수적으로 판단한다."""
+    subject_terms, intent_terms = _extract_lexical_query_terms(question)
+    return bool(subject_terms and intent_terms)
+
+
+def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[dict]) -> list[dict]:
+    """검색된 raw 청크 안의 표에서 질문과 맞는 fact를 런타임 metadata에 붙인다."""
+    if not _is_table_value_question(question):
+        return metadatas
+
+    updated_metadatas: list[dict] = []
+    for doc, meta in zip(docs, metadatas):
+        runtime_meta = dict(meta or {})
+        if runtime_meta.get("chunk_role") == "table_fact":
+            updated_metadatas.append(runtime_meta)
+            continue
+
+        scored_facts: list[tuple[int, str]] = []
+        for fact in _extract_table_facts(doc, runtime_meta):
+            score = _score_table_fact_for_question(fact, question)
+            if score > 0:
+                scored_facts.append((score, fact))
+
+        scored_facts.sort(key=lambda item: item[0], reverse=True)
+        for _, fact in scored_facts[:2]:
+            runtime_meta = _append_runtime_table_fact(runtime_meta, fact)
+        updated_metadatas.append(runtime_meta)
+
+    return updated_metadatas
+
+
+def _best_runtime_table_fact_score(meta: dict, question: str) -> int:
+    """runtime metadata에 붙은 table_fact 중 질문과 가장 관련 높은 점수를 반환한다."""
+    matched_table_facts = meta.get("matched_table_facts", "")
+    if isinstance(matched_table_facts, list):
+        facts = [str(fact) for fact in matched_table_facts]
+    elif matched_table_facts:
+        facts = [str(matched_table_facts)]
+    else:
+        facts = []
+    return max((_score_table_fact_for_question(fact, question) for fact in facts), default=0)
+
+
+def _prioritize_query_results(docs: list[str], metadatas: list[dict], ids: list[str], question: str) -> tuple[list[str], list[dict], list[str]]:
+    """표 값 질문에서는 질문과 가장 잘 맞는 table_fact context를 앞세운다."""
+    if not _is_table_value_question(question):
+        return docs, metadatas, ids
+
+    scores = [_best_runtime_table_fact_score(meta or {}, question) for meta in metadatas]
+    best_score = max(scores, default=0)
+    if best_score <= 0:
+        return docs, metadatas, ids
+
+    ranked: list[tuple[int, int, str, dict, str]] = []
+    for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids)):
+        meta = meta or {}
+        score = scores[index]
+        if best_score >= 40 and score < best_score - 15:
+            continue
+        if score == 0 and best_score >= 20:
+            continue
+        priority = -score
+        ranked.append((priority, index, doc, meta, chunk_id))
+
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    return (
+        [doc for _, _, doc, _, _ in ranked],
+        [meta for _, _, _, meta, _ in ranked],
+        [chunk_id for _, _, _, _, chunk_id in ranked],
+    )
+
+
+def _select_relevant_excerpt(text: str, query_terms: set[str], window: int = 2, max_lines: int = 18) -> str:
+    """청크 안에서 질문 핵심어와 가까운 실제 line들을 골라 LLM 주의 집중용 발췌를 만든다."""
+    if not query_terms:
+        return ""
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    selected_indexes: set[int] = set()
+
+    for index, line in enumerate(lines):
+        normalized_line = line.lower()
+        if not any(term in normalized_line for term in query_terms):
+            continue
+        start = max(0, index - window)
+        end = min(len(lines), index + window + 1)
+        selected_indexes.update(range(start, end))
+
+    if not selected_indexes:
+        return ""
+
+    selected_lines = [lines[index] for index in sorted(selected_indexes)]
+    return "\n".join(selected_lines[:max_lines])
+
+
+def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, query_terms: set[str]) -> str:
+    """LLM이 검색 근거 단위를 구분할 수 있도록 출처 metadata와 청크 본문을 함께 포맷한다."""
+    source_name = str(meta.get("source", "")).strip() or "알 수 없는 문서"
+    metadata_lines = [f"문서: {source_name}"]
+
+    page_label = _format_page_label(meta)
+    if page_label:
+        metadata_lines.append(f"위치: {page_label}")
+
+    chunk_label = _format_chunk_label(meta, chunk_id)
+    if chunk_label:
+        metadata_lines.append(f"청크: {chunk_label}")
+
+    header_path = _format_header_path(meta)
+    if header_path:
+        metadata_lines.append(f"섹션: {header_path}")
+
+    metadata = "\n".join(metadata_lines)
+    relevant_excerpt = _select_relevant_excerpt(doc, query_terms)
+    matched_table_facts = meta.get("matched_table_facts", "")
+    fact_text = ""
+    if isinstance(matched_table_facts, list):
+        fact_text = "\n".join(str(fact).strip() for fact in matched_table_facts if str(fact).strip())
+    elif matched_table_facts:
+        fact_text = str(matched_table_facts).strip()
+
+    table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
+    if relevant_excerpt:
+        return f"[출처 {index}]\n{metadata}{table_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
+    return f"[출처 {index}]\n{metadata}{table_fact_block}\n전체 내용:\n{doc.strip()}"
+
+
+def _build_context(docs: list[str], metadatas: list[dict], ids: list[str], question: str) -> str:
+    """검색된 청크들을 출처 단위 context로 변환한다."""
+    query_terms = _extract_query_terms(question)
+    blocks = []
+    for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids), start=1):
+        blocks.append(_format_context_block(index, doc, meta or {}, chunk_id, query_terms))
+    return "\n\n".join(blocks)
+
+
+def _load_parent_chunk(parent_chunk_id: str) -> tuple[str | None, dict | None]:
+    """table_fact 검색 결과가 가리키는 원본 청크를 ChromaDB에서 조회한다."""
+    if not parent_chunk_id:
+        return None, None
+
+    try:
+        result = collection.get(ids=[parent_chunk_id], include=["documents", "metadatas"])
+    except Exception:
+        logger.exception("[query_context] failed_to_load_parent_chunk parent_id=%s", parent_chunk_id)
+        return None, None
+
+    documents = result.get("documents") or []
+    metadatas = result.get("metadatas") or []
+    if not documents:
+        return None, None
+    return documents[0], (metadatas[0] if metadatas else {})
+
+
+def _append_runtime_table_fact(meta: dict, fact_text: str) -> dict:
+    """검색된 table_fact를 원본 청크 runtime metadata에 누적한다."""
+    if not fact_text.strip():
+        return meta
+
+    next_meta = dict(meta)
+    existing = next_meta.get("matched_table_facts")
+    if isinstance(existing, list):
+        if fact_text not in existing:
+            existing.append(fact_text)
+        next_meta["matched_table_facts"] = existing
+    elif existing:
+        if fact_text != existing:
+            next_meta["matched_table_facts"] = [str(existing), fact_text]
+    else:
+        next_meta["matched_table_facts"] = [fact_text]
+    return next_meta
+
+
+def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list[str]) -> tuple[list[str], list[dict], list[str]]:
+    """검색된 table_fact를 부모 원본 청크와 연결해 답변 context를 구성한다."""
+    expanded_docs: list[str] = []
+    expanded_metadatas: list[dict] = []
+    expanded_ids: list[str] = []
+    seen_indexes: dict[str, int] = {}
+
+    for doc, meta, chunk_id in zip(docs, metadatas, ids):
+        meta = meta or {}
+        if meta.get("chunk_role") != "table_fact":
+            result_id = str(chunk_id)
+            if result_id in seen_indexes:
+                continue
+            seen_indexes[result_id] = len(expanded_docs)
+            expanded_docs.append(doc)
+            expanded_metadatas.append(meta)
+            expanded_ids.append(result_id)
+            continue
+
+        parent_chunk_id = str(meta.get("parent_chunk_id", "")).strip()
+        parent_doc, parent_meta = _load_parent_chunk(parent_chunk_id)
+        if not parent_doc:
+            result_id = str(chunk_id)
+            seen_indexes[result_id] = len(expanded_docs)
+            expanded_docs.append(doc)
+            expanded_metadatas.append(meta)
+            expanded_ids.append(result_id)
+            continue
+
+        result_id = parent_chunk_id
+        fact_text = doc.strip()
+        if result_id in seen_indexes:
+            existing_index = seen_indexes[result_id]
+            expanded_metadatas[existing_index] = _append_runtime_table_fact(expanded_metadatas[existing_index], fact_text)
+            continue
+
+        runtime_meta = dict(parent_meta or {})
+        runtime_meta["matched_chunk_role"] = "table_fact"
+        runtime_meta = _append_runtime_table_fact(runtime_meta, fact_text)
+        seen_indexes[result_id] = len(expanded_docs)
+        expanded_docs.append(parent_doc)
+        expanded_metadatas.append(runtime_meta)
+        expanded_ids.append(result_id)
+
+    return expanded_docs, expanded_metadatas, expanded_ids
+
+
+def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) -> tuple[str | None, list, dict]:
     """
     질문 임베딩 → ChromaDB 검색 → 프롬프트 + 출처 조합.
-    문서가 없으면 (None, []) 반환. 호출자가 빈 응답 처리를 담당한다.
+    문서가 없으면 prompt를 None으로 반환한다. 호출자가 빈 응답 처리를 담당한다.
     """
     prepare_start = time.perf_counter()
     embedding_start = time.perf_counter()
@@ -717,9 +2140,10 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     ollama_prompt_eval = _seconds_from_nanos(embed_metadata.get("prompt_eval_duration"))
 
     chroma_start = time.perf_counter()
+    retrieval_limit = min(20, max(top_k, top_k * 3))
     results = collection.query(
         query_embeddings=[question_vector],
-        n_results=top_k,
+        n_results=retrieval_limit,
         include=["documents", "metadatas", "distances"]
     )
     chroma_elapsed = time.perf_counter() - chroma_start
@@ -727,39 +2151,76 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     docs = results["documents"][0] if results["documents"] else []
     metadatas = results["metadatas"][0] if results["metadatas"] else []
     ids = results["ids"][0] if results["ids"] else []
+    distance_values = [float(distance) for distance in results["distances"][0]] if results.get("distances") else []
+    raw_result_count = len(docs)
+    lexical_docs, lexical_metadatas, lexical_ids = _lookup_lexical_table_facts(question)
+    if lexical_docs:
+        docs = lexical_docs + docs
+        metadatas = lexical_metadatas + metadatas
+        ids = lexical_ids + ids
+    docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
+    metadatas = _attach_runtime_table_facts(question, docs, metadatas)
+    docs, metadatas, ids = _prioritize_query_results(docs, metadatas, ids, question)
+    docs = docs[:top_k]
+    metadatas = metadatas[:top_k]
+    ids = ids[:top_k]
 
     if not docs:
+        prepare_elapsed = time.perf_counter() - prepare_start
+        metrics = {
+            "prepare_elapsed": prepare_elapsed,
+            "embedding_elapsed": embedding_elapsed,
+            "chroma_elapsed": chroma_elapsed,
+            "context_build_elapsed": 0.0,
+            "context_chars": 0,
+            "prompt_chars": 0,
+            "source_chars": [],
+            "distances": distance_values,
+            "lexical_table_facts": len(lexical_docs),
+        }
         logger.info(
-            "[query_prepare] top_k=%s docs=0 embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs total=%.2fs",
+            "[query_prepare] top_k=%s retrieval_limit=%s docs=0 embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
             top_k,
+            retrieval_limit,
             embedding_elapsed,
             _format_seconds(ollama_total),
             _format_seconds(ollama_load),
             _format_seconds(ollama_prompt_eval),
             chroma_elapsed,
-            time.perf_counter() - prepare_start
+            metrics["context_build_elapsed"],
+            prepare_elapsed
         )
-        return None, []
+        return None, [], metrics
 
-    context = "\n\n".join(docs)
+    context_build_start = time.perf_counter()
+    context = _build_context(docs, metadatas, ids, question)
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
 
-    # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다
+    # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
     prompt = f"""{prompt_policy}
-문서에 없는 내용은 "관련 내용을 문서에서 찾을 수 없습니다."라고 답하세요.
 
-[문서]
+{MANDATORY_RAG_PROMPT}
+
+[검색 근거]
 {context}
 
-[질문]
+[사용자 질문]
 {question}
 
-[답변]
+[답변 직전 확인]
+- 답변은 [검색 근거]에 직접 적힌 내용만 사용한다.
+- [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다.
+- [검색 근거]의 '질문 관련 발췌'가 있으면 그 내용을 우선 사용한다.
+- 근거에 없는 일반적인 대학 행정 절차나 조언은 쓰지 않는다.
+
+[답변 작성]
 """
 
     # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 헤더 메타데이터 포함
     sources = []
+    source_chars = [len(doc) for doc in docs]
     for doc, meta, chunk_id in zip(docs, metadatas, ids):
+        meta = meta or {}
         source: dict = {
             "document_id": meta.get("document_id", ""),
             "source": meta.get("source", ""),
@@ -776,19 +2237,57 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
                 source[k] = v
         sources.append(source)
 
+    context_build_elapsed = time.perf_counter() - context_build_start
+    prepare_elapsed = time.perf_counter() - prepare_start
+    distance_min = min(distance_values) if distance_values else None
+    distance_max = max(distance_values) if distance_values else None
+    distance_avg = sum(distance_values) / len(distance_values) if distance_values else None
+    metrics = {
+        "prepare_elapsed": prepare_elapsed,
+        "embedding_elapsed": embedding_elapsed,
+        "chroma_elapsed": chroma_elapsed,
+        "context_build_elapsed": context_build_elapsed,
+        "context_chars": len(context),
+        "prompt_chars": len(prompt),
+        "source_chars": source_chars,
+        "distances": distance_values,
+        "distance_min": distance_min,
+        "distance_max": distance_max,
+        "distance_avg": distance_avg,
+        "lexical_table_facts": len(lexical_docs),
+    }
     logger.info(
-        "[query_prepare] top_k=%s docs=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs total=%.2fs",
+        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s lexical_table_facts=%s docs=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
         top_k,
+        retrieval_limit,
+        raw_result_count,
+        len(lexical_docs),
         len(docs),
-        len(prompt),
+        metrics["context_chars"],
+        _format_int_list(source_chars),
+        _format_distance_list(distance_values),
+        _format_decimal(distance_min),
+        _format_decimal(distance_max),
+        _format_decimal(distance_avg),
+    )
+    logger.info(
+        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s lexical_table_facts=%s docs=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+        top_k,
+        retrieval_limit,
+        raw_result_count,
+        len(lexical_docs),
+        len(docs),
+        metrics["context_chars"],
+        metrics["prompt_chars"],
         embedding_elapsed,
         _format_seconds(ollama_total),
         _format_seconds(ollama_load),
         _format_seconds(ollama_prompt_eval),
         chroma_elapsed,
-        time.perf_counter() - prepare_start
+        context_build_elapsed,
+        prepare_elapsed
     )
-    return prompt, sources
+    return prompt, sources, metrics
 
 
 def _parse_chunk_index(chunk_id: str) -> int | None:
@@ -840,13 +2339,16 @@ async def list_document_chunks(document_id: int):
 
         chunks: list[dict] = []
         for fallback_index, (chunk_id, content, metadata) in enumerate(zip(ids, documents, metadatas)):
+            metadata = metadata or {}
+            if metadata.get("chunk_role") == "table_fact":
+                continue
             suffix = str(chunk_id).rsplit("_", 1)[-1]
             chunk_index = int(suffix) if suffix.isdigit() else fallback_index
             chunks.append({
                 "id": chunk_id,
                 "chunk_index": chunk_index,
                 "content": content,
-                "metadata": metadata or {}
+                "metadata": metadata
             })
 
         return sorted(chunks, key=lambda chunk: chunk["chunk_index"])
@@ -866,7 +2368,7 @@ async def query_document(request: QueryRequest):
     # _prepare_query는 embed_query·Chroma 조회가 모두 동기 블로킹이다.
     # async 핸들러에서 직접 호출하면 이벤트 루프가 묶여 다른 요청이 대기하므로
     # asyncio.to_thread()로 별도 스레드에서 실행한다.
-    prompt, sources = await asyncio.to_thread(
+    prompt, sources, query_metrics = await asyncio.to_thread(
         _prepare_query,
         request.question,
         request.top_k,
@@ -881,10 +2383,12 @@ async def query_document(request: QueryRequest):
     answer = await llm.ainvoke(prompt)
     llm_elapsed = time.perf_counter() - llm_start
     logger.info(
-        "[query] top_k=%s sources=%s prompt_chars=%s llm=%.2fs total=%.2fs",
+        "[query] top_k=%s sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs llm=%.2fs total=%.2fs",
         request.top_k,
         len(sources),
-        len(prompt),
+        query_metrics["context_chars"],
+        query_metrics["prompt_chars"],
+        query_metrics["prepare_elapsed"],
         llm_elapsed,
         time.perf_counter() - query_start
     )
@@ -902,7 +2406,7 @@ async def query_stream(request: QueryRequest):
     클라이언트 연결 종료 시 asyncio.CancelledError로 자동 중단된다.
     """
     stream_start = time.perf_counter()
-    prompt, sources = await asyncio.to_thread(
+    prompt, sources, query_metrics = await asyncio.to_thread(
         _prepare_query,
         request.question,
         request.top_k,
@@ -925,26 +2429,36 @@ async def query_stream(request: QueryRequest):
 
     async def token_stream():
         first_token_elapsed = None
+        llm_first_token_elapsed = None
         chunk_count = 0
+        llm_start = time.perf_counter()
         try:
             async for chunk in llm.astream(prompt):
                 if chunk:
                     if first_token_elapsed is None:
                         first_token_elapsed = time.perf_counter() - stream_start
+                        llm_first_token_elapsed = time.perf_counter() - llm_start
                         logger.info(
-                            "[query_stream] first_token top_k=%s sources=%s prompt_chars=%s first_token=%.2fs",
+                            "[query_stream] first_token top_k=%s sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs llm_first_token=%.2fs first_token=%.2fs",
                             request.top_k,
                             len(sources),
-                            len(prompt),
+                            query_metrics["context_chars"],
+                            query_metrics["prompt_chars"],
+                            query_metrics["prepare_elapsed"],
+                            llm_first_token_elapsed,
                             first_token_elapsed
                         )
                     chunk_count += 1
                     yield f"data: {json.dumps({'token': chunk}, ensure_ascii=False)}\n\n"
             logger.info(
-                "[query_stream] done top_k=%s sources=%s chunks=%s first_token=%s total=%.2fs",
+                "[query_stream] done top_k=%s sources=%s chunks=%s context_chars=%s prompt_chars=%s prepare=%.2fs llm_first_token=%s first_token=%s total=%.2fs",
                 request.top_k,
                 len(sources),
                 chunk_count,
+                query_metrics["context_chars"],
+                query_metrics["prompt_chars"],
+                query_metrics["prepare_elapsed"],
+                f"{llm_first_token_elapsed:.2f}s" if llm_first_token_elapsed is not None else "none",
                 f"{first_token_elapsed:.2f}s" if first_token_elapsed is not None else "none",
                 time.perf_counter() - stream_start
             )

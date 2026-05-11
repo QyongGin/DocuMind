@@ -1,0 +1,42 @@
+[
+  {
+    "id": "school_rules_leave_of_absence",
+    "document_hint": "학칙 PDF",
+    "question": "휴학은 어떻게 신청할 수 있나요?",
+    "expected_evidence": "휴학 신청 절차, 허가 주체, 신청 조건을 설명하는 조항",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "school_rules_return_to_school",
+    "document_hint": "학칙 PDF",
+    "question": "복학 신청은 언제 해야 하나요?",
+    "expected_evidence": "복학 신청 기간 또는 복학 절차를 설명하는 조항",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "school_rules_expulsion",
+    "document_hint": "학칙 PDF",
+    "question": "제적 사유에는 어떤 것들이 있나요?",
+    "expected_evidence": "제적 사유를 열거하는 학칙 조항",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "admission_eligibility",
+    "document_hint": "모집요강 PDF",
+    "question": "지원 자격은 무엇인가요?",
+    "expected_evidence": "모집 전형별 지원 자격 항목",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "admission_schedule",
+    "document_hint": "모집요강 PDF",
+    "question": "전형 일정은 어떻게 되나요?",
+    "expected_evidence": "원서 접수, 면접, 합격자 발표 등 전형 일정 항목",
+    "top_k": 5,
+    "comparison_top_k": 3
+  }
+]

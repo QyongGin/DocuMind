@@ -30,7 +30,7 @@ fastapi:
 
 chat:
   # 기본 검색 청크 수. 값이 클수록 답변 근거는 늘지만 검색·프롬프트·LLM 생성 비용도 증가한다.
-  default-top-k: ${CHAT_DEFAULT_TOP_K:3}
+  default-top-k: ${CHAT_DEFAULT_TOP_K:5}
   # Spring MVC SseEmitter 타임아웃. 기본 5분, 더 긴 답변이 필요하면 환경변수 CHAT_SSE_EMITTER_TIMEOUT으로 조정
   sse-emitter-timeout: ${CHAT_SSE_EMITTER_TIMEOUT:5m}
   # SSE streamId 임시 저장 TTL. GET EventSource 연결이 지연되면 만료된다.
