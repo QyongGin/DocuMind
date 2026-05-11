@@ -845,6 +845,13 @@ def _build_matrix_facts(caption: str, row: list[str], column_labels: list[str]) 
     return facts
 
 
+def _is_recruitment_table(caption: str, column_labels: list[str]) -> bool:
+    """모집 인원·정원 성격의 표인지 확인한다."""
+    haystack = " ".join([caption] + column_labels)
+    normalized = re.sub(r"\s+", "", haystack)
+    return "모집인원" in normalized or "모집정원" in normalized
+
+
 def _should_generate_matrix_facts(column_labels: list[str]) -> bool:
     """등급/단계 열을 가진 매트릭스 표인지 보수적으로 판단한다."""
     matrix_keywords = ("매우 낮음", "낮음", "정상", "높음", "매우 높음", "극히 높음")
@@ -867,7 +874,8 @@ def _build_row_summary_fact(caption: str, row: list[str], column_labels: list[st
 
     if not pairs:
         return ""
-    return f"{caption}: {subject} 행 정보는 {'; '.join(pairs)}이다."
+    label = "모집 인원 정보" if _is_recruitment_table(caption, column_labels) else "행 정보"
+    return f"{caption}: {subject} {label}는 {'; '.join(pairs)}이다."
 
 
 def _truncate_table_fact(fact: str) -> str:
@@ -1721,10 +1729,11 @@ MANDATORY_RAG_PROMPT = (
     "1. 반드시 [검색 근거]에 있는 내용만 사용한다.\n"
     "2. [검색 근거]에 없는 절차, 조건, 날짜, 숫자, 서류, 주의사항, 조언은 만들지 않는다.\n"
     "3. 질문이 방법, 절차, 주의사항을 묻는 경우 [검색 근거]의 절차, 유의사항, 안내 문구를 우선 추출한다.\n"
-    "4. 숫자, 날짜, 모집 인원, 점수, 기간은 추측하지 말고 근거의 값을 그대로 쓴다.\n"
-    "5. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
-    "6. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
-    "7. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다."
+    "4. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다.\n"
+    "5. 숫자, 날짜, 모집 인원, 점수, 기간은 추측하지 말고 근거의 값을 그대로 쓴다.\n"
+    "6. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
+    "7. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
+    "8. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다."
 )
 
 
@@ -1732,6 +1741,9 @@ QUERY_TERM_SYNONYMS = {
     "방법": {"방법", "절차", "신청", "신청절차", "제출"},
     "주의사항": {"주의사항", "유의사항", "유의", "주의"},
     "전과": {"전과", "전과제도", "전과시행"},
+    "모집": {"모집", "모집인원", "모집정원", "정원"},
+    "인원": {"인원", "모집인원", "모집정원", "정원"},
+    "정원": {"정원", "모집인원", "모집정원", "인원"},
 }
 
 
@@ -1951,9 +1963,10 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     ollama_prompt_eval = _seconds_from_nanos(embed_metadata.get("prompt_eval_duration"))
 
     chroma_start = time.perf_counter()
+    retrieval_limit = min(20, max(top_k, top_k * 3))
     results = collection.query(
         query_embeddings=[question_vector],
-        n_results=top_k,
+        n_results=retrieval_limit,
         include=["documents", "metadatas", "distances"]
     )
     chroma_elapsed = time.perf_counter() - chroma_start
@@ -1964,6 +1977,9 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     distance_values = [float(distance) for distance in results["distances"][0]] if results.get("distances") else []
     raw_result_count = len(docs)
     docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
+    docs = docs[:top_k]
+    metadatas = metadatas[:top_k]
+    ids = ids[:top_k]
 
     if not docs:
         prepare_elapsed = time.perf_counter() - prepare_start
@@ -1978,8 +1994,9 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "distances": distance_values,
         }
         logger.info(
-            "[query_prepare] top_k=%s docs=0 embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+            "[query_prepare] top_k=%s retrieval_limit=%s docs=0 embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
             top_k,
+            retrieval_limit,
             embedding_elapsed,
             _format_seconds(ollama_total),
             _format_seconds(ollama_load),
@@ -2007,6 +2024,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
 
 [답변 직전 확인]
 - 답변은 [검색 근거]에 직접 적힌 내용만 사용한다.
+- [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다.
 - [검색 근거]의 '질문 관련 발췌'가 있으면 그 내용을 우선 사용한다.
 - 근거에 없는 일반적인 대학 행정 절차나 조언은 쓰지 않는다.
 
@@ -2053,8 +2071,9 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "distance_avg": distance_avg,
     }
     logger.info(
-        "[query_context] top_k=%s raw_docs=%s docs=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
+        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s docs=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
         top_k,
+        retrieval_limit,
         raw_result_count,
         len(docs),
         metrics["context_chars"],
@@ -2065,8 +2084,9 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         _format_decimal(distance_avg),
     )
     logger.info(
-        "[query_prepare] top_k=%s raw_docs=%s docs=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s docs=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
         top_k,
+        retrieval_limit,
         raw_result_count,
         len(docs),
         metrics["context_chars"],
