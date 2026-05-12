@@ -2107,12 +2107,48 @@ def _prioritize_query_results(docs: list[str], metadatas: list[dict], ids: list[
     )
 
 
+def _markdown_heading_level(line: str) -> int | None:
+    """Markdown heading line이면 heading level을 반환한다."""
+    match = re.match(r"^(#{1,6})\s+", line.strip())
+    if not match:
+        return None
+    return len(match.group(1))
+
+
+def _select_heading_section_excerpt(lines: list[str], query_terms: set[str], max_lines: int) -> list[str]:
+    """질문어가 heading에 걸리면 해당 heading 아래 section을 발췌한다."""
+    if not query_terms:
+        return []
+
+    for index, line in enumerate(lines):
+        line_level = _markdown_heading_level(line)
+        if line_level is None:
+            continue
+
+        normalized_line = line.lower()
+        if not any(term in normalized_line for term in query_terms):
+            continue
+
+        end = len(lines)
+        for next_index in range(index + 1, len(lines)):
+            next_level = _markdown_heading_level(lines[next_index])
+            if next_level is not None and next_level <= line_level:
+                end = next_index
+                break
+        return lines[index:end][:max_lines]
+    return []
+
+
 def _select_relevant_excerpt(text: str, query_terms: set[str], window: int = 2, max_lines: int = 18) -> str:
     """청크 안에서 질문 핵심어와 가까운 실제 line들을 골라 LLM 주의 집중용 발췌를 만든다."""
     if not query_terms:
         return ""
 
     lines = [line.strip() for line in text.splitlines() if line.strip()]
+    heading_excerpt = _select_heading_section_excerpt(lines, query_terms, max_lines)
+    if heading_excerpt:
+        return "\n".join(heading_excerpt)
+
     selected_indexes: set[int] = set()
 
     for index, line in enumerate(lines):
@@ -2361,7 +2397,9 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
 [답변 직전 확인]
 - 답변은 [검색 근거]에 직접 적힌 내용만 사용한다.
 - [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다.
-- [검색 근거]의 '질문 관련 발췌'가 있으면 그 내용을 우선 사용한다.
+- [검색 근거]의 '질문 관련 발췌'가 있으면 그 발췌에 직접 적힌 항목만 우선 사용한다.
+- 질문 단어와 일치하는 섹션 제목이 있으면 해당 섹션 아래 내용만 답변한다.
+- 같은 청크 안에 다른 섹션이 있어도 질문과 맞지 않으면 답변에 섞지 않는다.
 - 근거에 없는 일반적인 대학 행정 절차나 조언은 쓰지 않는다.
 
 [답변 작성]
