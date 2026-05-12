@@ -1,17 +1,17 @@
 [
   {
-    "id": "school_rules_leave_of_absence",
+    "id": "school_rules_holidays",
     "document_hint": "학칙 PDF",
-    "question": "휴학은 어떻게 신청할 수 있나요?",
-    "expected_evidence": "휴학 신청 절차, 허가 주체, 신청 조건을 설명하는 조항",
+    "question": "학칙에서 정한 휴업일은 언제인가요?",
+    "expected_evidence": "휴업일을 열거하는 학칙 조항",
     "top_k": 5,
     "comparison_top_k": 3
   },
   {
-    "id": "school_rules_return_to_school",
+    "id": "school_rules_admission_period",
     "document_hint": "학칙 PDF",
-    "question": "복학 신청은 언제 해야 하나요?",
-    "expected_evidence": "복학 신청 기간 또는 복학 절차를 설명하는 조항",
+    "question": "입학 시기는 언제로 정해져 있나요?",
+    "expected_evidence": "입학 시기 또는 학년도 시작을 설명하는 조항",
     "top_k": 5,
     "comparison_top_k": 3
   },
@@ -20,6 +20,118 @@
     "document_hint": "학칙 PDF",
     "question": "제적 사유에는 어떤 것들이 있나요?",
     "expected_evidence": "제적 사유를 열거하는 학칙 조항",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "school_rules_credits",
+    "document_hint": "학칙 PDF",
+    "question": "졸업에 필요한 학점 기준은 어떻게 되나요?",
+    "expected_evidence": "졸업 학점 또는 과정 이수 학점을 설명하는 조항",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "school_rules_bachelor_degree_major",
+    "document_hint": "학칙 PDF",
+    "question": "학사학위 전공심화과정 설치 학과와 입학정원은 어떻게 되나요?",
+    "expected_evidence": "학사학위 전공심화과정 설치 학과와 입학정원 표",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "leave_absence_application_method",
+    "document_hint": "휴학-복학 PDF",
+    "question": "휴학은 어떻게 신청할 수 있나요?",
+    "expected_evidence": "휴학 신청 방법, 신청 위치, 처리 절차를 설명하는 항목",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "leave_absence_required_documents",
+    "document_hint": "휴학-복학 PDF",
+    "question": "휴학 신청할 때 필요한 서류는 무엇인가요?",
+    "expected_evidence": "휴학 신청 제출서류 또는 증빙서류 항목",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "military_leave_absence",
+    "document_hint": "휴학-복학 PDF",
+    "question": "입대휴학은 어떻게 신청하고 어떤 서류가 필요한가요?",
+    "expected_evidence": "입대휴학 신청 방법과 입영통지서 등 제출서류 항목",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "return_to_school_application_method",
+    "document_hint": "휴학-복학 PDF",
+    "question": "복학 신청 방법은 무엇인가요?",
+    "expected_evidence": "복학 신청 절차, 신청 시기, 신청 위치를 설명하는 항목",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "leave_return_cautions",
+    "document_hint": "휴학-복학 PDF",
+    "question": "휴학과 복학 신청 시 주의사항은 무엇인가요?",
+    "expected_evidence": "휴학·복학 신청 유의사항 또는 주의사항 항목",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "admission_computer_quota_total",
+    "document_hint": "모집요강 PDF",
+    "question": "컴퓨터정보공학과 모집정원은 몇 명인가요?",
+    "expected_evidence": "정원내 전형 모집인원 표의 컴퓨터정보공학과 행과 모집정원 열",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "admission_computer_susi_general_high",
+    "document_hint": "모집요강 PDF",
+    "question": "컴퓨터정보공학과 수시1차 일반고 모집 인원은 몇 명인가요?",
+    "expected_evidence": "정원내 전형 모집인원 표의 컴퓨터정보공학과 행과 수시1차 일반고 열",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "admission_computer_regular_general",
+    "document_hint": "모집요강 PDF",
+    "question": "컴퓨터정보공학과 정시 일반전형 모집 인원은 몇 명인가요?",
+    "expected_evidence": "정원내 전형 모집인원 표의 컴퓨터정보공학과 행과 정시 일반 열",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "admission_bachelor_degree_major_symbols",
+    "document_hint": "모집요강 PDF",
+    "question": "전공심화 과정이 개설된 학과는 어디인가요?",
+    "expected_evidence": "모집인원 표의 학과명 기호와 전공심화 범례 설명",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "admission_interview_departments",
+    "document_hint": "모집요강 PDF",
+    "question": "면접을 보는 학과는 어디인가요?",
+    "expected_evidence": "면접 실시 학과 또는 전형방법 표",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "admission_required_documents",
+    "document_hint": "모집요강 PDF",
+    "question": "지원자가 제출해야 하는 서류는 무엇인가요?",
+    "expected_evidence": "지원자 제출서류 또는 전형별 제출서류 표",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "admission_campus_facilities",
+    "document_hint": "모집요강 PDF",
+    "question": "편의시설은 뭐가 있어?",
+    "expected_evidence": "기타 편의시설 항목의 학생식당, 분식점, 편의점, 카페, 복사실 이용 정보",
     "top_k": 5,
     "comparison_top_k": 3
   },
@@ -36,6 +148,54 @@
     "document_hint": "모집요강 PDF",
     "question": "전형 일정은 어떻게 되나요?",
     "expected_evidence": "원서 접수, 면접, 합격자 발표 등 전형 일정 항목",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "lecture_cocomo_basic_formula",
+    "document_hint": "COCOMO 강의자료 PDF",
+    "question": "COCOMO 단순형 공식은 무엇인가요?",
+    "expected_evidence": "COCOMO 프로젝트 유형별 PM 공식 표의 단순형 행",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "lecture_cocomo_effort_multiplier",
+    "document_hint": "COCOMO 강의자료 PDF",
+    "question": "요구되는 신뢰도가 높음일 때 노력 승수 값은 얼마인가요?",
+    "expected_evidence": "COCOMO 노력 승수 매트릭스의 요구되는 신뢰도 행과 높음 열",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "lecture_cocomo_term_ksloc",
+    "document_hint": "COCOMO 강의자료 PDF",
+    "question": "COCOMO에서 KDSI 또는 KLOC는 무엇을 의미하나요?",
+    "expected_evidence": "COCOMO 규모 단위 또는 KDSI/KLOC 용어 설명",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "hallucination_admission_cutoff",
+    "document_hint": "모집요강 PDF",
+    "question": "컴퓨터정보공학과 올해 합격 등급컷을 알려주세요.",
+    "expected_evidence": "문서에 올해 합격 등급컷이 없으면 없다고 답해야 함",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "hallucination_application_fee",
+    "document_hint": "모집요강 PDF",
+    "question": "원서 접수 비용은 얼마인가요?",
+    "expected_evidence": "문서에 비용 정보가 없으면 없다고 답해야 하며 임의 금액을 만들면 안 됨",
+    "top_k": 5,
+    "comparison_top_k": 3
+  },
+  {
+    "id": "hallucination_interview_questions",
+    "document_hint": "모집요강 PDF",
+    "question": "면접 예상 질문을 알려주세요.",
+    "expected_evidence": "문서에 면접 예상 질문이 없으면 없다고 답해야 함",
     "top_k": 5,
     "comparison_top_k": 3
   }

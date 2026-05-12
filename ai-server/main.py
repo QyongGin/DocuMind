@@ -75,6 +75,7 @@ UPLOAD_READ_CHUNK_BYTES = _env_int("UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)
 DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 5)
 TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
 TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
+EMBED_TABLE_RAW_CHUNKS = _env_bool("EMBED_TABLE_RAW_CHUNKS", True)
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
     logger.warning(
@@ -112,7 +113,7 @@ _progress_lock = Lock()
 _document_progress: dict[int, dict] = {}
 
 logger.info(
-    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s chroma_host=%s chroma_port=%s",
+    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s embed_table_raw_chunks=%s chroma_host=%s chroma_port=%s",
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
     OLLAMA_EMBEDDING_MODEL,
@@ -126,6 +127,7 @@ logger.info(
     CHUNK_MERGE_MIN_SIZE,
     EMBEDDING_BATCH_SIZE,
     DEFAULT_TOP_K,
+    EMBED_TABLE_RAW_CHUNKS,
     CHROMA_HOST or "persistent",
     CHROMA_PORT
 )
@@ -858,9 +860,22 @@ def _should_generate_matrix_facts(column_labels: list[str]) -> bool:
     return False
 
 
-def _build_row_summary_fact(caption: str, row: list[str], column_labels: list[str]) -> str:
-    """표의 한 행을 key=value 형태의 검색 가능한 문장으로 만든다."""
+def _build_row_legend_pairs(row: list[str], legends: dict[str, str]) -> list[str]:
+    """행 안의 범례 기호와 표 주변 범례 설명을 key=value 형태로 만든다."""
+    if not legends:
+        return []
+
+    row_text = " ".join(cell for cell in row if cell)
     pairs: list[str] = []
+    for symbol, description in legends.items():
+        if symbol in row_text:
+            pairs.append(f"{symbol} 표시={description}")
+    return pairs
+
+
+def _build_row_summary_fact(caption: str, row: list[str], column_labels: list[str], legends: dict[str, str] | None = None) -> str:
+    """표의 한 행을 key=value 형태의 검색 가능한 문장으로 만든다."""
+    pairs: list[str] = _build_row_legend_pairs(row, legends or {})
     subject, _ = _select_row_subject(row, column_labels)
     subject = _clean_table_subject(subject)
     for index, value in enumerate(row):
@@ -913,9 +928,7 @@ def _extract_table_facts(text: str, metadata: dict) -> list[str]:
         column_labels = _compose_column_labels(header_rows, subheader_row)
         generate_matrix_facts = _should_generate_matrix_facts(column_labels)
         previous_values: dict[int, str] = {}
-        symbol_facts: list[str] = []
-        row_summary_facts: list[str] = []
-        matrix_facts: list[str] = []
+        table_facts: list[str] = []
 
         for row in data_rows:
             if not any(not _is_empty_table_cell(cell) for cell in row):
@@ -928,16 +941,16 @@ def _extract_table_facts(text: str, metadata: dict) -> list[str]:
                 elif not _is_empty_table_cell(filled_row[index]):
                     previous_values[index] = filled_row[index]
 
-            symbol_facts.extend(_build_symbol_facts(caption, filled_row, column_labels, legends))
-
-            row_summary = _build_row_summary_fact(caption, filled_row, column_labels)
+            row_summary = _build_row_summary_fact(caption, filled_row, column_labels, legends)
             if row_summary:
-                row_summary_facts.append(row_summary)
+                table_facts.append(row_summary)
+            else:
+                table_facts.extend(_build_symbol_facts(caption, filled_row, column_labels, legends))
 
             if generate_matrix_facts:
-                matrix_facts.extend(_build_matrix_facts(caption, filled_row, column_labels))
+                table_facts.extend(_build_matrix_facts(caption, filled_row, column_labels))
 
-        for fact in symbol_facts + row_summary_facts + matrix_facts:
+        for fact in table_facts:
             append_fact(fact)
 
     return facts
@@ -1462,9 +1475,12 @@ def _build_index_documents(
         raw_metadata["chunk_role"] = "raw"
 
         parent_chunk_id = f"{document_id}_{chunk_index}"
-        index_docs.append(Document(page_content=doc.page_content, metadata=raw_metadata))
+        table_facts = _extract_table_facts(doc.page_content, raw_metadata)
+        should_embed_raw_chunk = EMBED_TABLE_RAW_CHUNKS or not table_facts
+        if should_embed_raw_chunk:
+            index_docs.append(Document(page_content=doc.page_content, metadata=raw_metadata))
 
-        for fact_index, fact in enumerate(_extract_table_facts(doc.page_content, raw_metadata)):
+        for fact_index, fact in enumerate(table_facts):
             fact_metadata = dict(raw_metadata)
             fact_metadata.update({
                 "chunk_role": "table_fact",
@@ -1472,6 +1488,8 @@ def _build_index_documents(
                 "parent_chunk_index": chunk_index,
                 "fact_index": fact_index,
             })
+            if not should_embed_raw_chunk:
+                fact_metadata["parent_content"] = doc.page_content
             index_docs.append(Document(page_content=fact, metadata=fact_metadata))
             table_fact_count += 1
 
@@ -1626,7 +1644,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
-            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
             len(raw_docs),
@@ -1639,6 +1657,8 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             CHUNK_SIZE,
             CHUNK_OVERLAP,
             CHUNK_MERGE_MIN_SIZE,
+            TABLE_FACT_MAX_PER_CHUNK,
+            EMBED_TABLE_RAW_CHUNKS,
             EMBEDDING_BATCH_SIZE,
             parse_elapsed,
             page_lookup_elapsed,
@@ -1765,6 +1785,8 @@ QUERY_TABLE_INTENT_TERMS = {
 }
 
 TABLE_STATISTIC_TERMS = {"결과", "평균", "최저", "최고", "경쟁", "경쟁률", "예비", "순위", "등급"}
+BM25_K1 = 1.5
+BM25_B = 0.75
 
 
 def _format_page_label(meta: dict) -> str:
@@ -1901,6 +1923,114 @@ def _lookup_lexical_table_facts(question: str, limit: int = 5) -> tuple[list[str
         [document for _, _, _, document in selected],
         [metadata for _, _, metadata, _ in selected],
         [chunk_id for _, chunk_id, _, _ in selected],
+    )
+
+
+def _tokenize_sparse_search(text: str) -> list[str]:
+    """BM25 검색에 사용할 token을 만든다."""
+    tokens: list[str] = []
+    for raw_token in re.findall(r"[0-9A-Za-z가-힣]+", text.lower()):
+        normalized = _normalize_query_token(raw_token)
+        for token in {raw_token, normalized}:
+            if len(token) < 2:
+                continue
+            tokens.append(token)
+    return tokens
+
+
+def _build_sparse_search_text(document: str, metadata: dict) -> str:
+    """raw chunk 본문과 header 경로를 BM25 scoring 대상 text로 합친다."""
+    header_path = _format_header_path(metadata)
+    if not header_path:
+        return document
+    return f"{header_path}\n{header_path}\n{document}"
+
+
+def _calculate_bm25_scores(query_tokens: list[str], corpus_tokens: list[list[str]]) -> list[float]:
+    """raw chunk corpus에 대해 BM25 sparse retrieval score를 계산한다."""
+    if not query_tokens or not corpus_tokens:
+        return []
+
+    document_count = len(corpus_tokens)
+    document_frequencies: dict[str, int] = {}
+    term_frequencies: list[dict[str, int]] = []
+    document_lengths: list[int] = []
+
+    for tokens in corpus_tokens:
+        frequencies: dict[str, int] = {}
+        for token in tokens:
+            frequencies[token] = frequencies.get(token, 0) + 1
+        term_frequencies.append(frequencies)
+        document_lengths.append(len(tokens))
+        for token in frequencies:
+            document_frequencies[token] = document_frequencies.get(token, 0) + 1
+
+    average_length = sum(document_lengths) / document_count if document_count else 0.0
+    if average_length <= 0:
+        return [0.0 for _ in corpus_tokens]
+
+    scores: list[float] = []
+    for frequencies, document_length in zip(term_frequencies, document_lengths):
+        score = 0.0
+        for token in query_tokens:
+            term_frequency = frequencies.get(token, 0)
+            if term_frequency <= 0:
+                continue
+
+            frequency = document_frequencies.get(token, 0)
+            inverse_document_frequency = math.log(1 + (document_count - frequency + 0.5) / (frequency + 0.5))
+            denominator = term_frequency + BM25_K1 * (1 - BM25_B + BM25_B * document_length / average_length)
+            score += inverse_document_frequency * (term_frequency * (BM25_K1 + 1) / denominator)
+        scores.append(score)
+    return scores
+
+
+def _lookup_bm25_raw_chunks(question: str, limit: int = 5) -> tuple[list[str], list[dict], list[str]]:
+    """BM25 sparse retrieval로 vector search가 놓친 raw chunk 후보를 보강한다."""
+    query_tokens = _tokenize_sparse_search(question)
+    if not query_tokens:
+        return [], [], []
+
+    try:
+        results = collection.get(include=["documents", "metadatas"])
+    except Exception:
+        logger.exception("[query_bm25] failed")
+        return [], [], []
+
+    records: list[tuple[str, str, dict]] = []
+    corpus_tokens: list[list[str]] = []
+    for chunk_id, document, metadata in zip(
+        results.get("ids", []),
+        results.get("documents", []),
+        results.get("metadatas", []),
+    ):
+        metadata = metadata or {}
+        if metadata.get("chunk_role") == "table_fact":
+            continue
+
+        document_text = str(document)
+        records.append((str(chunk_id), document_text, metadata))
+        corpus_tokens.append(_tokenize_sparse_search(_build_sparse_search_text(document_text, metadata)))
+
+    scores = _calculate_bm25_scores(query_tokens, corpus_tokens)
+    candidates = [
+        (score, position, *record)
+        for position, (score, record) in enumerate(zip(scores, records))
+        if score > 0
+    ]
+    candidates.sort(key=lambda candidate: (-candidate[0], candidate[1]))
+    selected = candidates[:limit]
+    logger.info(
+        "[query_bm25] query_tokens=%s candidates=%s selected=%s top_score=%s",
+        ",".join(query_tokens) or "none",
+        len(candidates),
+        len(selected),
+        _format_decimal(selected[0][0] if selected else None),
+    )
+    return (
+        [document for _, _, _, document, _ in selected],
+        [metadata for _, _, _, _, metadata in selected],
+        [chunk_id for _, _, chunk_id, _, _ in selected],
     )
 
 
@@ -2059,6 +2189,18 @@ def _load_parent_chunk(parent_chunk_id: str) -> tuple[str | None, dict | None]:
     return documents[0], (metadatas[0] if metadatas else {})
 
 
+def _build_parent_metadata_from_fact(fact_meta: dict) -> dict:
+    """table_fact metadata에서 사용자에게 노출할 부모 raw 청크 metadata를 복원한다."""
+    parent_meta = dict(fact_meta or {})
+    parent_meta["chunk_role"] = "raw"
+    if "parent_chunk_index" in parent_meta:
+        parent_meta["chunk_index"] = parent_meta["parent_chunk_index"]
+
+    for key in ("parent_content", "parent_chunk_id", "parent_chunk_index", "fact_index"):
+        parent_meta.pop(key, None)
+    return parent_meta
+
+
 def _append_runtime_table_fact(meta: dict, fact_text: str) -> dict:
     """검색된 table_fact를 원본 청크 runtime metadata에 누적한다."""
     if not fact_text.strip():
@@ -2099,6 +2241,9 @@ def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list
 
         parent_chunk_id = str(meta.get("parent_chunk_id", "")).strip()
         parent_doc, parent_meta = _load_parent_chunk(parent_chunk_id)
+        if not parent_doc and meta.get("parent_content"):
+            parent_doc = str(meta.get("parent_content", ""))
+            parent_meta = _build_parent_metadata_from_fact(meta)
         if not parent_doc:
             result_id = str(chunk_id)
             seen_indexes[result_id] = len(expanded_docs)
@@ -2153,7 +2298,12 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     ids = results["ids"][0] if results["ids"] else []
     distance_values = [float(distance) for distance in results["distances"][0]] if results.get("distances") else []
     raw_result_count = len(docs)
+    bm25_docs, bm25_metadatas, bm25_ids = _lookup_bm25_raw_chunks(question, limit=top_k)
     lexical_docs, lexical_metadatas, lexical_ids = _lookup_lexical_table_facts(question)
+    if bm25_docs:
+        docs = bm25_docs + docs
+        metadatas = bm25_metadatas + metadatas
+        ids = bm25_ids + ids
     if lexical_docs:
         docs = lexical_docs + docs
         metadatas = lexical_metadatas + metadatas
@@ -2176,6 +2326,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "prompt_chars": 0,
             "source_chars": [],
             "distances": distance_values,
+            "bm25_raw_chunks": len(bm25_docs),
             "lexical_table_facts": len(lexical_docs),
         }
         logger.info(
@@ -2254,13 +2405,15 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "distance_min": distance_min,
         "distance_max": distance_max,
         "distance_avg": distance_avg,
+        "bm25_raw_chunks": len(bm25_docs),
         "lexical_table_facts": len(lexical_docs),
     }
     logger.info(
-        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s lexical_table_facts=%s docs=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
+        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
         top_k,
         retrieval_limit,
         raw_result_count,
+        len(bm25_docs),
         len(lexical_docs),
         len(docs),
         metrics["context_chars"],
@@ -2271,10 +2424,11 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         _format_decimal(distance_avg),
     )
     logger.info(
-        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s lexical_table_facts=%s docs=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
         top_k,
         retrieval_limit,
         raw_result_count,
+        len(bm25_docs),
         len(lexical_docs),
         len(docs),
         metrics["context_chars"],
@@ -2337,21 +2491,34 @@ async def list_document_chunks(document_id: int):
         documents = results.get("documents", [])
         metadatas = results.get("metadatas", [])
 
-        chunks: list[dict] = []
+        chunks_by_index: dict[int, dict] = {}
         for fallback_index, (chunk_id, content, metadata) in enumerate(zip(ids, documents, metadatas)):
             metadata = metadata or {}
             if metadata.get("chunk_role") == "table_fact":
+                parent_content = str(metadata.get("parent_content", "")).strip()
+                if not parent_content:
+                    continue
+                parent_index = metadata.get("parent_chunk_index", fallback_index)
+                chunk_index = int(parent_index) if str(parent_index).isdigit() else fallback_index
+                if chunk_index in chunks_by_index:
+                    continue
+                chunks_by_index[chunk_index] = {
+                    "id": metadata.get("parent_chunk_id", chunk_id),
+                    "chunk_index": chunk_index,
+                    "content": parent_content,
+                    "metadata": _build_parent_metadata_from_fact(metadata)
+                }
                 continue
             suffix = str(chunk_id).rsplit("_", 1)[-1]
             chunk_index = int(suffix) if suffix.isdigit() else fallback_index
-            chunks.append({
+            chunks_by_index[chunk_index] = {
                 "id": chunk_id,
                 "chunk_index": chunk_index,
                 "content": content,
                 "metadata": metadata
-            })
+            }
 
-        return sorted(chunks, key=lambda chunk: chunk["chunk_index"])
+        return [chunks_by_index[index] for index in sorted(chunks_by_index)]
 
     chunks = await asyncio.to_thread(_get_from_chroma)
     return {"document_id": document_id, "chunks": chunks}
