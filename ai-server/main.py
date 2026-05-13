@@ -1414,6 +1414,48 @@ def _format_decimal(value: float | None) -> str:
     return f"{value:.4f}" if value is not None else "n/a"
 
 
+def _round_float(value: float | int | None, digits: int = 6) -> float | None:
+    """trace 응답에 넣을 실수 값을 JSON 친화적인 고정 소수로 정리한다."""
+    if value is None:
+        return None
+    return round(float(value), digits)
+
+
+def _vector_preview(vector: list[float] | None, size: int) -> list[float]:
+    """긴 임베딩 벡터에서 앞부분 일부만 trace 응답에 노출한다."""
+    if vector is None or size <= 0:
+        return []
+    return [_round_float(value) for value in list(vector)[:size]]
+
+
+def _vector_norm(vector: list[float]) -> float:
+    """질의 벡터의 L2 norm을 계산해 벡터가 실제 생성됐는지 확인할 수 있게 한다."""
+    return math.sqrt(sum(float(value) * float(value) for value in vector))
+
+
+def _collection_distance_metric() -> str:
+    """Chroma collection에 명시된 distance metric을 반환한다."""
+    metadata = getattr(collection, "metadata", None) or {}
+    if isinstance(metadata, dict):
+        return str(metadata.get("hnsw:space") or "unspecified")
+    return "unspecified"
+
+
+def _similarity_if_cosine(distance: float | None, metric: str) -> float | None:
+    """collection이 cosine metric일 때만 distance를 similarity로 변환한다."""
+    if distance is None or metric != "cosine":
+        return None
+    return _round_float(1 - float(distance))
+
+
+def _preview_text(text: str, limit: int = 360) -> str:
+    """trace 후보 목록에서 본문을 너무 길게 보내지 않도록 미리보기로 줄인다."""
+    stripped = str(text).strip()
+    if len(stripped) <= limit:
+        return stripped
+    return f"{stripped[:limit].rstrip()}..."
+
+
 def _embed_texts(texts: list[str]) -> tuple[list[list[float]], dict]:
     """
     Ollama embed API로 batch embedding을 수행하고 duration metadata를 함께 반환한다.
@@ -1746,6 +1788,15 @@ class QueryRequest(BaseModel):
     system_prompt: str | None = None  # Spring Boot 관리자 프롬프트 설정. 미전달 시 기본값 사용
 
 
+class RagTraceRequest(BaseModel):
+    """RAG 검색 파이프라인을 답변 생성 없이 추적하기 위한 디버그 요청이다."""
+    question: str
+    top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=20)
+    system_prompt: str | None = None
+    include_vectors: bool = False
+    vector_preview_size: int = Field(default=8, ge=0, le=32)
+
+
 DEFAULT_SYSTEM_PROMPT = (
     "너는 인하공업전문대학 문서를 근거로 답변하는 안내 챗봇이다."
 )
@@ -1962,11 +2013,11 @@ def _score_table_fact_for_question(fact: str, question: str) -> int:
     return max(score, 0)
 
 
-def _lookup_lexical_table_facts(question: str, limit: int = 5) -> tuple[list[str], list[dict], list[str]]:
-    """표 질의에서 벡터 검색이 놓치는 table_fact를 얇은 lexical 보강으로 찾는다."""
+def _lookup_lexical_table_fact_candidates(question: str, limit: int = 5) -> list[dict]:
+    """표 질의에서 벡터 검색이 놓치는 table_fact 후보를 score와 함께 찾는다."""
     subject_terms, intent_terms = _extract_lexical_query_terms(question)
     if not subject_terms or not intent_terms:
-        return [], [], []
+        return []
 
     try:
         results = collection.get(
@@ -1975,7 +2026,7 @@ def _lookup_lexical_table_facts(question: str, limit: int = 5) -> tuple[list[str
         )
     except Exception:
         logger.exception("[query_table_fact_lexical] failed")
-        return [], [], []
+        return []
 
     candidates: list[tuple[int, str, dict, str]] = []
     for chunk_id, document, metadata in zip(
@@ -1997,10 +2048,25 @@ def _lookup_lexical_table_facts(question: str, limit: int = 5) -> tuple[list[str
         len(candidates),
         len(selected),
     )
+    return [
+        {
+            "rank": index + 1,
+            "table_fact_score": score,
+            "chunk_id": chunk_id,
+            "document": document,
+            "metadata": metadata,
+        }
+        for index, (score, chunk_id, metadata, document) in enumerate(selected)
+    ]
+
+
+def _lookup_lexical_table_facts(question: str, limit: int = 5) -> tuple[list[str], list[dict], list[str]]:
+    """표 질의에서 벡터 검색이 놓치는 table_fact를 얇은 lexical 보강으로 찾는다."""
+    selected = _lookup_lexical_table_fact_candidates(question, limit)
     return (
-        [document for _, _, _, document in selected],
-        [metadata for _, _, metadata, _ in selected],
-        [chunk_id for _, chunk_id, _, _ in selected],
+        [candidate["document"] for candidate in selected],
+        [candidate["metadata"] for candidate in selected],
+        [candidate["chunk_id"] for candidate in selected],
     )
 
 
@@ -2157,17 +2223,17 @@ def _calculate_bm25_scores(query_tokens: list[str], corpus_tokens: list[list[str
     return scores
 
 
-def _lookup_bm25_raw_chunks(analysis: QueryAnalysis, limit: int = 5) -> tuple[list[str], list[dict], list[str]]:
-    """BM25 sparse retrieval로 vector search가 놓친 raw chunk 후보를 보강한다."""
+def _lookup_bm25_raw_chunk_candidates(analysis: QueryAnalysis, limit: int = 5) -> list[dict]:
+    """BM25 sparse retrieval 후보를 score와 함께 반환한다."""
     query_tokens = analysis.tokens
     if not query_tokens:
-        return [], [], []
+        return []
 
     try:
         results = collection.get(include=["documents", "metadatas"])
     except Exception:
         logger.exception("[query_bm25] failed")
-        return [], [], []
+        return []
 
     records: list[tuple[str, str, dict]] = []
     corpus_tokens: list[list[str]] = []
@@ -2201,10 +2267,25 @@ def _lookup_bm25_raw_chunks(analysis: QueryAnalysis, limit: int = 5) -> tuple[li
         len(selected),
         _format_decimal(selected[0][0] if selected else None),
     )
+    return [
+        {
+            "rank": index + 1,
+            "bm25_score": float(score),
+            "chunk_id": chunk_id,
+            "document": document,
+            "metadata": metadata,
+        }
+        for index, (score, _, chunk_id, document, metadata) in enumerate(selected)
+    ]
+
+
+def _lookup_bm25_raw_chunks(analysis: QueryAnalysis, limit: int = 5) -> tuple[list[str], list[dict], list[str]]:
+    """BM25 sparse retrieval로 vector search가 놓친 raw chunk 후보를 보강한다."""
+    selected = _lookup_bm25_raw_chunk_candidates(analysis, limit)
     return (
-        [document for _, _, _, document, _ in selected],
-        [metadata for _, _, _, _, metadata in selected],
-        [chunk_id for _, _, chunk_id, _, _ in selected],
+        [candidate["document"] for candidate in selected],
+        [candidate["metadata"] for candidate in selected],
+        [candidate["chunk_id"] for candidate in selected],
     )
 
 
@@ -2508,6 +2589,106 @@ def _select_relevant_excerpt(text: str, query_terms: set[str], window: int = 2, 
     return "\n".join(selected_lines[:max_lines])
 
 
+def _line_matches_query_subject(line: str, analysis: QueryAnalysis) -> bool:
+    """line이 질문 subject 항목을 직접 설명하는지 판단한다."""
+    normalized_line = line.lower()
+    has_item_label = ":" in line or "：" in line
+    label_text = re.split(r"[:：]", line, maxsplit=1)[0].strip().lower() if has_item_label else normalized_line
+    search_text = label_text if has_item_label else normalized_line
+
+    primary_terms = {term for term in analysis.primary_terms if len(term) >= 2}
+    if any(term in search_text for term in primary_terms):
+        return True
+
+    subject_terms = {term for term in analysis.subject_terms if len(term) >= 2}
+    if len(subject_terms) >= 2 and all(term in search_text for term in subject_terms):
+        return True
+    return len(subject_terms) == 1 and any(term in search_text for term in subject_terms)
+
+
+def _extract_item_label(line: str, analysis: QueryAnalysis) -> str:
+    """항목형 line에서 답변에 사용할 label을 추출한다."""
+    if ":" in line:
+        return line.split(":", 1)[0].strip()
+    if "：" in line:
+        return line.split("：", 1)[0].strip()
+    for term in sorted(analysis.primary_terms, key=len, reverse=True):
+        if term in line:
+            return term
+    for term in sorted(analysis.subject_terms, key=len, reverse=True):
+        if term in line:
+            return term
+    return "관련 항목"
+
+
+def _extract_colon_value(line: str) -> str:
+    """항목형 line에서 첫 번째 colon 뒤 값을 추출한다."""
+    if ":" in line:
+        return line.split(":", 1)[1].strip()
+    if "：" in line:
+        return line.split("：", 1)[1].strip()
+    return line.strip()
+
+
+def _extract_location_answer_value(line: str) -> str:
+    """위치 질문에 답할 수 있는 항목 값을 line에서 추출한다."""
+    value = _extract_colon_value(line)
+    value = re.split(
+        r"\s*/\s*|\s+이용\s*시간|\s+이용시간|\s+운영\s*시간|\s+운영시간|\s+\d{2,3}-\d{3,4}-\d{4}|\s+\d{1,2}\s*시간",
+        value,
+        maxsplit=1,
+    )[0].strip()
+    return value or line.strip()
+
+
+def _extract_time_answer_value(line: str) -> str:
+    """시간 질문에 답할 수 있는 항목 값을 line에서 추출한다."""
+    time_label_match = re.search(r"(?:이용\s*시간|이용시간|운영\s*시간|운영시간)[^:：]*[:：]\s*(.+)", line)
+    if time_label_match:
+        return time_label_match.group(1).strip()
+
+    time_range_match = re.search(r"\d{1,2}\s*:\s*\d{2}\s*[~∼-]\s*\d{1,2}\s*:\s*\d{2}(?:\([^)]*\))?", line)
+    if time_range_match:
+        return time_range_match.group(0).strip()
+    return line.strip()
+
+
+def _format_query_evidence_fact(line: str, analysis: QueryAnalysis) -> str:
+    """검색된 항목 line을 질문 intent에 맞는 구조화 근거로 바꾼다."""
+    label = _extract_item_label(line, analysis)
+    if analysis.intent == "location":
+        return f"- {label} 위치: {_extract_location_answer_value(line)}"
+    if analysis.intent == "time":
+        return f"- {label} 이용/운영시간: {_extract_time_answer_value(line)}"
+    if analysis.intent == "list":
+        return f"- 관련 항목: {line.strip()}"
+    return f"- 관련 근거: {line.strip()}"
+
+
+def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts: int = 3) -> str:
+    """검색된 chunk에서 질문 subject와 intent가 직접 만나는 항목 근거를 추출한다."""
+    if not analysis.intent:
+        return ""
+
+    facts: list[str] = []
+    seen: set[str] = set()
+    for line in (line.strip() for line in text.splitlines() if line.strip()):
+        if _markdown_heading_level(line) is not None:
+            continue
+        if not _line_matches_query_subject(line, analysis):
+            continue
+
+        fact = _format_query_evidence_fact(line, analysis)
+        if fact in seen:
+            continue
+        seen.add(fact)
+        facts.append(fact)
+        if len(facts) >= max_facts:
+            break
+
+    return "\n".join(facts)
+
+
 def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analysis: QueryAnalysis) -> str:
     """LLM이 검색 근거 단위를 구분할 수 있도록 출처 metadata와 청크 본문을 함께 포맷한다."""
     source_name = str(meta.get("source", "")).strip() or "알 수 없는 문서"
@@ -2526,6 +2707,7 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
         metadata_lines.append(f"섹션: {header_path}")
 
     metadata = "\n".join(metadata_lines)
+    evidence_facts = _extract_query_evidence_facts(doc, analysis)
     relevant_excerpt = _select_relevant_excerpt(doc, analysis.primary_terms)
     if not relevant_excerpt:
         relevant_excerpt = _select_relevant_excerpt(doc, analysis.context_terms)
@@ -2537,9 +2719,10 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
         fact_text = str(matched_table_facts).strip()
 
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
+    evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
     if relevant_excerpt:
-        return f"[출처 {index}]\n{metadata}{table_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
-    return f"[출처 {index}]\n{metadata}{table_fact_block}\n전체 내용:\n{doc.strip()}"
+        return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
+    return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n전체 내용:\n{doc.strip()}"
 
 
 def _build_context(docs: list[str], metadatas: list[dict], ids: list[str], analysis: QueryAnalysis) -> str:
@@ -2649,6 +2832,398 @@ def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list
     return expanded_docs, expanded_metadatas, expanded_ids
 
 
+def _build_rag_prompt(system_prompt: str | None, context: str, question: str) -> str:
+    """검색 근거와 사용자 질문을 LLM 입력 프롬프트로 조합한다."""
+    prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
+    return f"""{prompt_policy}
+
+{MANDATORY_RAG_PROMPT}
+
+[검색 근거]
+{context}
+
+[사용자 질문]
+{question}
+
+[답변 직전 확인]
+- 답변은 [검색 근거]에 직접 적힌 내용만 사용한다.
+- [검색 근거]의 '질문 의도 추출 정보'가 있으면 답변에 가장 먼저 사용한다.
+- [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다.
+- [검색 근거]의 '질문 관련 발췌'가 있으면 그 발췌에 직접 적힌 항목만 우선 사용한다.
+- 질문 단어와 일치하는 섹션 제목이 있으면 해당 섹션 아래 내용만 답변한다.
+- 같은 청크 안에 다른 섹션이 있어도 질문과 맞지 않으면 답변에 섞지 않는다.
+- 근거에 없는 일반적인 대학 행정 절차나 조언은 쓰지 않는다.
+
+[답변 작성]
+"""
+
+
+def _candidate_parent_key(chunk_id: str, metadata: dict) -> str:
+    """table_fact 후보는 부모 raw chunk 기준으로 trace key를 통일한다."""
+    parent_chunk_id = str(metadata.get("parent_chunk_id", "")).strip()
+    if metadata.get("chunk_role") == "table_fact" and parent_chunk_id:
+        return parent_chunk_id
+    return str(chunk_id)
+
+
+def _ensure_trace_entry(trace_by_id: dict[str, dict], key: str) -> dict:
+    """후보별 retrieval trace 누적 공간을 만든다."""
+    if key not in trace_by_id:
+        trace_by_id[key] = {"retrieval_methods": []}
+    return trace_by_id[key]
+
+
+def _append_trace_method(entry: dict, method: str) -> None:
+    """후보가 어떤 검색 단계에서 들어왔는지 중복 없이 기록한다."""
+    methods = entry.setdefault("retrieval_methods", [])
+    if method not in methods:
+        methods.append(method)
+
+
+def _candidate_location_summary(chunk_id: str, doc: str, meta: dict, preview_chars: int = 360) -> dict:
+    """trace 후보의 문서 위치와 본문 미리보기를 만든다."""
+    meta = meta or {}
+    return {
+        "chunk_id": str(chunk_id),
+        "document_id": meta.get("document_id", ""),
+        "source": meta.get("source", ""),
+        "chunk_role": meta.get("chunk_role", "raw"),
+        "matched_chunk_role": meta.get("matched_chunk_role"),
+        "page": meta.get("page"),
+        "page_start": meta.get("page_start"),
+        "page_end": meta.get("page_end"),
+        "chunk_index": meta.get("chunk_index", _parse_chunk_index(str(chunk_id))),
+        "header_path": _format_header_path(meta),
+        "content_preview": _preview_text(doc, preview_chars),
+    }
+
+
+def _record_vector_trace(
+    trace_by_id: dict[str, dict],
+    chunk_id: str,
+    doc: str,
+    meta: dict,
+    rank: int,
+    distance: float | None,
+    metric: str,
+) -> None:
+    """벡터 검색 후보의 distance와 원본 hit 정보를 trace에 기록한다."""
+    key = _candidate_parent_key(chunk_id, meta)
+    entry = _ensure_trace_entry(trace_by_id, key)
+    _append_trace_method(entry, "vector")
+    entry.setdefault("vector_rank", rank)
+    entry.setdefault("vector_distance", _round_float(distance))
+    entry.setdefault("vector_similarity_if_cosine", _similarity_if_cosine(distance, metric))
+    entry.setdefault("vector_hit_chunk_id", str(chunk_id))
+    entry.setdefault("vector_hit_chunk_role", meta.get("chunk_role", "raw"))
+    if meta.get("chunk_role") == "table_fact":
+        entry.setdefault("vector_hit_fact_preview", _preview_text(doc, 240))
+
+
+def _record_bm25_trace(trace_by_id: dict[str, dict], candidate: dict) -> None:
+    """BM25 후보의 score를 trace에 기록한다."""
+    chunk_id = str(candidate["chunk_id"])
+    meta = candidate["metadata"] or {}
+    entry = _ensure_trace_entry(trace_by_id, chunk_id)
+    _append_trace_method(entry, "bm25")
+    entry.setdefault("bm25_rank", candidate["rank"])
+    entry.setdefault("bm25_score", _round_float(candidate["bm25_score"], 4))
+
+
+def _record_table_fact_trace(trace_by_id: dict[str, dict], candidate: dict) -> None:
+    """table_fact lexical 후보의 score와 부모 chunk 정보를 trace에 기록한다."""
+    chunk_id = str(candidate["chunk_id"])
+    meta = candidate["metadata"] or {}
+    key = _candidate_parent_key(chunk_id, meta)
+    entry = _ensure_trace_entry(trace_by_id, key)
+    _append_trace_method(entry, "table_fact_lexical")
+    entry.setdefault("table_fact_rank", candidate["rank"])
+    entry.setdefault("table_fact_score", candidate["table_fact_score"])
+    entry.setdefault("table_fact_hit_chunk_id", chunk_id)
+    entry.setdefault("table_fact_preview", _preview_text(candidate["document"], 240))
+
+
+def _format_vector_candidate(
+    rank: int,
+    chunk_id: str,
+    doc: str,
+    meta: dict,
+    distance: float | None,
+    metric: str,
+    embedding: list[float] | None,
+    vector_preview_size: int,
+) -> dict:
+    """초기 Chroma vector search 후보를 trace 응답 형태로 만든다."""
+    candidate = _candidate_location_summary(chunk_id, doc, meta)
+    candidate.update({
+        "rank": rank,
+        "distance": _round_float(distance),
+        "similarity_if_cosine": _similarity_if_cosine(distance, metric),
+    })
+    if embedding is not None:
+        candidate["embedding_dimension"] = len(embedding)
+        candidate["embedding_preview"] = _vector_preview(embedding, vector_preview_size)
+    return candidate
+
+
+def _format_bm25_candidate(candidate: dict) -> dict:
+    """BM25 후보를 trace 응답 형태로 만든다."""
+    formatted = _candidate_location_summary(
+        str(candidate["chunk_id"]),
+        candidate["document"],
+        candidate["metadata"] or {},
+    )
+    formatted.update({
+        "rank": candidate["rank"],
+        "bm25_score": _round_float(candidate["bm25_score"], 4),
+    })
+    return formatted
+
+
+def _format_table_fact_candidate(candidate: dict) -> dict:
+    """table_fact lexical 후보를 trace 응답 형태로 만든다."""
+    formatted = _candidate_location_summary(
+        str(candidate["chunk_id"]),
+        candidate["document"],
+        candidate["metadata"] or {},
+    )
+    formatted.update({
+        "rank": candidate["rank"],
+        "table_fact_score": candidate["table_fact_score"],
+        "parent_chunk_id": (candidate["metadata"] or {}).get("parent_chunk_id"),
+    })
+    return formatted
+
+
+def _format_rerank_candidate(
+    rank: int,
+    doc: str,
+    meta: dict,
+    chunk_id: str,
+    trace_by_id: dict[str, dict],
+    question: str,
+    analysis: QueryAnalysis,
+    selected: bool,
+) -> dict:
+    """재정렬 단계의 후보별 점수와 최종 선택 여부를 trace 응답 형태로 만든다."""
+    meta = meta or {}
+    search_text = _build_sparse_search_text(doc, meta)
+    subject_score = _score_subject_match(search_text, analysis)
+    intent_score = _score_intent_evidence(search_text, analysis)
+    heading_score = _score_heading_match(search_text, analysis)
+    runtime_table_fact_score = _best_runtime_table_fact_score(meta, question)
+    rerank_score = subject_score + intent_score + heading_score + runtime_table_fact_score
+    matched_table_facts = meta.get("matched_table_facts", [])
+    if isinstance(matched_table_facts, str) and matched_table_facts:
+        matched_table_facts = [matched_table_facts]
+    elif not isinstance(matched_table_facts, list):
+        matched_table_facts = []
+
+    trace_key = _candidate_parent_key(str(chunk_id), meta)
+    retrieval = trace_by_id.get(str(chunk_id)) or trace_by_id.get(trace_key) or {"retrieval_methods": []}
+    formatted = _candidate_location_summary(chunk_id, doc, meta)
+    formatted.update({
+        "rank": rank,
+        "selected_for_prompt": selected,
+        "retrieval": retrieval,
+        "scores": {
+            "subject_match": subject_score,
+            "intent_evidence": intent_score,
+            "heading_match": heading_score,
+            "runtime_table_fact": runtime_table_fact_score,
+            "rerank_total": rerank_score,
+        },
+        "matched_table_facts": matched_table_facts,
+    })
+    return formatted
+
+
+def _query_embeddings_for_trace(
+    question_vector: list[float],
+    retrieval_limit: int,
+    include_vectors: bool,
+) -> dict:
+    """trace용 Chroma vector search를 실행한다."""
+    include_fields = ["documents", "metadatas", "distances"]
+    if include_vectors:
+        include_fields.append("embeddings")
+    return collection.query(
+        query_embeddings=[question_vector],
+        n_results=retrieval_limit,
+        include=include_fields,
+    )
+
+
+def _trace_query_retrieval(
+    question: str,
+    top_k: int,
+    system_prompt: str | None,
+    include_vectors: bool,
+    vector_preview_size: int,
+) -> dict:
+    """답변 생성 직전까지의 RAG 검색 파이프라인을 단계별 JSON으로 만든다."""
+    trace_start = time.perf_counter()
+    analysis = _analyze_query(question)
+
+    embedding_start = time.perf_counter()
+    question_vectors, embed_metadata = _embed_texts([question])
+    question_vector = question_vectors[0]
+    embedding_elapsed = time.perf_counter() - embedding_start
+    ollama_total = _seconds_from_nanos(embed_metadata.get("total_duration"))
+    ollama_load = _seconds_from_nanos(embed_metadata.get("load_duration"))
+    ollama_prompt_eval = _seconds_from_nanos(embed_metadata.get("prompt_eval_duration"))
+
+    chroma_start = time.perf_counter()
+    retrieval_limit = min(20, max(top_k, top_k * 3))
+    metric = _collection_distance_metric()
+    results = _query_embeddings_for_trace(question_vector, retrieval_limit, include_vectors)
+    chroma_elapsed = time.perf_counter() - chroma_start
+
+    vector_docs = results["documents"][0] if results.get("documents") else []
+    vector_metadatas = results["metadatas"][0] if results.get("metadatas") else []
+    vector_ids = results["ids"][0] if results.get("ids") else []
+    vector_distances = [float(distance) for distance in results["distances"][0]] if results.get("distances") else []
+    vector_embeddings = results.get("embeddings", [[]])
+    vector_embeddings = vector_embeddings[0] if include_vectors and vector_embeddings else []
+
+    trace_by_id: dict[str, dict] = {}
+    vector_candidates = []
+    for index, (doc, meta, chunk_id) in enumerate(zip(vector_docs, vector_metadatas, vector_ids)):
+        meta = meta or {}
+        distance = vector_distances[index] if index < len(vector_distances) else None
+        embedding = vector_embeddings[index] if include_vectors and index < len(vector_embeddings) else None
+        _record_vector_trace(trace_by_id, str(chunk_id), doc, meta, index + 1, distance, metric)
+        vector_candidates.append(
+            _format_vector_candidate(
+                index + 1,
+                str(chunk_id),
+                doc,
+                meta,
+                distance,
+                metric,
+                embedding,
+                vector_preview_size,
+            )
+        )
+
+    bm25_candidates = _lookup_bm25_raw_chunk_candidates(analysis, limit=top_k)
+    for candidate in bm25_candidates:
+        _record_bm25_trace(trace_by_id, candidate)
+
+    table_fact_candidates = _lookup_lexical_table_fact_candidates(question)
+    for candidate in table_fact_candidates:
+        _record_table_fact_trace(trace_by_id, candidate)
+
+    docs = vector_docs
+    metadatas = vector_metadatas
+    ids = vector_ids
+    if bm25_candidates:
+        docs = [candidate["document"] for candidate in bm25_candidates] + docs
+        metadatas = [candidate["metadata"] for candidate in bm25_candidates] + metadatas
+        ids = [candidate["chunk_id"] for candidate in bm25_candidates] + ids
+    if table_fact_candidates:
+        docs = [candidate["document"] for candidate in table_fact_candidates] + docs
+        metadatas = [candidate["metadata"] for candidate in table_fact_candidates] + metadatas
+        ids = [candidate["chunk_id"] for candidate in table_fact_candidates] + ids
+
+    docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
+    metadatas = _attach_runtime_table_facts(question, docs, metadatas)
+    expanded_candidates = [
+        _format_rerank_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, False)
+        for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids))
+    ]
+
+    prioritized_docs, prioritized_metadatas, prioritized_ids = _prioritize_query_results(
+        docs,
+        metadatas,
+        ids,
+        question,
+    )
+    after_table_priority_candidates = [
+        _format_rerank_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, False)
+        for index, (doc, meta, chunk_id) in enumerate(zip(prioritized_docs, prioritized_metadatas, prioritized_ids))
+    ]
+
+    reranked_docs, reranked_metadatas, reranked_ids = _rerank_by_query_analysis(
+        prioritized_docs,
+        prioritized_metadatas,
+        prioritized_ids,
+        question,
+        analysis,
+    )
+    final_docs = reranked_docs[:top_k]
+    final_metadatas = reranked_metadatas[:top_k]
+    final_ids = reranked_ids[:top_k]
+    context = _build_context(final_docs, final_metadatas, final_ids, analysis) if final_docs else ""
+    prompt = _build_rag_prompt(system_prompt, context, question) if final_docs else ""
+    final_candidates = [
+        _format_rerank_candidate(
+            index + 1,
+            doc,
+            meta,
+            chunk_id,
+            trace_by_id,
+            question,
+            analysis,
+            index < top_k,
+        )
+        for index, (doc, meta, chunk_id) in enumerate(zip(reranked_docs, reranked_metadatas, reranked_ids))
+    ]
+
+    logger.info(
+        "[rag_trace] top_k=%s retrieval_limit=%s vector=%s bm25=%s table_fact=%s final=%s context_chars=%s embed=%.2fs chroma=%.2fs total=%.2fs",
+        top_k,
+        retrieval_limit,
+        len(vector_candidates),
+        len(bm25_candidates),
+        len(table_fact_candidates),
+        len(final_docs),
+        len(context),
+        embedding_elapsed,
+        chroma_elapsed,
+        time.perf_counter() - trace_start,
+    )
+    return {
+        "question": question,
+        "top_k": top_k,
+        "retrieval_limit": retrieval_limit,
+        "answer_generated": False,
+        "distance_metric": metric,
+        "distance_note": "similarity_if_cosine은 collection metric이 cosine으로 명시된 경우에만 계산한다.",
+        "query_analysis": {
+            "tokens": analysis.tokens,
+            "intent": analysis.intent,
+            "subject_terms": sorted(analysis.subject_terms),
+            "primary_terms": sorted(analysis.primary_terms),
+            "context_terms": sorted(analysis.context_terms),
+        },
+        "query_vector": {
+            "dimension": len(question_vector),
+            "norm": _round_float(_vector_norm(question_vector)),
+            "preview_size": vector_preview_size,
+            "preview": _vector_preview(question_vector, vector_preview_size),
+        },
+        "stages": {
+            "vector_candidates": vector_candidates,
+            "bm25_candidates": [_format_bm25_candidate(candidate) for candidate in bm25_candidates],
+            "table_fact_candidates": [_format_table_fact_candidate(candidate) for candidate in table_fact_candidates],
+            "expanded_candidates": expanded_candidates,
+            "after_table_priority_candidates": after_table_priority_candidates,
+            "final_candidates": final_candidates,
+        },
+        "final_context": context,
+        "final_prompt_preview": _preview_text(prompt, 3000),
+        "timing": {
+            "embedding_elapsed": _round_float(embedding_elapsed, 4),
+            "chroma_elapsed": _round_float(chroma_elapsed, 4),
+            "total_elapsed": _round_float(time.perf_counter() - trace_start, 4),
+            "ollama_total": _round_float(ollama_total, 4),
+            "ollama_load": _round_float(ollama_load, 4),
+            "ollama_prompt_eval": _round_float(ollama_prompt_eval, 4),
+        },
+    }
+
+
 def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) -> tuple[str | None, list, dict]:
     """
     질문 임베딩 → ChromaDB 검색 → 프롬프트 + 출처 조합.
@@ -2728,29 +3303,8 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
 
     context_build_start = time.perf_counter()
     context = _build_context(docs, metadatas, ids, analysis)
-    prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
-
     # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
-    prompt = f"""{prompt_policy}
-
-{MANDATORY_RAG_PROMPT}
-
-[검색 근거]
-{context}
-
-[사용자 질문]
-{question}
-
-[답변 직전 확인]
-- 답변은 [검색 근거]에 직접 적힌 내용만 사용한다.
-- [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다.
-- [검색 근거]의 '질문 관련 발췌'가 있으면 그 발췌에 직접 적힌 항목만 우선 사용한다.
-- 질문 단어와 일치하는 섹션 제목이 있으면 해당 섹션 아래 내용만 답변한다.
-- 같은 청크 안에 다른 섹션이 있어도 질문과 맞지 않으면 답변에 섞지 않는다.
-- 근거에 없는 일반적인 대학 행정 절차나 조언은 쓰지 않는다.
-
-[답변 작성]
-"""
+    prompt = _build_rag_prompt(system_prompt, context, question)
 
     # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 헤더 메타데이터 포함
     sources = []
@@ -2913,6 +3467,22 @@ async def list_document_chunks(document_id: int):
 
     chunks = await asyncio.to_thread(_get_from_chroma)
     return {"document_id": document_id, "chunks": chunks}
+
+
+@app.post("/debug/rag-trace")
+async def debug_rag_trace(request: RagTraceRequest):
+    """
+    답변 생성 없이 RAG 검색 파이프라인을 단계별로 추적한다.
+    vector, BM25, table_fact, rerank 후보를 JSON으로 반환해 검색 품질 디버깅에 사용한다.
+    """
+    return await asyncio.to_thread(
+        _trace_query_retrieval,
+        request.question,
+        request.top_k,
+        request.system_prompt,
+        request.include_vectors,
+        request.vector_preview_size,
+    )
 
 
 @app.post("/query")
