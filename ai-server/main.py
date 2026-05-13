@@ -1837,6 +1837,11 @@ QUERY_GENERIC_TERMS = {
     "방법", "절차", "신청", "주의사항", "유의사항", "모집", "인원", "정원",
     "모집인원", "모집정원", "정보", "알려줘", "어디", "어떤", "뭐야", "무엇",
 }
+QUERY_COMPOUND_FUNCTION_TERMS = {"알려줘", "어디", "어떤", "뭐야", "무엇", "무슨", "언제", "어떻게"}
+
+QUERY_WEAK_SUBJECT_TERMS = {
+    "학생", "재학생", "학교", "대학", "우리", "인하공업전문대학", "인하공전",
+}
 
 QUERY_TABLE_INTENT_TERMS = {
     "값", "수치", "공식", "수식", "상수", "계수", "인원", "정원", "모집", "모집인원", "모집정원",
@@ -1902,6 +1907,8 @@ QUERY_NON_SUBJECT_PATTERNS = (
     r"^(어디|언제|무엇|뭐|어떤|무슨|어떻게)(.*)?$",
     r"^(있어|있나요|있습니까|돼|되나요|될까|인가요)$",
 )
+STRICT_LOCAL_EVIDENCE_INTENTS = {"location", "time", "cost", "count"}
+EVIDENCE_FOCUSED_INTENTS = {"location", "time", "cost", "count", "list"}
 
 
 @dataclass(frozen=True)
@@ -1969,6 +1976,56 @@ def _extract_query_terms(question: str) -> set[str]:
         terms.add(normalized)
         terms.update(QUERY_TERM_SYNONYMS.get(normalized, set()))
     return terms
+
+
+def _extract_ordered_query_terms(question: str) -> list[str]:
+    """질문 원문 순서를 유지한 normalized token 목록을 만든다."""
+    ordered_terms: list[str] = []
+    for token in re.findall(r"[0-9A-Za-z가-힣]+", question):
+        normalized = _normalize_query_token(token)
+        if len(normalized) >= 2:
+            ordered_terms.append(normalized)
+    return ordered_terms
+
+
+def _is_compound_subject_token(token: str, subject_exclusion_terms: set[str]) -> bool:
+    """띄어쓴 복합명사 후보에 포함해도 되는 질문 token인지 판단한다."""
+    if len(token) < 2:
+        return False
+    if token in subject_exclusion_terms or token in QUERY_COMPOUND_FUNCTION_TERMS:
+        return False
+    if any(re.match(pattern, token) for pattern in QUERY_NON_SUBJECT_PATTERNS):
+        return False
+    return True
+
+
+def _derive_compound_primary_terms(question: str, subject_exclusion_terms: set[str]) -> set[str]:
+    """띄어쓴 복합명사 질문을 붙여 쓴 문서 표현과 맞추기 위한 후보를 만든다."""
+    ordered_terms = [
+        term for term in _extract_ordered_query_terms(question)
+        if _is_compound_subject_token(term, subject_exclusion_terms)
+    ]
+    compounds: set[str] = set()
+    for start_index in range(len(ordered_terms)):
+        for end_index in range(start_index + 2, min(len(ordered_terms), start_index + 4) + 1):
+            compound = "".join(ordered_terms[start_index:end_index])
+            if len(compound) >= 4:
+                compounds.add(compound)
+    return compounds
+
+
+def _compact_search_text(text: str) -> str:
+    """띄어쓰기 차이를 줄여 subject label 비교에 사용할 compact text를 만든다."""
+    return re.sub(r"\s+", "", text.lower())
+
+
+def _term_in_text(term: str, text: str) -> bool:
+    """일반 포함과 공백 제거 포함을 함께 확인한다."""
+    normalized_term = term.lower()
+    normalized_text = text.lower()
+    if normalized_term in normalized_text:
+        return True
+    return _compact_search_text(normalized_term) in _compact_search_text(normalized_text)
 
 
 def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
@@ -2163,6 +2220,7 @@ def _analyze_query(question: str) -> QueryAnalysis:
         term for term in raw_terms
         if len(term) >= 2 and not _is_non_subject_query_token(term, subject_exclusion_terms)
     }
+    primary_terms.update(_derive_compound_primary_terms(question, subject_exclusion_terms))
     context_terms = set(tokens)
     context_terms.update(raw_terms)
     context_terms.update(subject_terms)
@@ -2338,22 +2396,28 @@ def _score_subject_match(text: str, analysis: QueryAnalysis) -> int:
     if not analysis.subject_terms and not analysis.primary_terms:
         return 0
 
-    normalized_text = text.lower()
     score = 0
     for term in analysis.primary_terms:
-        count = normalized_text.count(term)
+        count = text.lower().count(term.lower())
+        if count <= 0 and _term_in_text(term, text):
+            count = 1
         if count > 0:
-            score += min(count, 4) * 18
+            weight = 4 if term in QUERY_WEAK_SUBJECT_TERMS else 24
+            score += min(count, 4) * weight
 
     matched = 0
     for term in analysis.subject_terms:
-        count = normalized_text.count(term)
+        count = text.lower().count(term.lower())
+        if count <= 0 and _term_in_text(term, text):
+            count = 1
         if count <= 0:
             continue
         matched += 1
-        score += min(count, 5) * 12
+        weight = 3 if term in QUERY_WEAK_SUBJECT_TERMS else 12
+        score += min(count, 5) * weight
 
-    if matched == len(analysis.subject_terms):
+    strong_subject_count = len(analysis.subject_terms - QUERY_WEAK_SUBJECT_TERMS)
+    if matched == len(analysis.subject_terms) and strong_subject_count > 0:
         score += 20
     return score
 
@@ -2397,7 +2461,7 @@ def _score_heading_match(text: str, analysis: QueryAnalysis) -> int:
         if _markdown_heading_level(line) is None:
             continue
         normalized_line = line.lower()
-        if any(term in normalized_line for term in analysis.primary_terms):
+        if any(term in normalized_line for term in analysis.primary_terms - QUERY_WEAK_SUBJECT_TERMS):
             score += 40
         if any(term in normalized_line for term in analysis.subject_terms):
             score += 30
@@ -2413,6 +2477,7 @@ def _score_candidate_for_query(doc: str, meta: dict, question: str, analysis: Qu
     score += _score_subject_match(search_text, analysis)
     score += _score_intent_evidence(search_text, analysis)
     score += _score_heading_match(search_text, analysis)
+    score += _score_query_evidence_facts(doc, analysis)
     score += _best_runtime_table_fact_score(meta or {}, question)
     return score
 
@@ -2447,6 +2512,41 @@ def _rerank_by_query_analysis(
         [doc for _, _, doc, _, _ in ranked],
         [meta for _, _, _, meta, _ in ranked],
         [chunk_id for _, _, _, _, chunk_id in ranked],
+    )
+
+
+def _focus_candidates_with_query_evidence(
+    docs: list[str],
+    metadatas: list[dict],
+    ids: list[str],
+    analysis: QueryAnalysis,
+) -> tuple[list[str], list[dict], list[str]]:
+    """구조화 근거가 확인된 후보가 있으면 최종 context를 그 후보들로 좁힌다."""
+    if not docs or analysis.intent not in EVIDENCE_FOCUSED_INTENTS:
+        return docs, metadatas, ids
+
+    evidence_items: list[tuple[str, dict, str]] = []
+    fallback_items: list[tuple[str, dict, str]] = []
+    for doc, meta, chunk_id in zip(docs, metadatas, ids):
+        if _extract_query_evidence_fact_lines(doc, analysis, max_facts=1):
+            evidence_items.append((doc, meta or {}, chunk_id))
+        else:
+            fallback_items.append((doc, meta or {}, chunk_id))
+
+    if not evidence_items:
+        return docs, metadatas, ids
+
+    logger.info(
+        "[query_evidence_focus] intent=%s evidence_candidates=%s fallback_candidates=%s",
+        analysis.intent,
+        len(evidence_items),
+        len(fallback_items),
+    )
+    focused_items = evidence_items
+    return (
+        [doc for doc, _, _ in focused_items],
+        [meta for _, meta, _ in focused_items],
+        [chunk_id for _, _, chunk_id in focused_items],
     )
 
 
@@ -2589,21 +2689,56 @@ def _select_relevant_excerpt(text: str, query_terms: set[str], window: int = 2, 
     return "\n".join(selected_lines[:max_lines])
 
 
-def _line_matches_query_subject(line: str, analysis: QueryAnalysis) -> bool:
-    """line이 질문 subject 항목을 직접 설명하는지 판단한다."""
-    normalized_line = line.lower()
-    has_item_label = ":" in line or "：" in line
-    label_text = re.split(r"[:：]", line, maxsplit=1)[0].strip().lower() if has_item_label else normalized_line
-    search_text = label_text if has_item_label else normalized_line
+def _line_has_intent_evidence(line: str, analysis: QueryAnalysis) -> bool:
+    """line 하나 안에 질문 intent에 답할 값 단서가 있는지 확인한다."""
+    if not analysis.intent:
+        return False
 
-    primary_terms = {term for term in analysis.primary_terms if len(term) >= 2}
-    if any(term in search_text for term in primary_terms):
+    normalized_line = line.lower()
+    if any(term in normalized_line for term in INTENT_EVIDENCE_TERMS.get(analysis.intent, set())):
+        return True
+
+    for pattern in INTENT_EVIDENCE_PATTERNS.get(analysis.intent, []):
+        if re.search(pattern, normalized_line, flags=re.MULTILINE):
+            return True
+
+    if analysis.intent == "list":
+        return bool(re.match(r"^[-*]\s+", line.strip()) or re.search(r"\S+\s*:\s*\S+", line))
+    return False
+
+
+def _subject_matches_text(text: str, analysis: QueryAnalysis, allow_single_weak: bool = False) -> bool:
+    """질문 subject가 특정 label/text에 직접 걸리는지 판단한다."""
+    primary_terms = {
+        term for term in analysis.primary_terms
+        if len(term) >= 2 and term not in QUERY_WEAK_SUBJECT_TERMS
+    }
+    if any(_term_in_text(term, text) for term in primary_terms):
         return True
 
     subject_terms = {term for term in analysis.subject_terms if len(term) >= 2}
-    if len(subject_terms) >= 2 and all(term in search_text for term in subject_terms):
+    if len(subject_terms) >= 2 and all(_term_in_text(term, text) for term in subject_terms):
         return True
-    return len(subject_terms) == 1 and any(term in search_text for term in subject_terms)
+
+    strong_subject_terms = subject_terms - QUERY_WEAK_SUBJECT_TERMS
+    if len(strong_subject_terms) == 1 and any(_term_in_text(term, text) for term in strong_subject_terms):
+        return True
+
+    if allow_single_weak and len(subject_terms) == 1:
+        return any(_term_in_text(term, text) for term in subject_terms)
+    return False
+
+
+def _line_matches_query_subject(line: str, analysis: QueryAnalysis) -> bool:
+    """line이 질문 subject 항목을 직접 설명하는지 판단한다."""
+    has_item_label = ":" in line or "：" in line
+    label_text = re.split(r"[:：]", line, maxsplit=1)[0].strip() if has_item_label else line.strip()
+    if not _subject_matches_text(label_text, analysis):
+        return False
+
+    if analysis.intent not in STRICT_LOCAL_EVIDENCE_INTENTS:
+        return True
+    return _line_has_intent_evidence(line, analysis)
 
 
 def _extract_item_label(line: str, analysis: QueryAnalysis) -> str:
@@ -2613,10 +2748,10 @@ def _extract_item_label(line: str, analysis: QueryAnalysis) -> str:
     if "：" in line:
         return line.split("：", 1)[0].strip()
     for term in sorted(analysis.primary_terms, key=len, reverse=True):
-        if term in line:
+        if _term_in_text(term, line):
             return term
     for term in sorted(analysis.subject_terms, key=len, reverse=True):
-        if term in line:
+        if _term_in_text(term, line):
             return term
     return "관련 항목"
 
@@ -2665,13 +2800,43 @@ def _format_query_evidence_fact(line: str, analysis: QueryAnalysis) -> str:
     return f"- 관련 근거: {line.strip()}"
 
 
-def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts: int = 3) -> str:
-    """검색된 chunk에서 질문 subject와 intent가 직접 만나는 항목 근거를 추출한다."""
-    if not analysis.intent:
-        return ""
+def _extract_list_section_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_facts: int) -> list[str]:
+    """목록형 질문에서 subject가 걸린 heading 아래 항목들을 구조화 근거로 추출한다."""
+    if analysis.intent != "list":
+        return []
 
-    facts: list[str] = []
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    query_terms = analysis.primary_terms or analysis.subject_terms or analysis.context_terms
+    for index, line in enumerate(lines):
+        if _markdown_heading_level(line) is None:
+            continue
+        if not any(_term_in_text(term, line) for term in query_terms):
+            continue
+
+        facts: list[str] = []
+        end_index = _find_next_heading_index(lines, index)
+        for candidate in lines[index + 1:end_index]:
+            if _markdown_heading_level(candidate) is not None:
+                continue
+            if not candidate.strip():
+                continue
+            facts.append(f"- 관련 항목: {candidate.strip()}")
+            if len(facts) >= max_facts:
+                return facts
+        return facts
+    return []
+
+
+def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_facts: int = 5) -> list[str]:
+    """검색된 chunk에서 질문 subject와 intent가 직접 만나는 항목 근거 line들을 추출한다."""
+    if not analysis.intent:
+        return []
+
+    facts: list[str] = _extract_list_section_evidence_fact_lines(text, analysis, max_facts)
     seen: set[str] = set()
+    for fact in facts:
+        seen.add(fact)
+
     for line in (line.strip() for line in text.splitlines() if line.strip()):
         if _markdown_heading_level(line) is not None:
             continue
@@ -2686,7 +2851,21 @@ def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts:
         if len(facts) >= max_facts:
             break
 
-    return "\n".join(facts)
+    return facts
+
+
+def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts: int = 5) -> str:
+    """검색된 chunk에서 질문 subject와 intent가 직접 만나는 항목 근거를 추출한다."""
+    return "\n".join(_extract_query_evidence_fact_lines(text, analysis, max_facts))
+
+
+def _score_query_evidence_facts(text: str, analysis: QueryAnalysis) -> int:
+    """질문 subject와 intent가 같은 line/section에서 만난 구조화 근거에 가산점을 준다."""
+    facts = _extract_query_evidence_fact_lines(text, analysis, max_facts=5)
+    if not facts:
+        return 0
+    base_score = 140 if analysis.intent in STRICT_LOCAL_EVIDENCE_INTENTS else 90
+    return base_score + min(len(facts) - 1, 4) * 25
 
 
 def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analysis: QueryAnalysis) -> str:
@@ -3011,8 +3190,10 @@ def _format_rerank_candidate(
     subject_score = _score_subject_match(search_text, analysis)
     intent_score = _score_intent_evidence(search_text, analysis)
     heading_score = _score_heading_match(search_text, analysis)
+    evidence_fact_score = _score_query_evidence_facts(doc, analysis)
     runtime_table_fact_score = _best_runtime_table_fact_score(meta, question)
-    rerank_score = subject_score + intent_score + heading_score + runtime_table_fact_score
+    rerank_score = subject_score + intent_score + heading_score + evidence_fact_score + runtime_table_fact_score
+    query_evidence_facts = _extract_query_evidence_fact_lines(doc, analysis, max_facts=5)
     matched_table_facts = meta.get("matched_table_facts", [])
     if isinstance(matched_table_facts, str) and matched_table_facts:
         matched_table_facts = [matched_table_facts]
@@ -3030,9 +3211,11 @@ def _format_rerank_candidate(
             "subject_match": subject_score,
             "intent_evidence": intent_score,
             "heading_match": heading_score,
+            "query_evidence": evidence_fact_score,
             "runtime_table_fact": runtime_table_fact_score,
             "rerank_total": rerank_score,
         },
+        "query_evidence_facts": query_evidence_facts,
         "matched_table_facts": matched_table_facts,
     })
     return formatted
@@ -3151,9 +3334,19 @@ def _trace_query_retrieval(
         question,
         analysis,
     )
-    final_docs = reranked_docs[:top_k]
-    final_metadatas = reranked_metadatas[:top_k]
-    final_ids = reranked_ids[:top_k]
+    focused_docs, focused_metadatas, focused_ids = _focus_candidates_with_query_evidence(
+        reranked_docs,
+        reranked_metadatas,
+        reranked_ids,
+        analysis,
+    )
+    after_evidence_focus_candidates = [
+        _format_rerank_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, False)
+        for index, (doc, meta, chunk_id) in enumerate(zip(focused_docs, focused_metadatas, focused_ids))
+    ]
+    final_docs = focused_docs[:top_k]
+    final_metadatas = focused_metadatas[:top_k]
+    final_ids = focused_ids[:top_k]
     context = _build_context(final_docs, final_metadatas, final_ids, analysis) if final_docs else ""
     prompt = _build_rag_prompt(system_prompt, context, question) if final_docs else ""
     final_candidates = [
@@ -3167,7 +3360,7 @@ def _trace_query_retrieval(
             analysis,
             index < top_k,
         )
-        for index, (doc, meta, chunk_id) in enumerate(zip(reranked_docs, reranked_metadatas, reranked_ids))
+        for index, (doc, meta, chunk_id) in enumerate(zip(focused_docs, focused_metadatas, focused_ids))
     ]
 
     logger.info(
@@ -3209,6 +3402,7 @@ def _trace_query_retrieval(
             "table_fact_candidates": [_format_table_fact_candidate(candidate) for candidate in table_fact_candidates],
             "expanded_candidates": expanded_candidates,
             "after_table_priority_candidates": after_table_priority_candidates,
+            "after_evidence_focus_candidates": after_evidence_focus_candidates,
             "final_candidates": final_candidates,
         },
         "final_context": context,
@@ -3267,6 +3461,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     metadatas = _attach_runtime_table_facts(question, docs, metadatas)
     docs, metadatas, ids = _prioritize_query_results(docs, metadatas, ids, question)
     docs, metadatas, ids = _rerank_by_query_analysis(docs, metadatas, ids, question, analysis)
+    docs, metadatas, ids = _focus_candidates_with_query_evidence(docs, metadatas, ids, analysis)
     docs = docs[:top_k]
     metadatas = metadatas[:top_k]
     ids = ids[:top_k]
