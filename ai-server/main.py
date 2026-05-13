@@ -1812,7 +1812,8 @@ MANDATORY_RAG_PROMPT = (
     "7. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
     "8. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
     "9. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
-    "10. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다."
+    "10. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다.\n"
+    "11. '제공된 문서에서는 확인할 수 없습니다.'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."
 )
 
 
@@ -1846,18 +1847,23 @@ QUERY_WEAK_SUBJECT_TERMS = {
 QUERY_TABLE_INTENT_TERMS = {
     "값", "수치", "공식", "수식", "상수", "계수", "인원", "정원", "모집", "모집인원", "모집정원",
     "점수", "가산점", "등급", "기간", "날짜", "일정", "서류", "자격", "학과", "과목", "항목",
+    "복장", "상의", "하의", "신발",
 }
 
 TABLE_STATISTIC_TERMS = {"결과", "평균", "최저", "최고", "경쟁", "경쟁률", "예비", "순위", "등급"}
 BM25_K1 = 1.5
 BM25_B = 0.75
 KIWI_SEARCH_TAG_PREFIXES = ("NN", "SL", "SN", "XR")
-INTENT_PRIORITY = ("location", "time", "cost", "documents", "eligibility", "count", "schedule", "method", "formula", "list")
+INTENT_PRIORITY = (
+    "location", "time", "cost", "attire", "documents",
+    "eligibility", "count", "schedule", "method", "formula", "list",
+)
 INTENT_QUERY_TERMS = {
     "list": {"무엇", "뭐", "무슨", "어떤", "목록", "종류", "있어", "있나요", "있습니까", "포함"},
     "location": {"어디", "위치", "장소", "주소", "소재지", "몇층", "층", "호관", "찾아오"},
     "time": {"시간", "이용시간", "운영시간", "언제", "몇시", "기간", "평일", "주말", "공휴일", "방학"},
     "cost": {"비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료"},
+    "attire": {"복장", "옷", "상의", "하의", "신발", "티셔츠", "스타킹", "단화"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "준비물"},
     "eligibility": {"자격", "지원자격", "대상", "조건", "요건"},
     "count": {"인원", "정원", "모집인원", "모집정원", "몇명", "명"},
@@ -1870,6 +1876,7 @@ INTENT_EVIDENCE_TERMS = {
     "location": {"위치", "장소", "주소", "소재지", "호관", "층", "도로", "길", "정문", "후문", "옆", "앞", "뒤", "내", "근처", "캠퍼스"},
     "time": {"시간", "이용", "이용시간", "운영시간", "기간", "평일", "주말", "공휴일", "방학", "중식", "휴무", "운영"},
     "cost": {"비용", "금액", "요금", "가격", "납부", "원", "무료", "환불"},
+    "attire": {"복장", "수험생", "상의", "하의", "신발", "티셔츠", "스타킹", "단화", "바지", "스커트"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "발급", "원본", "사본"},
     "eligibility": {"자격", "대상", "조건", "요건", "해당자", "지원"},
     "count": {"인원", "정원", "모집", "모집인원", "모집정원", "명", "합계", "총"},
@@ -1892,6 +1899,10 @@ INTENT_EVIDENCE_PATTERNS = {
         r"\d[\d,]*\s*원",
         r"(무료|비용|금액|요금)",
     ],
+    "attire": [
+        r"(상의|하의|신발)\s*[:：]",
+        r"(흰색\s*반팔\s*티셔츠|스커트|스타킹|단정한\s*바지|단화)",
+    ],
     "count": [
         r"\d[\d,]*\s*명",
         r"(모집\s*정원|모집\s*인원|합계|총)\s*[=:]?\s*\d+",
@@ -1907,8 +1918,29 @@ QUERY_NON_SUBJECT_PATTERNS = (
     r"^(어디|언제|무엇|뭐|어떤|무슨|어떻게)(.*)?$",
     r"^(있어|있나요|있습니까|돼|되나요|될까|인가요)$",
 )
-STRICT_LOCAL_EVIDENCE_INTENTS = {"location", "time", "cost", "count"}
-EVIDENCE_FOCUSED_INTENTS = {"location", "time", "cost", "count", "list"}
+STRICT_LOCAL_EVIDENCE_INTENTS = {"location", "time", "cost", "count", "attire"}
+EVIDENCE_FOCUSED_INTENTS = {
+    "location", "time", "cost", "count", "list", "attire",
+    "documents", "eligibility", "method", "schedule", "formula",
+}
+TABLE_BRIDGE_EVIDENCE_INTENTS = {
+    "attire", "documents", "eligibility", "count", "method", "schedule", "time", "cost", "location", "formula",
+}
+TABLE_DIRECT_ROW_ATTRIBUTE_INTENTS = {"count", "formula"}
+INTENT_DEFAULT_LABELS = {
+    "attire": "복장",
+    "documents": "준비물/서류",
+    "eligibility": "자격",
+    "count": "인원",
+    "method": "방법",
+    "schedule": "일정",
+    "time": "시간",
+    "cost": "비용",
+    "location": "위치",
+    "formula": "공식",
+}
+TABLE_BRIDGE_CONTEXT_LABEL_TERMS = ("면접", "정시", "수시1차", "수시2차", "수시")
+TABLE_FACT_LABEL_KEYS = {"구분", "분류", "유형"}
 
 
 @dataclass(frozen=True)
@@ -2353,9 +2385,303 @@ def _is_table_value_question(question: str) -> bool:
     return bool(subject_terms and intent_terms)
 
 
-def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[dict]) -> list[dict]:
+def _get_matched_table_facts(meta: dict) -> list[str]:
+    """runtime metadata에 누적된 table_fact 목록을 정규화해 반환한다."""
+    matched_table_facts = meta.get("matched_table_facts", "")
+    if isinstance(matched_table_facts, list):
+        return [str(fact).strip() for fact in matched_table_facts if str(fact).strip()]
+    if matched_table_facts:
+        return [str(matched_table_facts).strip()]
+    return []
+
+
+def _append_query_evidence_fact(meta: dict, fact_text: str) -> dict:
+    """질문에 직접 답할 수 있도록 재구성한 evidence fact를 runtime metadata에 누적한다."""
+    if not fact_text.strip():
+        return meta
+
+    next_meta = dict(meta)
+    existing = next_meta.get("query_evidence_facts")
+    if isinstance(existing, list):
+        if fact_text not in existing:
+            existing.append(fact_text)
+        next_meta["query_evidence_facts"] = existing
+    elif existing:
+        if fact_text != existing:
+            next_meta["query_evidence_facts"] = [str(existing), fact_text]
+    else:
+        next_meta["query_evidence_facts"] = [fact_text]
+    return next_meta
+
+
+def _get_query_evidence_facts_from_meta(meta: dict) -> list[str]:
+    """metadata에 저장된 query evidence fact 목록을 반환한다."""
+    evidence_facts = meta.get("query_evidence_facts", "")
+    if isinstance(evidence_facts, list):
+        return [str(fact).strip() for fact in evidence_facts if str(fact).strip()]
+    if evidence_facts:
+        return [str(evidence_facts).strip()]
+    return []
+
+
+def _extract_table_fact_row_subject(fact: str) -> str:
+    """row summary fact에서 행 주어를 추출한다."""
+    match = re.search(r":\s*(.+?)\s*행 정보는", fact)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def _extract_table_fact_pairs(fact: str) -> list[tuple[str, str]]:
+    """row summary fact의 key=value 쌍을 분리한다."""
+    match = re.search(r"행 정보는\s*(.+?)(?:이다\.?$|$)", fact)
+    if not match:
+        return []
+
+    pairs: list[tuple[str, str]] = []
+    for part in match.group(1).split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        key = key.strip()
+        value = re.sub(r"\s*이다\.?$", "", value.strip())
+        if key and value:
+            pairs.append((key, value))
+    return pairs
+
+
+def _looks_like_attire_value(text: str) -> bool:
+    """복장 답변으로 쓸 수 있는 실제 착용 항목이 들어 있는지 판단한다."""
+    normalized = text.lower()
+    return any(term in normalized for term in ("상의", "하의", "신발", "티셔츠", "스커트", "스타킹", "바지", "단화"))
+
+
+def _table_fact_has_attire_answer(fact: str) -> bool:
+    """table_fact가 복장 행 또는 복장 값을 담고 있는지 판단한다."""
+    row_subject = _extract_table_fact_row_subject(fact).lower()
+    if "복장" in row_subject and _looks_like_attire_value(fact):
+        return True
+    for key, value in _extract_table_fact_pairs(fact):
+        pair_text = f"{key} {value}".lower()
+        if "복장" in pair_text and _looks_like_attire_value(pair_text):
+            return True
+        if _looks_like_attire_value(value):
+            return True
+    return False
+
+
+def _extract_attire_value_from_table_fact(fact: str) -> str:
+    """복장 table_fact에서 답변에 사용할 착용 항목 값을 추출한다."""
+    candidates: list[str] = []
+    for key, value in _extract_table_fact_pairs(fact):
+        if "구분" in key and "복장" in value and not _looks_like_attire_value(value):
+            continue
+        if _looks_like_attire_value(value):
+            candidates.append(value)
+
+    raw_value = " ".join(candidates) if candidates else fact
+    raw_value = raw_value.replace("<br>", " ")
+    raw_value = re.sub(r"\s+", " ", raw_value).strip()
+    raw_value = re.sub(r"^\s*-\s*", "", raw_value)
+    raw_value = re.sub(r"\s+-\s*(상의|하의|신발)\s*[:：]\s*", r"; \1: ", raw_value)
+    raw_value = re.sub(r"^(상의|하의|신발)\s*[:：]\s*", r"\1: ", raw_value)
+    return raw_value.strip(" ;")
+
+
+def _table_bridge_attribute_terms(analysis: QueryAnalysis) -> set[str]:
+    """표 관계 resolver에서 속성 행/열을 찾을 때 사용할 intent 표현을 만든다."""
+    if not analysis.intent:
+        return set()
+
+    terms = set(INTENT_QUERY_TERMS.get(analysis.intent, set()))
+    terms.update(INTENT_EVIDENCE_TERMS.get(analysis.intent, set()))
+    terms.update(term for term in analysis.context_terms if term in QUERY_TABLE_INTENT_TERMS)
+    default_label = INTENT_DEFAULT_LABELS.get(analysis.intent)
+    if default_label:
+        terms.update(part for part in re.findall(r"[0-9A-Za-z가-힣]+", default_label) if len(part) >= 2)
+    if analysis.intent == "count":
+        terms.discard("모집")
+    return {term for term in terms if len(term) >= 2 and term not in QUERY_COMPOUND_FUNCTION_TERMS}
+
+
+def _table_fact_matches_query_attribute(fact: str, analysis: QueryAnalysis) -> bool:
+    """table_fact가 질문이 묻는 속성 행/열/값을 포함하는지 판단한다."""
+    if not analysis.intent:
+        return False
+    if analysis.intent == "attire":
+        return _table_fact_has_attire_answer(fact)
+
+    attribute_terms = _table_bridge_attribute_terms(analysis)
+    if not attribute_terms:
+        return False
+
+    row_subject = _extract_table_fact_row_subject(fact)
+    if any(_term_in_text(term, row_subject) for term in attribute_terms):
+        return True
+
+    for key, value in _extract_table_fact_pairs(fact):
+        pair_text = f"{key} {value}"
+        if any(_term_in_text(term, pair_text) for term in attribute_terms):
+            return True
+        if _line_has_intent_evidence(value, analysis):
+            return True
+    return False
+
+
+def _is_table_label_pair(key: str, value: str, analysis: QueryAnalysis) -> bool:
+    """표의 구분/분류용 셀처럼 답변값으로 쓰면 안 되는 pair를 제외한다."""
+    normalized_key = re.sub(r"\s+", "", key.lower())
+    normalized_value = re.sub(r"\s+", "", value.lower())
+    if normalized_key in TABLE_FACT_LABEL_KEYS:
+        return True
+    if normalized_key.endswith("구분"):
+        return True
+    if normalized_value in {"수시", "정시", "수시1차", "수시2차"}:
+        return True
+    if analysis.intent and normalized_value in INTENT_QUERY_TERMS.get(analysis.intent, set()):
+        return True
+    return False
+
+
+def _clean_table_fact_answer_value(value: str) -> str:
+    """table_fact의 value를 답변 근거로 읽기 좋게 정리한다."""
+    cleaned = value.replace("<br>", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"^\s*-\s*", "", cleaned)
+    cleaned = re.sub(r"\s+-\s*", "; ", cleaned)
+    return cleaned.strip(" ;")
+
+
+def _extract_attribute_value_from_table_fact(fact: str, analysis: QueryAnalysis) -> str:
+    """질문 intent에 맞는 table_fact 값을 범용적으로 추출한다."""
+    if analysis.intent == "attire":
+        return _extract_attire_value_from_table_fact(fact)
+
+    pairs = _extract_table_fact_pairs(fact)
+    if not pairs:
+        return _clean_table_fact_answer_value(fact)
+
+    attribute_terms = _table_bridge_attribute_terms(analysis)
+    row_subject = _extract_table_fact_row_subject(fact)
+    row_is_attribute = any(_term_in_text(term, row_subject) for term in attribute_terms)
+    candidates: list[str] = []
+
+    for key, value in pairs:
+        if not value or _is_table_label_pair(key, value, analysis):
+            continue
+
+        key_matches_attribute = any(_term_in_text(term, key) for term in attribute_terms)
+        value_has_intent = _line_has_intent_evidence(value, analysis)
+        if row_is_attribute or key_matches_attribute or value_has_intent:
+            candidates.append(_clean_table_fact_answer_value(value))
+
+    if candidates:
+        return "; ".join(candidate for candidate in candidates if candidate)
+    return ""
+
+
+def _infer_table_bridge_attribute_label(attribute_fact: str, analysis: QueryAnalysis) -> str:
+    """질문과 속성 fact에서 evidence label에 넣을 속성명을 고른다."""
+    if not analysis.intent:
+        return "관련 정보"
+
+    if analysis.intent == "attire":
+        return "복장"
+
+    attribute_terms = _table_bridge_attribute_terms(analysis)
+    row_subject = _extract_table_fact_row_subject(attribute_fact)
+    for term in sorted(attribute_terms, key=len, reverse=True):
+        if _term_in_text(term, row_subject):
+            return row_subject
+
+    for key, value in _extract_table_fact_pairs(attribute_fact):
+        pair_text = f"{key} {value}"
+        for term in sorted(attribute_terms, key=len, reverse=True):
+            if _term_in_text(term, key):
+                return key
+            if _term_in_text(term, pair_text):
+                return term
+
+    return INTENT_DEFAULT_LABELS.get(analysis.intent, "관련 정보")
+
+
+def _build_table_bridge_label(subject_label: str, attribute_label: str, analysis: QueryAnalysis) -> str:
+    """subject와 속성명을 합쳐 LLM에 줄 직접 근거 label을 만든다."""
+    parts = [subject_label.strip()] if subject_label.strip() else []
+    for term in TABLE_BRIDGE_CONTEXT_LABEL_TERMS:
+        if term in analysis.context_terms and not any(term in part for part in parts + [attribute_label]):
+            parts.append(term)
+            break
+    if attribute_label.strip():
+        parts.append(attribute_label.strip())
+    return " ".join(parts).strip() or INTENT_DEFAULT_LABELS.get(analysis.intent or "", "관련 정보")
+
+
+def _extract_subject_label_from_table_facts(facts: list[str], analysis: QueryAnalysis) -> str:
+    """질문 subject와 맞는 표 fact에서 답변 label로 쓸 원문 표현을 추출한다."""
+    query_terms = {
+        term for term in (analysis.primary_terms | analysis.subject_terms)
+        if len(term) >= 2 and term not in QUERY_WEAK_SUBJECT_TERMS
+    }
+    subject_facts = [fact for fact in facts if _subject_strongly_matches_text(fact, analysis)]
+    candidates: list[tuple[int, int, str]] = []
+    for fact in subject_facts:
+        for token in re.findall(r"[0-9A-Za-z가-힣]+", fact):
+            normalized = re.sub(r"(이다|입니다)$", "", token.strip())
+            if len(normalized) < 2:
+                continue
+            matched_terms = [term for term in query_terms if _term_in_text(term, normalized)]
+            if matched_terms:
+                candidates.append((sum(len(term) for term in matched_terms), len(normalized), normalized))
+
+    if candidates:
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return candidates[0][2]
+
+    for term in sorted(query_terms, key=len, reverse=True):
+        if term not in INTENT_EVIDENCE_TERMS.get(analysis.intent or "", set()):
+            return term
+    return ""
+
+
+def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis) -> list[str]:
+    """같은 표 안의 subject 행과 속성 행을 조합해 질문에 직접 답하는 fact를 만든다."""
+    if analysis.intent not in TABLE_BRIDGE_EVIDENCE_INTENTS or not facts:
+        return []
+
+    subject_related = any(_subject_strongly_matches_text(fact, analysis) for fact in facts)
+    if not subject_related:
+        return []
+
+    attribute_facts = []
+    for fact in facts:
+        if not _table_fact_matches_query_attribute(fact, analysis):
+            continue
+        if analysis.intent in TABLE_DIRECT_ROW_ATTRIBUTE_INTENTS and not _subject_strongly_matches_text(fact, analysis):
+            continue
+        attribute_facts.append(fact)
+    if not attribute_facts:
+        return []
+
+    subject_label = _extract_subject_label_from_table_facts(facts, analysis)
+    evidence_facts: list[str] = []
+    seen_values: set[str] = set()
+
+    for fact in attribute_facts:
+        value = _extract_attribute_value_from_table_fact(fact, analysis)
+        if not value or value in seen_values:
+            continue
+        attribute_label = _infer_table_bridge_attribute_label(fact, analysis)
+        label = _build_table_bridge_label(subject_label, attribute_label, analysis)
+        seen_values.add(value)
+        evidence_facts.append(f"- {label}: {value}")
+    return evidence_facts
+
+
+def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[dict], analysis: QueryAnalysis | None = None) -> list[dict]:
     """검색된 raw 청크 안의 표에서 질문과 맞는 fact를 런타임 metadata에 붙인다."""
-    if not _is_table_value_question(question):
+    should_extract_bridge_evidence = analysis is not None and analysis.intent in TABLE_BRIDGE_EVIDENCE_INTENTS
+    if not _is_table_value_question(question) and not should_extract_bridge_evidence:
         return metadatas
 
     updated_metadatas: list[dict] = []
@@ -2365,8 +2691,14 @@ def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[
             updated_metadatas.append(runtime_meta)
             continue
 
+        extracted_facts = _extract_table_facts(doc, runtime_meta)
+        if analysis is not None:
+            bridge_source_facts = _get_matched_table_facts(runtime_meta) + extracted_facts
+            for evidence_fact in _derive_query_table_evidence_facts(bridge_source_facts, analysis):
+                runtime_meta = _append_query_evidence_fact(runtime_meta, evidence_fact)
+
         scored_facts: list[tuple[int, str]] = []
-        for fact in _extract_table_facts(doc, runtime_meta):
+        for fact in extracted_facts:
             score = _score_table_fact_for_question(fact, question)
             if score > 0:
                 scored_facts.append((score, fact))
@@ -2381,13 +2713,7 @@ def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[
 
 def _best_runtime_table_fact_score(meta: dict, question: str) -> int:
     """runtime metadata에 붙은 table_fact 중 질문과 가장 관련 높은 점수를 반환한다."""
-    matched_table_facts = meta.get("matched_table_facts", "")
-    if isinstance(matched_table_facts, list):
-        facts = [str(fact) for fact in matched_table_facts]
-    elif matched_table_facts:
-        facts = [str(matched_table_facts)]
-    else:
-        facts = []
+    facts = _get_matched_table_facts(meta)
     return max((_score_table_fact_for_question(fact, question) for fact in facts), default=0)
 
 
@@ -2477,7 +2803,7 @@ def _score_candidate_for_query(doc: str, meta: dict, question: str, analysis: Qu
     score += _score_subject_match(search_text, analysis)
     score += _score_intent_evidence(search_text, analysis)
     score += _score_heading_match(search_text, analysis)
-    score += _score_query_evidence_facts(doc, analysis)
+    score += _score_query_evidence_facts(doc, analysis, meta)
     score += _best_runtime_table_fact_score(meta or {}, question)
     return score
 
@@ -2528,7 +2854,7 @@ def _focus_candidates_with_query_evidence(
     evidence_items: list[tuple[str, dict, str]] = []
     fallback_items: list[tuple[str, dict, str]] = []
     for doc, meta, chunk_id in zip(docs, metadatas, ids):
-        if _extract_query_evidence_fact_lines(doc, analysis, max_facts=1):
+        if _extract_query_evidence_fact_lines(doc, analysis, max_facts=1, meta=meta or {}):
             evidence_items.append((doc, meta or {}, chunk_id))
         else:
             fallback_items.append((doc, meta or {}, chunk_id))
@@ -2695,6 +3021,9 @@ def _line_has_intent_evidence(line: str, analysis: QueryAnalysis) -> bool:
         return False
 
     normalized_line = line.lower()
+    if analysis.intent == "attire":
+        return _looks_like_attire_value(normalized_line)
+
     if any(term in normalized_line for term in INTENT_EVIDENCE_TERMS.get(analysis.intent, set())):
         return True
 
@@ -2727,6 +3056,17 @@ def _subject_matches_text(text: str, analysis: QueryAnalysis, allow_single_weak:
     if allow_single_weak and len(subject_terms) == 1:
         return any(_term_in_text(term, text) for term in subject_terms)
     return False
+
+
+def _subject_strongly_matches_text(text: str, analysis: QueryAnalysis) -> bool:
+    """복합 subject가 있으면 그 표현을 우선해 비슷한 다른 행을 제외한다."""
+    primary_terms = {
+        term for term in analysis.primary_terms
+        if len(term) >= 2 and term not in QUERY_WEAK_SUBJECT_TERMS
+    }
+    if primary_terms:
+        return any(_term_in_text(term, text) for term in primary_terms)
+    return _subject_matches_text(text, analysis)
 
 
 def _line_matches_query_subject(line: str, analysis: QueryAnalysis) -> bool:
@@ -2827,15 +3167,30 @@ def _extract_list_section_evidence_fact_lines(text: str, analysis: QueryAnalysis
     return []
 
 
-def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_facts: int = 5) -> list[str]:
+def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_facts: int = 5, meta: dict | None = None) -> list[str]:
     """검색된 chunk에서 질문 subject와 intent가 직접 만나는 항목 근거 line들을 추출한다."""
     if not analysis.intent:
         return []
 
-    facts: list[str] = _extract_list_section_evidence_fact_lines(text, analysis, max_facts)
     seen: set[str] = set()
-    for fact in facts:
+    facts: list[str] = []
+
+    for fact in _get_query_evidence_facts_from_meta(meta or {}):
+        if fact in seen:
+            continue
         seen.add(fact)
+        facts.append(fact)
+        if len(facts) >= max_facts:
+            return facts
+
+    list_facts = _extract_list_section_evidence_fact_lines(text, analysis, max_facts)
+    for fact in list_facts:
+        if fact in seen:
+            continue
+        seen.add(fact)
+        facts.append(fact)
+        if len(facts) >= max_facts:
+            return facts
 
     for line in (line.strip() for line in text.splitlines() if line.strip()):
         if _markdown_heading_level(line) is not None:
@@ -2854,14 +3209,14 @@ def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_f
     return facts
 
 
-def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts: int = 5) -> str:
+def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts: int = 5, meta: dict | None = None) -> str:
     """검색된 chunk에서 질문 subject와 intent가 직접 만나는 항목 근거를 추출한다."""
-    return "\n".join(_extract_query_evidence_fact_lines(text, analysis, max_facts))
+    return "\n".join(_extract_query_evidence_fact_lines(text, analysis, max_facts, meta))
 
 
-def _score_query_evidence_facts(text: str, analysis: QueryAnalysis) -> int:
+def _score_query_evidence_facts(text: str, analysis: QueryAnalysis, meta: dict | None = None) -> int:
     """질문 subject와 intent가 같은 line/section에서 만난 구조화 근거에 가산점을 준다."""
-    facts = _extract_query_evidence_fact_lines(text, analysis, max_facts=5)
+    facts = _extract_query_evidence_fact_lines(text, analysis, max_facts=5, meta=meta)
     if not facts:
         return 0
     base_score = 140 if analysis.intent in STRICT_LOCAL_EVIDENCE_INTENTS else 90
@@ -2886,16 +3241,12 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
         metadata_lines.append(f"섹션: {header_path}")
 
     metadata = "\n".join(metadata_lines)
-    evidence_facts = _extract_query_evidence_facts(doc, analysis)
+    evidence_facts = _extract_query_evidence_facts(doc, analysis, meta=meta)
     relevant_excerpt = _select_relevant_excerpt(doc, analysis.primary_terms)
     if not relevant_excerpt:
         relevant_excerpt = _select_relevant_excerpt(doc, analysis.context_terms)
-    matched_table_facts = meta.get("matched_table_facts", "")
-    fact_text = ""
-    if isinstance(matched_table_facts, list):
-        fact_text = "\n".join(str(fact).strip() for fact in matched_table_facts if str(fact).strip())
-    elif matched_table_facts:
-        fact_text = str(matched_table_facts).strip()
+    matched_table_facts = _get_matched_table_facts(meta)
+    fact_text = "\n".join(matched_table_facts)
 
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
@@ -3190,15 +3541,11 @@ def _format_rerank_candidate(
     subject_score = _score_subject_match(search_text, analysis)
     intent_score = _score_intent_evidence(search_text, analysis)
     heading_score = _score_heading_match(search_text, analysis)
-    evidence_fact_score = _score_query_evidence_facts(doc, analysis)
+    evidence_fact_score = _score_query_evidence_facts(doc, analysis, meta)
     runtime_table_fact_score = _best_runtime_table_fact_score(meta, question)
     rerank_score = subject_score + intent_score + heading_score + evidence_fact_score + runtime_table_fact_score
-    query_evidence_facts = _extract_query_evidence_fact_lines(doc, analysis, max_facts=5)
-    matched_table_facts = meta.get("matched_table_facts", [])
-    if isinstance(matched_table_facts, str) and matched_table_facts:
-        matched_table_facts = [matched_table_facts]
-    elif not isinstance(matched_table_facts, list):
-        matched_table_facts = []
+    query_evidence_facts = _extract_query_evidence_fact_lines(doc, analysis, max_facts=5, meta=meta)
+    matched_table_facts = _get_matched_table_facts(meta)
 
     trace_key = _candidate_parent_key(str(chunk_id), meta)
     retrieval = trace_by_id.get(str(chunk_id)) or trace_by_id.get(trace_key) or {"retrieval_methods": []}
@@ -3310,7 +3657,7 @@ def _trace_query_retrieval(
         ids = [candidate["chunk_id"] for candidate in table_fact_candidates] + ids
 
     docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
-    metadatas = _attach_runtime_table_facts(question, docs, metadatas)
+    metadatas = _attach_runtime_table_facts(question, docs, metadatas, analysis)
     expanded_candidates = [
         _format_rerank_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, False)
         for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids))
@@ -3458,7 +3805,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         metadatas = lexical_metadatas + metadatas
         ids = lexical_ids + ids
     docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
-    metadatas = _attach_runtime_table_facts(question, docs, metadatas)
+    metadatas = _attach_runtime_table_facts(question, docs, metadatas, analysis)
     docs, metadatas, ids = _prioritize_query_results(docs, metadatas, ids, question)
     docs, metadatas, ids = _rerank_by_query_analysis(docs, metadatas, ids, question, analysis)
     docs, metadatas, ids = _focus_candidates_with_query_evidence(docs, metadatas, ids, analysis)
