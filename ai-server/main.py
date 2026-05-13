@@ -16,7 +16,13 @@ import asyncio
 import logging
 import math
 import time
+from dataclasses import dataclass
 from threading import Lock
+
+try:
+    from kiwipiepy import Kiwi
+except ImportError:
+    Kiwi = None
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -110,6 +116,8 @@ else:
 collection = client.get_or_create_collection("documents")
 
 _progress_lock = Lock()
+_kiwi_lock = Lock()
+_kiwi_analyzer = None
 _document_progress: dict[int, dict] = {}
 
 logger.info(
@@ -1787,6 +1795,72 @@ QUERY_TABLE_INTENT_TERMS = {
 TABLE_STATISTIC_TERMS = {"결과", "평균", "최저", "최고", "경쟁", "경쟁률", "예비", "순위", "등급"}
 BM25_K1 = 1.5
 BM25_B = 0.75
+KIWI_SEARCH_TAG_PREFIXES = ("NN", "SL", "SN", "XR")
+INTENT_PRIORITY = ("location", "time", "cost", "documents", "eligibility", "count", "schedule", "method", "formula", "list")
+INTENT_QUERY_TERMS = {
+    "list": {"무엇", "뭐", "무슨", "어떤", "목록", "종류", "있어", "있나요", "있습니까", "포함"},
+    "location": {"어디", "위치", "장소", "주소", "소재지", "몇층", "층", "호관", "찾아오"},
+    "time": {"시간", "이용시간", "운영시간", "언제", "몇시", "기간", "평일", "주말", "공휴일", "방학"},
+    "cost": {"비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료"},
+    "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "준비물"},
+    "eligibility": {"자격", "지원자격", "대상", "조건", "요건"},
+    "count": {"인원", "정원", "모집인원", "모집정원", "몇명", "명"},
+    "method": {"방법", "절차", "어떻게", "신청", "진행", "처리"},
+    "schedule": {"일정", "날짜", "기간", "접수", "발표", "마감"},
+    "formula": {"공식", "수식", "계산", "산식"},
+}
+INTENT_EVIDENCE_TERMS = {
+    "list": {"시설", "목록", "종류", "항목", "포함", "운영", "이용"},
+    "location": {"위치", "장소", "주소", "소재지", "호관", "층", "도로", "길", "정문", "후문", "옆", "앞", "뒤", "내", "근처", "캠퍼스"},
+    "time": {"시간", "이용", "이용시간", "운영시간", "기간", "평일", "주말", "공휴일", "방학", "중식", "휴무", "운영"},
+    "cost": {"비용", "금액", "요금", "가격", "납부", "원", "무료", "환불"},
+    "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "발급", "원본", "사본"},
+    "eligibility": {"자격", "대상", "조건", "요건", "해당자", "지원"},
+    "count": {"인원", "정원", "모집", "모집인원", "모집정원", "명", "합계", "총"},
+    "method": {"방법", "절차", "신청", "제출", "접수", "처리", "승인"},
+    "schedule": {"일정", "날짜", "기간", "접수", "발표", "마감", "등록"},
+    "formula": {"공식", "수식", "계산", "산식", "계수", "상수", "값"},
+}
+INTENT_EVIDENCE_PATTERNS = {
+    "location": [
+        r"\d+\s*호관",
+        r"\d+\s*층",
+        r"(정문|후문|도로|길|로|동|번지)\s*(앞|옆|뒤|근처|내)?",
+    ],
+    "time": [
+        r"\d{1,2}\s*:\s*\d{2}",
+        r"\d{1,2}\s*시",
+        r"(평일|주말|공휴일|방학|중식|휴무)",
+    ],
+    "cost": [
+        r"\d[\d,]*\s*원",
+        r"(무료|비용|금액|요금)",
+    ],
+    "count": [
+        r"\d[\d,]*\s*명",
+        r"(모집\s*정원|모집\s*인원|합계|총)\s*[=:]?\s*\d+",
+    ],
+    "list": [
+        r"^\s*[-*]\s+",
+        r".+\s*:\s*.+",
+    ],
+}
+QUERY_NON_SUBJECT_PATTERNS = (
+    r"^(몇)?명(이야|인가요|인가|인지|입니까|이에요|예요)?$",
+    r"^(몇)?시(야|인가요|인가|인지|입니까|이에요|예요)?$",
+    r"^(어디|언제|무엇|뭐|어떤|무슨|어떻게)(.*)?$",
+    r"^(있어|있나요|있습니까|돼|되나요|될까|인가요)$",
+)
+
+
+@dataclass(frozen=True)
+class QueryAnalysis:
+    """검색 재정렬에 사용할 질문 분석 결과다."""
+    tokens: list[str]
+    subject_terms: set[str]
+    intent: str | None
+    primary_terms: set[str]
+    context_terms: set[str]
 
 
 def _format_page_label(meta: dict) -> str:
@@ -1824,7 +1898,11 @@ def _format_chunk_label(meta: dict, chunk_id: str) -> str:
 def _normalize_query_token(token: str) -> str:
     """조사와 어미가 붙은 질문 token을 검색 발췌용 핵심어로 정리한다."""
     normalized = token.strip().lower()
-    for suffix in ("으로", "에서", "에게", "한테", "부터", "까지", "은", "는", "이", "가", "을", "를", "의", "도", "만", "와", "과"):
+    for suffix in (
+        "에게는", "한테는", "에서는", "으로는", "로는", "에는",
+        "으로", "에서", "에게", "한테", "부터", "까지",
+        "은", "는", "이", "가", "을", "를", "의", "도", "만", "와", "과", "에", "로",
+    ):
         if len(normalized) > len(suffix) and normalized.endswith(suffix):
             return normalized[: -len(suffix)]
     return normalized
@@ -1926,8 +2004,20 @@ def _lookup_lexical_table_facts(question: str, limit: int = 5) -> tuple[list[str
     )
 
 
-def _tokenize_sparse_search(text: str) -> list[str]:
-    """BM25 검색에 사용할 token을 만든다."""
+def _get_kiwi():
+    """Kiwi 형태소 분석기를 lazy initialization으로 준비한다."""
+    global _kiwi_analyzer
+    if Kiwi is None:
+        return None
+    if _kiwi_analyzer is None:
+        with _kiwi_lock:
+            if _kiwi_analyzer is None:
+                _kiwi_analyzer = Kiwi()
+    return _kiwi_analyzer
+
+
+def _tokenize_sparse_search_fallback(text: str) -> list[str]:
+    """Kiwi를 사용할 수 없을 때 BM25 검색에 쓸 fallback token을 만든다."""
     tokens: list[str] = []
     for raw_token in re.findall(r"[0-9A-Za-z가-힣]+", text.lower()):
         normalized = _normalize_query_token(raw_token)
@@ -1936,6 +2026,88 @@ def _tokenize_sparse_search(text: str) -> list[str]:
                 continue
             tokens.append(token)
     return tokens
+
+
+def _tokenize_sparse_search(text: str) -> list[str]:
+    """한국어 형태소 분석 기반 BM25 token을 만든다."""
+    kiwi = _get_kiwi()
+    if kiwi is None:
+        return _tokenize_sparse_search_fallback(text)
+
+    tokens: list[str] = []
+    try:
+        analyzed_tokens = kiwi.tokenize(text, normalize_coda=True)
+    except Exception:
+        logger.exception("[query_tokenize] kiwi_failed")
+        return _tokenize_sparse_search_fallback(text)
+
+    for token in analyzed_tokens:
+        form = str(getattr(token, "form", "")).strip().lower()
+        tag = str(getattr(token, "tag", ""))
+        if len(form) < 2:
+            continue
+        if tag.startswith(KIWI_SEARCH_TAG_PREFIXES):
+            tokens.append(form)
+
+    if tokens:
+        return tokens
+    return _tokenize_sparse_search_fallback(text)
+
+
+def _detect_query_intent(question: str, tokens: list[str]) -> str | None:
+    """질문이 묻는 속성 intent를 보수적으로 분류한다."""
+    normalized_question = question.lower().replace(" ", "")
+    token_set = set(tokens)
+    for intent in INTENT_PRIORITY:
+        terms = INTENT_QUERY_TERMS.get(intent, set())
+        if token_set & terms:
+            return intent
+        if any(term in normalized_question for term in terms if len(term) >= 2):
+            return intent
+    return None
+
+
+def _is_non_subject_query_token(token: str, intent_terms: set[str]) -> bool:
+    """질문 기능어와 intent 표현을 subject 후보에서 제외한다."""
+    if token in QUERY_GENERIC_TERMS or token in intent_terms:
+        return True
+    if any(re.match(pattern, token) for pattern in QUERY_NON_SUBJECT_PATTERNS):
+        return True
+    if any(term in token for term in intent_terms if len(term) >= 2):
+        return True
+    return False
+
+
+def _analyze_query(question: str) -> QueryAnalysis:
+    """검색 후보 재정렬에 사용할 subject와 intent를 분석한다."""
+    tokens = _tokenize_sparse_search(question)
+    intent = _detect_query_intent(question, tokens)
+    intent_terms = set().union(*INTENT_QUERY_TERMS.values())
+    subject_exclusion_terms = set(intent_terms)
+    if intent and intent != "list":
+        subject_exclusion_terms.update(INTENT_EVIDENCE_TERMS.get(intent, set()))
+    subject_terms: set[str] = set()
+    for token in tokens:
+        normalized = _normalize_query_token(token)
+        candidate = normalized if len(normalized) >= 2 else token
+        if len(candidate) >= 2 and not _is_non_subject_query_token(candidate, subject_exclusion_terms):
+            subject_terms.add(candidate)
+    raw_terms = _extract_query_terms(question)
+    primary_terms = {
+        term for term in raw_terms
+        if len(term) >= 2 and not _is_non_subject_query_token(term, subject_exclusion_terms)
+    }
+    context_terms = set(tokens)
+    context_terms.update(raw_terms)
+    context_terms.update(subject_terms)
+    context_terms.update(primary_terms)
+    return QueryAnalysis(
+        tokens=tokens,
+        subject_terms=subject_terms,
+        intent=intent,
+        primary_terms=primary_terms,
+        context_terms={term for term in context_terms if len(term) >= 2},
+    )
 
 
 def _build_sparse_search_text(document: str, metadata: dict) -> str:
@@ -1985,9 +2157,9 @@ def _calculate_bm25_scores(query_tokens: list[str], corpus_tokens: list[list[str
     return scores
 
 
-def _lookup_bm25_raw_chunks(question: str, limit: int = 5) -> tuple[list[str], list[dict], list[str]]:
+def _lookup_bm25_raw_chunks(analysis: QueryAnalysis, limit: int = 5) -> tuple[list[str], list[dict], list[str]]:
     """BM25 sparse retrieval로 vector search가 놓친 raw chunk 후보를 보강한다."""
-    query_tokens = _tokenize_sparse_search(question)
+    query_tokens = analysis.tokens
     if not query_tokens:
         return [], [], []
 
@@ -2021,8 +2193,10 @@ def _lookup_bm25_raw_chunks(question: str, limit: int = 5) -> tuple[list[str], l
     candidates.sort(key=lambda candidate: (-candidate[0], candidate[1]))
     selected = candidates[:limit]
     logger.info(
-        "[query_bm25] query_tokens=%s candidates=%s selected=%s top_score=%s",
+        "[query_bm25] query_tokens=%s intent=%s subject_terms=%s candidates=%s selected=%s top_score=%s",
         ",".join(query_tokens) or "none",
+        analysis.intent or "none",
+        ",".join(sorted(analysis.subject_terms)) or "none",
         len(candidates),
         len(selected),
         _format_decimal(selected[0][0] if selected else None),
@@ -2076,6 +2250,123 @@ def _best_runtime_table_fact_score(meta: dict, question: str) -> int:
     else:
         facts = []
     return max((_score_table_fact_for_question(fact, question) for fact in facts), default=0)
+
+
+def _score_subject_match(text: str, analysis: QueryAnalysis) -> int:
+    """후보 청크가 질문 subject와 얼마나 직접적으로 맞는지 계산한다."""
+    if not analysis.subject_terms and not analysis.primary_terms:
+        return 0
+
+    normalized_text = text.lower()
+    score = 0
+    for term in analysis.primary_terms:
+        count = normalized_text.count(term)
+        if count > 0:
+            score += min(count, 4) * 18
+
+    matched = 0
+    for term in analysis.subject_terms:
+        count = normalized_text.count(term)
+        if count <= 0:
+            continue
+        matched += 1
+        score += min(count, 5) * 12
+
+    if matched == len(analysis.subject_terms):
+        score += 20
+    return score
+
+
+def _count_item_like_lines(text: str) -> int:
+    """목록형 답변에 도움이 되는 항목 line 개수를 계산한다."""
+    count = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if re.match(r"^[-*]\s+", stripped) or re.search(r"\S+\s*:\s*\S+", stripped):
+            count += 1
+    return count
+
+
+def _score_intent_evidence(text: str, analysis: QueryAnalysis) -> int:
+    """후보 청크가 질문 intent에 답할 증거 패턴을 포함하는지 계산한다."""
+    if not analysis.intent:
+        return 0
+
+    normalized_text = text.lower()
+    evidence_terms = INTENT_EVIDENCE_TERMS.get(analysis.intent, set())
+    score = sum(6 for term in evidence_terms if term in normalized_text)
+
+    for pattern in INTENT_EVIDENCE_PATTERNS.get(analysis.intent, []):
+        score += min(len(re.findall(pattern, normalized_text, flags=re.MULTILINE)), 5) * 8
+
+    if analysis.intent == "list":
+        score += min(_count_item_like_lines(text), 8) * 8
+    return score
+
+
+def _score_heading_match(text: str, analysis: QueryAnalysis) -> int:
+    """Markdown heading이 질문 subject 또는 intent와 직접 맞는지 계산한다."""
+    if not analysis.context_terms:
+        return 0
+
+    score = 0
+    for line in text.splitlines():
+        if _markdown_heading_level(line) is None:
+            continue
+        normalized_line = line.lower()
+        if any(term in normalized_line for term in analysis.primary_terms):
+            score += 40
+        if any(term in normalized_line for term in analysis.subject_terms):
+            score += 30
+        if analysis.intent and any(term in normalized_line for term in INTENT_EVIDENCE_TERMS.get(analysis.intent, set())):
+            score += 10
+    return score
+
+
+def _score_candidate_for_query(doc: str, meta: dict, question: str, analysis: QueryAnalysis) -> int:
+    """subject와 intent를 함께 고려해 검색 후보를 재정렬할 점수를 만든다."""
+    search_text = _build_sparse_search_text(doc, meta)
+    score = 0
+    score += _score_subject_match(search_text, analysis)
+    score += _score_intent_evidence(search_text, analysis)
+    score += _score_heading_match(search_text, analysis)
+    score += _best_runtime_table_fact_score(meta or {}, question)
+    return score
+
+
+def _rerank_by_query_analysis(
+    docs: list[str],
+    metadatas: list[dict],
+    ids: list[str],
+    question: str,
+    analysis: QueryAnalysis,
+) -> tuple[list[str], list[dict], list[str]]:
+    """질문 subject와 intent가 모두 맞는 후보를 앞쪽으로 재정렬한다."""
+    if not docs or (not analysis.subject_terms and not analysis.intent):
+        return docs, metadatas, ids
+
+    ranked: list[tuple[int, int, str, dict, str]] = []
+    for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids)):
+        meta = meta or {}
+        score = _score_candidate_for_query(doc, meta, question, analysis)
+        ranked.append((-score, index, doc, meta, chunk_id))
+
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    best_score = -ranked[0][0] if ranked else 0
+    logger.info(
+        "[query_rerank] intent=%s subject_terms=%s best_score=%s candidates=%s",
+        analysis.intent or "none",
+        ",".join(sorted(analysis.subject_terms)) or "none",
+        best_score,
+        len(ranked),
+    )
+    return (
+        [doc for _, _, doc, _, _ in ranked],
+        [meta for _, _, _, meta, _ in ranked],
+        [chunk_id for _, _, _, _, chunk_id in ranked],
+    )
 
 
 def _prioritize_query_results(docs: list[str], metadatas: list[dict], ids: list[str], question: str) -> tuple[list[str], list[dict], list[str]]:
@@ -2139,6 +2430,53 @@ def _select_heading_section_excerpt(lines: list[str], query_terms: set[str], max
     return []
 
 
+def _find_parent_heading_index(lines: list[str], line_index: int) -> int | None:
+    """line이 속한 가장 가까운 이전 Markdown heading 위치를 찾는다."""
+    for index in range(line_index - 1, -1, -1):
+        if _markdown_heading_level(lines[index]) is not None:
+            return index
+    return None
+
+
+def _find_next_heading_index(lines: list[str], line_index: int) -> int:
+    """line 이후에 나오는 다음 Markdown heading 위치를 찾는다."""
+    for index in range(line_index + 1, len(lines)):
+        if _markdown_heading_level(lines[index]) is not None:
+            return index
+    return len(lines)
+
+
+def _select_item_with_parent_excerpt(lines: list[str], query_terms: set[str], window: int, max_lines: int) -> list[str]:
+    """질문어가 항목 line에 걸리면 부모 heading과 해당 항목 주변을 함께 발췌한다."""
+    if not query_terms:
+        return []
+
+    for index, line in enumerate(lines):
+        if _markdown_heading_level(line) is not None:
+            continue
+
+        normalized_line = line.lower()
+        if not any(term in normalized_line for term in query_terms):
+            continue
+
+        selected: list[str] = []
+        parent_heading_index = _find_parent_heading_index(lines, index)
+        section_start = parent_heading_index + 1 if parent_heading_index is not None else 0
+        section_end = _find_next_heading_index(lines, index)
+        if parent_heading_index is not None:
+            selected.append(lines[parent_heading_index])
+
+        start = max(section_start, index - window)
+        end = min(section_end, index + window + 1)
+        for candidate_index in range(start, end):
+            candidate = lines[candidate_index]
+            if _markdown_heading_level(candidate) is not None:
+                continue
+            selected.append(candidate)
+        return selected[:max_lines]
+    return []
+
+
 def _select_relevant_excerpt(text: str, query_terms: set[str], window: int = 2, max_lines: int = 18) -> str:
     """청크 안에서 질문 핵심어와 가까운 실제 line들을 골라 LLM 주의 집중용 발췌를 만든다."""
     if not query_terms:
@@ -2148,6 +2486,10 @@ def _select_relevant_excerpt(text: str, query_terms: set[str], window: int = 2, 
     heading_excerpt = _select_heading_section_excerpt(lines, query_terms, max_lines)
     if heading_excerpt:
         return "\n".join(heading_excerpt)
+
+    item_excerpt = _select_item_with_parent_excerpt(lines, query_terms, window, max_lines)
+    if item_excerpt:
+        return "\n".join(item_excerpt)
 
     selected_indexes: set[int] = set()
 
@@ -2166,7 +2508,7 @@ def _select_relevant_excerpt(text: str, query_terms: set[str], window: int = 2, 
     return "\n".join(selected_lines[:max_lines])
 
 
-def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, query_terms: set[str]) -> str:
+def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analysis: QueryAnalysis) -> str:
     """LLM이 검색 근거 단위를 구분할 수 있도록 출처 metadata와 청크 본문을 함께 포맷한다."""
     source_name = str(meta.get("source", "")).strip() or "알 수 없는 문서"
     metadata_lines = [f"문서: {source_name}"]
@@ -2184,7 +2526,9 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, query
         metadata_lines.append(f"섹션: {header_path}")
 
     metadata = "\n".join(metadata_lines)
-    relevant_excerpt = _select_relevant_excerpt(doc, query_terms)
+    relevant_excerpt = _select_relevant_excerpt(doc, analysis.primary_terms)
+    if not relevant_excerpt:
+        relevant_excerpt = _select_relevant_excerpt(doc, analysis.context_terms)
     matched_table_facts = meta.get("matched_table_facts", "")
     fact_text = ""
     if isinstance(matched_table_facts, list):
@@ -2198,12 +2542,11 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, query
     return f"[출처 {index}]\n{metadata}{table_fact_block}\n전체 내용:\n{doc.strip()}"
 
 
-def _build_context(docs: list[str], metadatas: list[dict], ids: list[str], question: str) -> str:
+def _build_context(docs: list[str], metadatas: list[dict], ids: list[str], analysis: QueryAnalysis) -> str:
     """검색된 청크들을 출처 단위 context로 변환한다."""
-    query_terms = _extract_query_terms(question)
     blocks = []
     for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids), start=1):
-        blocks.append(_format_context_block(index, doc, meta or {}, chunk_id, query_terms))
+        blocks.append(_format_context_block(index, doc, meta or {}, chunk_id, analysis))
     return "\n\n".join(blocks)
 
 
@@ -2312,6 +2655,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     문서가 없으면 prompt를 None으로 반환한다. 호출자가 빈 응답 처리를 담당한다.
     """
     prepare_start = time.perf_counter()
+    analysis = _analyze_query(question)
     embedding_start = time.perf_counter()
     question_vectors, embed_metadata = _embed_texts([question])
     question_vector = question_vectors[0]
@@ -2334,7 +2678,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     ids = results["ids"][0] if results["ids"] else []
     distance_values = [float(distance) for distance in results["distances"][0]] if results.get("distances") else []
     raw_result_count = len(docs)
-    bm25_docs, bm25_metadatas, bm25_ids = _lookup_bm25_raw_chunks(question, limit=top_k)
+    bm25_docs, bm25_metadatas, bm25_ids = _lookup_bm25_raw_chunks(analysis, limit=top_k)
     lexical_docs, lexical_metadatas, lexical_ids = _lookup_lexical_table_facts(question)
     if bm25_docs:
         docs = bm25_docs + docs
@@ -2347,6 +2691,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
     metadatas = _attach_runtime_table_facts(question, docs, metadatas)
     docs, metadatas, ids = _prioritize_query_results(docs, metadatas, ids, question)
+    docs, metadatas, ids = _rerank_by_query_analysis(docs, metadatas, ids, question, analysis)
     docs = docs[:top_k]
     metadatas = metadatas[:top_k]
     ids = ids[:top_k]
@@ -2364,6 +2709,8 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "distances": distance_values,
             "bm25_raw_chunks": len(bm25_docs),
             "lexical_table_facts": len(lexical_docs),
+            "query_intent": analysis.intent,
+            "query_subject_terms": sorted(analysis.subject_terms),
         }
         logger.info(
             "[query_prepare] top_k=%s retrieval_limit=%s docs=0 embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
@@ -2380,7 +2727,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         return None, [], metrics
 
     context_build_start = time.perf_counter()
-    context = _build_context(docs, metadatas, ids, question)
+    context = _build_context(docs, metadatas, ids, analysis)
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
 
     # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
@@ -2445,15 +2792,19 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "distance_avg": distance_avg,
         "bm25_raw_chunks": len(bm25_docs),
         "lexical_table_facts": len(lexical_docs),
+        "query_intent": analysis.intent,
+        "query_subject_terms": sorted(analysis.subject_terms),
     }
     logger.info(
-        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
+        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
         top_k,
         retrieval_limit,
         raw_result_count,
         len(bm25_docs),
         len(lexical_docs),
         len(docs),
+        analysis.intent or "none",
+        ",".join(sorted(analysis.subject_terms)) or "none",
         metrics["context_chars"],
         _format_int_list(source_chars),
         _format_distance_list(distance_values),
@@ -2462,13 +2813,15 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         _format_decimal(distance_avg),
     )
     logger.info(
-        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
         top_k,
         retrieval_limit,
         raw_result_count,
         len(bm25_docs),
         len(lexical_docs),
         len(docs),
+        analysis.intent or "none",
+        ",".join(sorted(analysis.subject_terms)) or "none",
         metrics["context_chars"],
         metrics["prompt_chars"],
         embedding_elapsed,
