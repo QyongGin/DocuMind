@@ -1849,6 +1849,8 @@ QUERY_TABLE_INTENT_TERMS = {
     "점수", "가산점", "등급", "기간", "날짜", "일정", "서류", "자격", "학과", "과목", "항목",
     "복장", "상의", "하의", "신발",
 }
+QUERY_LIST_COLLECTION_TERMS = {"학과", "과목", "서류", "시설", "항목", "종류", "전형", "대상"}
+QUERY_PHYSICAL_LOCATION_TERMS = {"위치", "장소", "주소", "소재지", "몇층", "층", "호관"}
 
 TABLE_STATISTIC_TERMS = {"결과", "평균", "최저", "최고", "경쟁", "경쟁률", "예비", "순위", "등급"}
 BM25_K1 = 1.5
@@ -1924,7 +1926,7 @@ EVIDENCE_FOCUSED_INTENTS = {
     "documents", "eligibility", "method", "schedule", "formula",
 }
 TABLE_BRIDGE_EVIDENCE_INTENTS = {
-    "attire", "documents", "eligibility", "count", "method", "schedule", "time", "cost", "location", "formula",
+    "attire", "documents", "eligibility", "count", "method", "schedule", "time", "cost", "location", "formula", "list",
 }
 TABLE_DIRECT_ROW_ATTRIBUTE_INTENTS = {"count", "formula"}
 INTENT_DEFAULT_LABELS = {
@@ -1932,6 +1934,7 @@ INTENT_DEFAULT_LABELS = {
     "documents": "준비물/서류",
     "eligibility": "자격",
     "count": "인원",
+    "list": "목록",
     "method": "방법",
     "schedule": "일정",
     "time": "시간",
@@ -2048,7 +2051,7 @@ def _derive_compound_primary_terms(question: str, subject_exclusion_terms: set[s
 
 def _compact_search_text(text: str) -> str:
     """띄어쓰기 차이를 줄여 subject label 비교에 사용할 compact text를 만든다."""
-    return re.sub(r"\s+", "", text.lower())
+    return re.sub(r"[^0-9a-z가-힣]+", "", text.lower())
 
 
 def _term_in_text(term: str, text: str) -> bool:
@@ -2064,6 +2067,7 @@ def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
     """table_fact lexical 보강 검색에 사용할 주제어와 의도어를 나눈다."""
     subject_terms: set[str] = set()
     intent_terms: set[str] = set()
+    normalized_question = _compact_search_text(question)
 
     for token in re.findall(r"[0-9A-Za-z가-힣]+", question):
         raw_token = token.strip().lower()
@@ -2078,6 +2082,10 @@ def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
         else:
             subject_terms.update(term for term in expanded_terms if len(term) >= 3 and term not in QUERY_GENERIC_TERMS)
 
+    if "전공심화" in normalized_question and ("과목" in normalized_question or "학과" in normalized_question):
+        subject_terms.update({"전공심화", "전공심화과정"})
+        intent_terms.update({"학과", "개설학과", "모집단위"})
+
     return subject_terms, intent_terms
 
 
@@ -2085,12 +2093,12 @@ def _score_table_fact_for_question(fact: str, question: str) -> int:
     """질문과 table_fact의 lexical 관련도를 계산한다."""
     fact_lower = fact.lower()
     subject_terms, intent_terms = _extract_lexical_query_terms(question)
-    if subject_terms and not any(term in fact_lower for term in subject_terms):
+    if subject_terms and not any(_term_in_text(term, fact) for term in subject_terms):
         return 0
 
     score = 0
-    score += sum(12 for term in subject_terms if term in fact_lower)
-    score += sum(4 for term in intent_terms if term in fact_lower)
+    score += sum(12 for term in subject_terms if _term_in_text(term, fact))
+    score += sum(4 for term in intent_terms if _term_in_text(term, fact))
 
     asks_count_value = bool(intent_terms & {"모집", "인원", "정원", "모집인원", "모집정원"})
     has_primary_count_column = bool(re.search(r"(모집\s*정원|모집정원|합계|총|전체|total)\s*=", fact_lower))
@@ -2213,6 +2221,8 @@ def _detect_query_intent(question: str, tokens: list[str]) -> str | None:
     """질문이 묻는 속성 intent를 보수적으로 분류한다."""
     normalized_question = question.lower().replace(" ", "")
     token_set = set(tokens)
+    if _is_collection_list_question(normalized_question):
+        return "list"
     for intent in INTENT_PRIORITY:
         terms = INTENT_QUERY_TERMS.get(intent, set())
         if token_set & terms:
@@ -2220,6 +2230,15 @@ def _detect_query_intent(question: str, tokens: list[str]) -> str | None:
         if any(term in normalized_question for term in terms if len(term) >= 2):
             return intent
     return None
+
+
+def _is_collection_list_question(normalized_question: str) -> bool:
+    """'어디'가 장소가 아니라 대상 목록을 묻는 표현인지 판단한다."""
+    if any(term in normalized_question for term in QUERY_PHYSICAL_LOCATION_TERMS):
+        return False
+    if not any(term in normalized_question for term in QUERY_LIST_COLLECTION_TERMS):
+        return False
+    return any(term in normalized_question for term in ("어디", "무엇", "뭐", "어떤", "무슨", "목록", "종류"))
 
 
 def _is_non_subject_query_token(token: str, intent_terms: set[str]) -> bool:
@@ -2644,10 +2663,52 @@ def _extract_subject_label_from_table_facts(facts: list[str], analysis: QueryAna
     return ""
 
 
+def _legend_description_matches_query(description: str, analysis: QueryAnalysis) -> bool:
+    """범례 설명이 질문의 주제와 직접 맞는지 판단한다."""
+    query_terms = {
+        term for term in (analysis.primary_terms | analysis.subject_terms | analysis.context_terms)
+        if len(term) >= 2 and term not in QUERY_GENERIC_TERMS and term not in QUERY_COMPOUND_FUNCTION_TERMS
+    }
+    if not query_terms:
+        return False
+    return any(_term_in_text(term, description) for term in query_terms)
+
+
+def _derive_table_legend_list_evidence_facts(facts: list[str], analysis: QueryAnalysis) -> list[str]:
+    """표 범례 기호가 붙은 행들을 목록형 질문의 직접 근거로 묶는다."""
+    if analysis.intent != "list":
+        return []
+
+    grouped_subjects: dict[str, list[str]] = {}
+    for fact in facts:
+        subject = _extract_table_fact_row_subject(fact)
+        if not subject:
+            continue
+
+        for key, value in _extract_table_fact_pairs(fact):
+            if "표시" not in key or not _legend_description_matches_query(value, analysis):
+                continue
+            grouped_subjects.setdefault(value, [])
+            if subject not in grouped_subjects[value]:
+                grouped_subjects[value].append(subject)
+
+    evidence_facts: list[str] = []
+    for description, subjects in grouped_subjects.items():
+        if not subjects:
+            continue
+        label = _clean_table_fact_answer_value(description)
+        evidence_facts.append(f"- {label}: {', '.join(subjects)}")
+    return evidence_facts
+
+
 def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis) -> list[str]:
     """같은 표 안의 subject 행과 속성 행을 조합해 질문에 직접 답하는 fact를 만든다."""
     if analysis.intent not in TABLE_BRIDGE_EVIDENCE_INTENTS or not facts:
         return []
+
+    legend_list_evidence = _derive_table_legend_list_evidence_facts(facts, analysis)
+    if legend_list_evidence:
+        return legend_list_evidence
 
     subject_related = any(_subject_strongly_matches_text(fact, analysis) for fact in facts)
     if not subject_related:
@@ -3216,10 +3277,14 @@ def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts:
 
 def _score_query_evidence_facts(text: str, analysis: QueryAnalysis, meta: dict | None = None) -> int:
     """질문 subject와 intent가 같은 line/section에서 만난 구조화 근거에 가산점을 준다."""
+    runtime_facts = _get_query_evidence_facts_from_meta(meta or {})
     facts = _extract_query_evidence_fact_lines(text, analysis, max_facts=5, meta=meta)
     if not facts:
         return 0
-    base_score = 140 if analysis.intent in STRICT_LOCAL_EVIDENCE_INTENTS else 90
+    if runtime_facts and analysis.intent == "list":
+        base_score = 520
+    else:
+        base_score = 140 if analysis.intent in STRICT_LOCAL_EVIDENCE_INTENTS else 90
     return base_score + min(len(facts) - 1, 4) * 25
 
 
