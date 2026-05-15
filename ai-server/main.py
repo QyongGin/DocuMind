@@ -1855,6 +1855,7 @@ QUERY_TABLE_INTENT_TERMS = {
     "복장", "상의", "하의", "신발",
 }
 QUERY_LIST_COLLECTION_TERMS = {"학과", "과목", "서류", "시설", "항목", "종류", "전형", "대상"}
+QUERY_COLLECTION_WHERE_TERMS = {"학과", "과목", "서류", "항목", "종류", "전형", "대상"}
 # "어디"는 "어느 학과"처럼 목록 질문에도 쓰이므로 실제 장소를 뜻하는 anchor에서 제외한다.
 QUERY_PHYSICAL_LOCATION_TERMS = {"위치", "장소", "주소", "소재지", "몇층", "층", "호관"}
 
@@ -2263,7 +2264,18 @@ def _is_collection_list_question(normalized_question: str) -> bool:
         return False
     if not any(term in normalized_question for term in QUERY_LIST_COLLECTION_TERMS):
         return False
-    return any(term in normalized_question for term in ("어디", "무엇", "뭐", "어떤", "무슨", "목록", "종류"))
+    if not any(term in normalized_question for term in ("어디", "무엇", "뭐", "어떤", "무슨", "목록", "종류")):
+        return False
+    if _is_physical_where_existence_question(normalized_question):
+        return False
+    return True
+
+
+def _is_physical_where_existence_question(normalized_question: str) -> bool:
+    """'어디에 있어'처럼 실제 위치를 묻는 패턴인지 확인한다."""
+    if not any(pattern in normalized_question for pattern in ("어디에있", "어디있")):
+        return False
+    return not any(term in normalized_question for term in QUERY_COLLECTION_WHERE_TERMS)
 
 
 def _is_non_subject_query_token(token: str, intent_terms: set[str]) -> bool:
