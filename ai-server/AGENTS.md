@@ -1,5 +1,8 @@
 # AI Server Review Guide
 
+> 이 파일은 GitHub PR에서 `@codex review`가 ai-server 변경을 검토할 때 참고하도록 저장소에 커밋된 공개 리뷰 체크리스트다.
+> 비밀값, 로컬 운영 정보, 현재 진행률은 넣지 않는다. 실제 FastAPI/RAG 구조와 맞지 않는 항목은 잘못된 리뷰를 유도하므로 바로 수정하거나 제거한다.
+
 ## Review guidelines
 
 - 리뷰 코멘트는 한국어로 작성한다.
@@ -11,7 +14,6 @@
 - 청킹 로직이 한글 문서의 제목, 표, 목록, 페이지 경계를 과도하게 깨뜨리지 않는지 확인한다.
 - ChromaDB metadata에는 문서 ID, 원본 파일명, 헤더 경로처럼 출처 표시와 삭제에 필요한 값이 유지되는지 확인한다.
 - Ollama 모델명, 임베딩 모델명, Chroma host 같은 운영 설정은 환경변수로 분리되는지 확인한다.
-- Langfuse 추적은 키가 없을 때 비활성화되어도 핵심 질의응답 흐름을 깨지 않는지 확인한다.
 
 ## Clean code checklist
 
