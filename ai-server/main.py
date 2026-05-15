@@ -79,6 +79,7 @@ CHUNK_MERGE_MIN_SIZE = _env_int("CHUNK_MERGE_MIN_SIZE", 300, minimum=0)
 EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 64)
 UPLOAD_READ_CHUNK_BYTES = _env_int("UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)
 DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 5)
+BM25_INDEX_MAX_ENTRIES = _env_int("BM25_INDEX_MAX_ENTRIES", 50000)
 TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
 TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
 EMBED_TABLE_RAW_CHUNKS = _env_bool("EMBED_TABLE_RAW_CHUNKS", True)
@@ -117,11 +118,13 @@ collection = client.get_or_create_collection("documents")
 
 _progress_lock = Lock()
 _kiwi_lock = Lock()
+_bm25_index_lock = Lock()
 _kiwi_analyzer = None
+_bm25_sparse_index = None
 _document_progress: dict[int, dict] = {}
 
 logger.info(
-    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s embed_table_raw_chunks=%s chroma_host=%s chroma_port=%s",
+    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s chroma_host=%s chroma_port=%s",
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
     OLLAMA_EMBEDDING_MODEL,
@@ -135,6 +138,7 @@ logger.info(
     CHUNK_MERGE_MIN_SIZE,
     EMBEDDING_BATCH_SIZE,
     DEFAULT_TOP_K,
+    BM25_INDEX_MAX_ENTRIES,
     EMBED_TABLE_RAW_CHUNKS,
     CHROMA_HOST or "persistent",
     CHROMA_PORT
@@ -1634,6 +1638,7 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
             f"임베딩과 벡터 저장을 진행 중입니다. ({completed_entries}/{total_entries} index entries)"
         )
 
+    _invalidate_bm25_sparse_index()
     return page_match_elapsed, embedding_elapsed, chroma_elapsed, total_entries, table_fact_count
 
 
@@ -1850,6 +1855,7 @@ QUERY_TABLE_INTENT_TERMS = {
     "복장", "상의", "하의", "신발",
 }
 QUERY_LIST_COLLECTION_TERMS = {"학과", "과목", "서류", "시설", "항목", "종류", "전형", "대상"}
+# "어디"는 "어느 학과"처럼 목록 질문에도 쓰이므로 실제 장소를 뜻하는 anchor에서 제외한다.
 QUERY_PHYSICAL_LOCATION_TERMS = {"위치", "장소", "주소", "소재지", "몇층", "층", "호관"}
 
 TABLE_STATISTIC_TERMS = {"결과", "평균", "최저", "최고", "경쟁", "경쟁률", "예비", "순위", "등급"}
@@ -1954,6 +1960,25 @@ class QueryAnalysis:
     intent: str | None
     primary_terms: set[str]
     context_terms: set[str]
+
+
+@dataclass(frozen=True)
+class SparseIndexRecord:
+    """BM25 점수 계산에 필요한 raw chunk의 sparse search 정보를 보관한다."""
+    chunk_id: str
+    document: str
+    metadata: dict
+    token_frequencies: dict[str, int]
+    document_length: int
+
+
+@dataclass(frozen=True)
+class SparseSearchIndex:
+    """매 질의마다 Chroma 전체 문서를 다시 가져오지 않기 위한 인메모리 BM25 index다."""
+    records: list[SparseIndexRecord]
+    document_frequencies: dict[str, int]
+    postings: dict[str, set[int]]
+    average_length: float
 
 
 def _format_page_label(meta: dict) -> str:
@@ -2293,59 +2318,47 @@ def _build_sparse_search_text(document: str, metadata: dict) -> str:
     return f"{header_path}\n{header_path}\n{document}"
 
 
-def _calculate_bm25_scores(query_tokens: list[str], corpus_tokens: list[list[str]]) -> list[float]:
-    """raw chunk corpus에 대해 BM25 sparse retrieval score를 계산한다."""
-    if not query_tokens or not corpus_tokens:
-        return []
+def _invalidate_bm25_sparse_index() -> None:
+    """문서 업로드/삭제 후 다음 질의에서 BM25 index를 다시 만들도록 무효화한다."""
+    global _bm25_sparse_index
+    with _bm25_index_lock:
+        _bm25_sparse_index = None
 
-    document_count = len(corpus_tokens)
+
+def _build_sparse_index_record(chunk_id: str, document: str, metadata: dict) -> SparseIndexRecord:
+    """raw chunk 하나를 BM25 index record로 변환한다."""
+    tokens = _tokenize_sparse_search(_build_sparse_search_text(document, metadata))
+    frequencies: dict[str, int] = {}
+    for token in tokens:
+        frequencies[token] = frequencies.get(token, 0) + 1
+    return SparseIndexRecord(
+        chunk_id=chunk_id,
+        document=document,
+        metadata=metadata,
+        token_frequencies=frequencies,
+        document_length=len(tokens),
+    )
+
+
+def _build_bm25_sparse_index() -> SparseSearchIndex:
+    """
+    Chroma raw chunk를 한 번 읽어 인메모리 BM25 inverted index를 만든다.
+    매 질의마다 collection 전체를 다시 전송받지 않기 위한 query-time cache다.
+    """
+    collection_count = collection.count()
+    if collection_count > BM25_INDEX_MAX_ENTRIES:
+        logger.warning(
+            "[query_bm25_index_skip] collection_count=%s max_entries=%s",
+            collection_count,
+            BM25_INDEX_MAX_ENTRIES,
+        )
+        return SparseSearchIndex(records=[], document_frequencies={}, postings={}, average_length=0.0)
+
+    results = collection.get(include=["documents", "metadatas"])
+    records: list[SparseIndexRecord] = []
     document_frequencies: dict[str, int] = {}
-    term_frequencies: list[dict[str, int]] = []
-    document_lengths: list[int] = []
+    postings: dict[str, set[int]] = {}
 
-    for tokens in corpus_tokens:
-        frequencies: dict[str, int] = {}
-        for token in tokens:
-            frequencies[token] = frequencies.get(token, 0) + 1
-        term_frequencies.append(frequencies)
-        document_lengths.append(len(tokens))
-        for token in frequencies:
-            document_frequencies[token] = document_frequencies.get(token, 0) + 1
-
-    average_length = sum(document_lengths) / document_count if document_count else 0.0
-    if average_length <= 0:
-        return [0.0 for _ in corpus_tokens]
-
-    scores: list[float] = []
-    for frequencies, document_length in zip(term_frequencies, document_lengths):
-        score = 0.0
-        for token in query_tokens:
-            term_frequency = frequencies.get(token, 0)
-            if term_frequency <= 0:
-                continue
-
-            frequency = document_frequencies.get(token, 0)
-            inverse_document_frequency = math.log(1 + (document_count - frequency + 0.5) / (frequency + 0.5))
-            denominator = term_frequency + BM25_K1 * (1 - BM25_B + BM25_B * document_length / average_length)
-            score += inverse_document_frequency * (term_frequency * (BM25_K1 + 1) / denominator)
-        scores.append(score)
-    return scores
-
-
-def _lookup_bm25_raw_chunk_candidates(analysis: QueryAnalysis, limit: int = 5) -> list[dict]:
-    """BM25 sparse retrieval 후보를 score와 함께 반환한다."""
-    query_tokens = analysis.tokens
-    if not query_tokens:
-        return []
-
-    try:
-        results = collection.get(include=["documents", "metadatas"])
-    except Exception:
-        logger.exception("[query_bm25] failed")
-        return []
-
-    records: list[tuple[str, str, dict]] = []
-    corpus_tokens: list[list[str]] = []
     for chunk_id, document, metadata in zip(
         results.get("ids", []),
         results.get("documents", []),
@@ -2355,23 +2368,88 @@ def _lookup_bm25_raw_chunk_candidates(analysis: QueryAnalysis, limit: int = 5) -
         if metadata.get("chunk_role") == "table_fact":
             continue
 
-        document_text = str(document)
-        records.append((str(chunk_id), document_text, metadata))
-        corpus_tokens.append(_tokenize_sparse_search(_build_sparse_search_text(document_text, metadata)))
+        record = _build_sparse_index_record(str(chunk_id), str(document), metadata)
+        if record.document_length <= 0:
+            continue
 
-    scores = _calculate_bm25_scores(query_tokens, corpus_tokens)
-    candidates = [
-        (score, position, *record)
-        for position, (score, record) in enumerate(zip(scores, records))
-        if score > 0
-    ]
+        record_index = len(records)
+        records.append(record)
+        for token in record.token_frequencies:
+            document_frequencies[token] = document_frequencies.get(token, 0) + 1
+            postings.setdefault(token, set()).add(record_index)
+
+    average_length = sum(record.document_length for record in records) / len(records) if records else 0.0
+    logger.info(
+        "[query_bm25_index_built] collection_count=%s raw_records=%s terms=%s avg_length=%.2f",
+        collection_count,
+        len(records),
+        len(document_frequencies),
+        average_length,
+    )
+    return SparseSearchIndex(records=records, document_frequencies=document_frequencies, postings=postings, average_length=average_length)
+
+
+def _get_bm25_sparse_index() -> SparseSearchIndex:
+    """현재 프로세스의 BM25 sparse index를 lazy build 방식으로 반환한다."""
+    global _bm25_sparse_index
+    with _bm25_index_lock:
+        if _bm25_sparse_index is None:
+            _bm25_sparse_index = _build_bm25_sparse_index()
+        return _bm25_sparse_index
+
+
+def _score_bm25_record(query_tokens: list[str], record: SparseIndexRecord, sparse_index: SparseSearchIndex) -> float:
+    """query token과 raw chunk record 하나의 BM25 점수를 계산한다."""
+    if sparse_index.average_length <= 0:
+        return 0.0
+
+    document_count = len(sparse_index.records)
+    score = 0.0
+    for token in query_tokens:
+        term_frequency = record.token_frequencies.get(token, 0)
+        if term_frequency <= 0:
+            continue
+
+        frequency = sparse_index.document_frequencies.get(token, 0)
+        inverse_document_frequency = math.log(1 + (document_count - frequency + 0.5) / (frequency + 0.5))
+        denominator = term_frequency + BM25_K1 * (
+            1 - BM25_B + BM25_B * record.document_length / sparse_index.average_length
+        )
+        score += inverse_document_frequency * (term_frequency * (BM25_K1 + 1) / denominator)
+    return score
+
+
+def _lookup_bm25_raw_chunk_candidates(analysis: QueryAnalysis, limit: int = 5) -> list[dict]:
+    """BM25 sparse retrieval 후보를 score와 함께 반환한다."""
+    query_tokens = analysis.tokens
+    if not query_tokens:
+        return []
+
+    try:
+        sparse_index = _get_bm25_sparse_index()
+    except Exception:
+        logger.exception("[query_bm25] failed")
+        return []
+
+    candidate_indexes: set[int] = set()
+    for token in set(query_tokens):
+        candidate_indexes.update(sparse_index.postings.get(token, set()))
+
+    candidates: list[tuple[float, int, SparseIndexRecord]] = []
+    for position in candidate_indexes:
+        record = sparse_index.records[position]
+        score = _score_bm25_record(query_tokens, record, sparse_index)
+        if score > 0:
+            candidates.append((score, position, record))
+
     candidates.sort(key=lambda candidate: (-candidate[0], candidate[1]))
     selected = candidates[:limit]
     logger.info(
-        "[query_bm25] query_tokens=%s intent=%s subject_terms=%s candidates=%s selected=%s top_score=%s",
+        "[query_bm25] query_tokens=%s intent=%s subject_terms=%s index_records=%s candidates=%s selected=%s top_score=%s",
         ",".join(query_tokens) or "none",
         analysis.intent or "none",
         ",".join(sorted(analysis.subject_terms)) or "none",
+        len(sparse_index.records),
         len(candidates),
         len(selected),
         _format_decimal(selected[0][0] if selected else None),
@@ -2380,11 +2458,11 @@ def _lookup_bm25_raw_chunk_candidates(analysis: QueryAnalysis, limit: int = 5) -
         {
             "rank": index + 1,
             "bm25_score": float(score),
-            "chunk_id": chunk_id,
-            "document": document,
-            "metadata": metadata,
+            "chunk_id": record.chunk_id,
+            "document": record.document,
+            "metadata": record.metadata,
         }
-        for index, (score, _, chunk_id, document, metadata) in enumerate(selected)
+        for index, (score, _, record) in enumerate(selected)
     ]
 
 
@@ -4019,6 +4097,7 @@ async def delete_document(document_id: int):
         ids_to_delete = results["ids"]
         if ids_to_delete:
             collection.delete(ids=ids_to_delete)
+            _invalidate_bm25_sparse_index()
         return len(ids_to_delete)
 
     # collection.get()/delete()는 동기 블로킹 호출이다.
