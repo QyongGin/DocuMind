@@ -238,7 +238,6 @@ def _build_quality_report(records: list[ChunkRecord], document_id: str | None = 
     lengths = [record.length for record in records]
     raw_records = [record for record in records if record.chunk_role == "raw"]
     table_fact_records = [record for record in records if record.chunk_role == "table_fact"]
-    card_fact_records = [record for record in records if record.chunk_role == "card_fact"]
     table_records = [record for record in records if record.block_type == "table" or _has_table(record.document)]
 
     line_counter: Counter[str] = Counter()
@@ -295,7 +294,6 @@ def _build_quality_report(records: list[ChunkRecord], document_id: str | None = 
             "total_chunks": len(records),
             "raw_chunks": len(raw_records),
             "table_fact_chunks": len(table_fact_records),
-            "card_fact_chunks": len(card_fact_records),
             "table_like_chunks": len(table_records),
             "total_chars": sum(lengths),
             "min_chars": min(lengths) if lengths else 0,

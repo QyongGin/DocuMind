@@ -83,8 +83,6 @@ BM25_INDEX_MAX_ENTRIES = _env_int("BM25_INDEX_MAX_ENTRIES", 50000)
 TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
 TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
 EMBED_TABLE_RAW_CHUNKS = _env_bool("EMBED_TABLE_RAW_CHUNKS", True)
-CARD_FACT_LABELS = ("주요 교과목", "주요 취업처")
-CARD_FACT_TITLE_SUFFIX_PATTERN = re.compile(r"(.+?(?:학과|학부|전공|과))(?=\s+|$)")
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
     logger.warning(
@@ -970,122 +968,6 @@ def _extract_table_facts(text: str, metadata: dict) -> list[str]:
     return facts
 
 
-def _strip_markdown_heading_prefix(line: str) -> str:
-    """Markdown heading marker를 제거한 제목 텍스트를 반환한다."""
-    return re.sub(r"^#{1,6}\s*", "", line.strip()).strip()
-
-
-def _extract_card_titles_from_heading(line: str) -> list[str]:
-    """
-    2단 카드가 하나의 heading으로 평탄화된 경우 카드 제목들을 분리한다.
-    예: "컴퓨터정보공학과 컴퓨터시스템공학과" → ["컴퓨터정보공학과", "컴퓨터시스템공학과"]
-    """
-    title_line = _strip_markdown_heading_prefix(line)
-    if not title_line:
-        return []
-
-    titles = [match.group(1).strip() for match in CARD_FACT_TITLE_SUFFIX_PATTERN.finditer(title_line)]
-    if len(titles) >= 2:
-        return titles
-    return []
-
-
-def _find_card_titles(text: str, metadata: dict) -> list[str]:
-    """청크 본문과 metadata header에서 2단 카드 제목 후보를 찾는다."""
-    for line in text.splitlines():
-        if not line.strip().startswith("#"):
-            continue
-        titles = _extract_card_titles_from_heading(line)
-        if len(titles) >= 2:
-            return titles
-
-    for level in range(6, 0, -1):
-        value = str(metadata.get(f"Header {level}", "")).strip()
-        titles = _extract_card_titles_from_heading(value)
-        if len(titles) >= 2:
-            return titles
-    return []
-
-
-def _repeated_card_label(line: str, card_count: int) -> str | None:
-    """같은 카드 속성 라벨이 카드 수만큼 반복된 line인지 확인한다."""
-    normalized = re.sub(r"\s+", " ", line).strip()
-    for label in CARD_FACT_LABELS:
-        count = normalized.count(label)
-        if count >= card_count and normalized.replace(label, "").strip() == "":
-            return label
-    return None
-
-
-def _is_card_value_boundary(line: str, card_count: int) -> bool:
-    """카드 속성 값 수집을 멈춰야 하는 line인지 확인한다."""
-    stripped = line.strip()
-    if not stripped:
-        return False
-    if stripped.startswith("#") or stripped.startswith("|"):
-        return True
-    if stripped in {"포토툰", "홈페이지"}:
-        return True
-    return _repeated_card_label(stripped, card_count) is not None
-
-
-def _split_card_value_lines(value_lines: list[str], card_count: int) -> list[str]:
-    """반복 라벨 다음에 이어지는 값 line들을 카드 개수만큼 나눈다."""
-    cleaned = [line.strip() for line in value_lines if line.strip()]
-    if len(cleaned) < card_count:
-        return []
-    if len(cleaned) == card_count:
-        return cleaned
-    if len(cleaned) % card_count != 0:
-        return []
-
-    group_size = len(cleaned) // card_count
-    return [
-        " ".join(cleaned[index * group_size:(index + 1) * group_size]).strip()
-        for index in range(card_count)
-    ]
-
-
-def _build_card_fact(title: str, attribute: str, value: str) -> str:
-    """카드 제목, 속성, 값을 LLM과 lexical search가 읽기 쉬운 fact 문장으로 만든다."""
-    normalized_value = re.sub(r"\s+", " ", value).strip()
-    return f"{title} 카드 정보: {attribute}={normalized_value}"
-
-
-def _extract_card_facts(text: str, metadata: dict) -> list[str]:
-    """2단 카드형 청크에서 제목별 속성 fact를 생성한다."""
-    titles = _find_card_titles(text, metadata)
-    if len(titles) < 2:
-        return []
-
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    facts: list[str] = []
-    seen: set[str] = set()
-    index = 0
-    while index < len(lines):
-        label = _repeated_card_label(lines[index], len(titles))
-        if not label:
-            index += 1
-            continue
-
-        value_lines: list[str] = []
-        next_index = index + 1
-        while next_index < len(lines) and not _is_card_value_boundary(lines[next_index], len(titles)):
-            value_lines.append(lines[next_index])
-            next_index += 1
-
-        values = _split_card_value_lines(value_lines, len(titles))
-        for title, value in zip(titles, values, strict=False):
-            fact = _build_card_fact(title, label, value)
-            if fact not in seen:
-                facts.append(fact)
-                seen.add(fact)
-
-        index = max(next_index, index + 1)
-
-    return facts
-
-
 def _split_text_block(block_text: str, metadata: dict) -> list[Document]:
     """일반 text block은 기존 RecursiveCharacterTextSplitter로 분할한다."""
     document = Document(page_content=block_text, metadata=dict(metadata))
@@ -1634,12 +1516,11 @@ def _build_index_documents(
     filename: str,
     document_id: int,
     page_lookup: list[dict],
-) -> tuple[list[Document], float, int, int]:
-    """원본 청크와 검색용 table/card fact 문서를 함께 만든다."""
+) -> tuple[list[Document], float, int]:
+    """원본 청크와 검색용 table fact 문서를 함께 만든다."""
     index_docs: list[Document] = []
     page_match_elapsed = 0.0
     table_fact_count = 0
-    card_fact_count = 0
 
     for chunk_index, doc in enumerate(final_docs):
         metadata_start = time.perf_counter()
@@ -1649,9 +1530,7 @@ def _build_index_documents(
 
         parent_chunk_id = f"{document_id}_{chunk_index}"
         table_facts = _extract_table_facts(doc.page_content, raw_metadata)
-        card_facts = _extract_card_facts(doc.page_content, raw_metadata)
-        derived_facts = table_facts or card_facts
-        should_embed_raw_chunk = EMBED_TABLE_RAW_CHUNKS or not derived_facts
+        should_embed_raw_chunk = EMBED_TABLE_RAW_CHUNKS or not table_facts
         if should_embed_raw_chunk:
             index_docs.append(Document(page_content=doc.page_content, metadata=raw_metadata))
 
@@ -1668,20 +1547,7 @@ def _build_index_documents(
             index_docs.append(Document(page_content=fact, metadata=fact_metadata))
             table_fact_count += 1
 
-        for fact_index, fact in enumerate(card_facts):
-            fact_metadata = dict(raw_metadata)
-            fact_metadata.update({
-                "chunk_role": "card_fact",
-                "parent_chunk_id": parent_chunk_id,
-                "parent_chunk_index": chunk_index,
-                "fact_index": fact_index,
-            })
-            if not should_embed_raw_chunk:
-                fact_metadata["parent_content"] = doc.page_content
-            index_docs.append(Document(page_content=fact, metadata=fact_metadata))
-            card_fact_count += 1
-
-    return index_docs, page_match_elapsed, table_fact_count, card_fact_count
+    return index_docs, page_match_elapsed, table_fact_count
 
 
 def _build_index_document_id(document_id: int, metadata: dict, fallback_index: int) -> str:
@@ -1690,20 +1556,16 @@ def _build_index_document_id(document_id: int, metadata: dict, fallback_index: i
         parent_index = metadata.get("parent_chunk_index", fallback_index)
         fact_index = metadata.get("fact_index", 0)
         return f"{document_id}_{parent_index}_fact_{fact_index}"
-    if metadata.get("chunk_role") == "card_fact":
-        parent_index = metadata.get("parent_chunk_index", fallback_index)
-        fact_index = metadata.get("fact_index", 0)
-        return f"{document_id}_{parent_index}_card_fact_{fact_index}"
     chunk_index = metadata.get("chunk_index", fallback_index)
     return f"{document_id}_{chunk_index}"
 
 
-def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float, int, int, int]:
+def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float, int, int]:
     """
     문서 청크를 batch embedding 후 ChromaDB에 batch 저장한다.
     청크별 HTTP 호출을 피하기 위해 EMBEDDING_BATCH_SIZE 단위로 묶어 처리한다.
     """
-    index_docs, page_match_elapsed, table_fact_count, card_fact_count = _build_index_documents(
+    index_docs, page_match_elapsed, table_fact_count = _build_index_documents(
         final_docs,
         filename,
         document_id,
@@ -1713,7 +1575,7 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
     chroma_elapsed = 0.0
     total_entries = len(index_docs)
     if total_entries == 0:
-        return page_match_elapsed, embedding_elapsed, chroma_elapsed, 0, 0, 0
+        return page_match_elapsed, embedding_elapsed, chroma_elapsed, 0, 0
 
     for start in range(0, len(index_docs), EMBEDDING_BATCH_SIZE):
         batch_number = start // EMBEDDING_BATCH_SIZE + 1
@@ -1777,7 +1639,7 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
         )
 
     _invalidate_bm25_sparse_index()
-    return page_match_elapsed, embedding_elapsed, chroma_elapsed, total_entries, table_fact_count, card_fact_count
+    return page_match_elapsed, embedding_elapsed, chroma_elapsed, total_entries, table_fact_count
 
 
 async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -> int:
@@ -1828,7 +1690,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         _set_document_progress(document_id, 30, "chunking", f"청킹을 완료했습니다. ({len(final_docs)} chunks)")
 
         # 임베딩 + ChromaDB 저장. 청크별 호출 대신 batch 단위로 처리해 HTTP 왕복과 저장 오버헤드를 줄인다.
-        page_match_elapsed, embedding_elapsed, chroma_elapsed, index_entries, table_fact_entries, card_fact_entries = _store_document_chunks(
+        page_match_elapsed, embedding_elapsed, chroma_elapsed, index_entries, table_fact_entries = _store_document_chunks(
             final_docs,
             filename,
             document_id,
@@ -1837,7 +1699,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
-            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s card_fact_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
             len(raw_docs),
@@ -1847,7 +1709,6 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             len(final_docs),
             index_entries,
             table_fact_entries,
-            card_fact_entries,
             CHUNK_SIZE,
             CHUNK_OVERLAP,
             CHUNK_MERGE_MIN_SIZE,
@@ -1951,15 +1812,13 @@ MANDATORY_RAG_PROMPT = (
     "2. [검색 근거]에 없는 절차, 조건, 날짜, 숫자, 서류, 주의사항, 조언은 만들지 않는다.\n"
     "3. 질문이 방법, 절차, 주의사항을 묻는 경우 [검색 근거]의 절차, 유의사항, 안내 문구를 우선 추출한다.\n"
     "4. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다.\n"
-    "5. 검색 근거에 '카드 검색 정보'가 있으면 원본 카드보다 먼저 사용해 제목, 속성, 값 관계를 판단한다.\n"
-    "6. 표에서 숫자, 날짜, 인원, 점수, 기간을 답할 때는 질문의 행 이름과 열 이름에 직접 대응하는 값만 사용한다.\n"
-    "7. 카드에서 교과목, 취업처 같은 속성을 답할 때는 질문의 카드 제목과 속성 이름에 직접 대응하는 값만 사용한다.\n"
-    "8. 여러 표나 카드가 검색되면 질문의 단어와 가장 많이 겹치는 제목, 행 이름, 열 이름, 속성 이름을 가진 근거를 우선한다.\n"
-    "9. 질문에 없는 다른 표, 카드, 섹션의 통계값이나 속성값을 섞지 않는다.\n"
-    "10. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
-    "11. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
-    "12. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다.\n"
-    "13. '제공된 문서에서는 확인할 수 없습니다.'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."
+    "5. 표에서 숫자, 날짜, 인원, 점수, 기간을 답할 때는 질문의 행 이름과 열 이름에 직접 대응하는 값만 사용한다.\n"
+    "6. 여러 표가 검색되면 질문의 단어와 가장 많이 겹치는 표 제목, 행 이름, 열 이름을 가진 근거를 우선한다.\n"
+    "7. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
+    "8. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
+    "9. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
+    "10. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다.\n"
+    "11. '제공된 문서에서는 확인할 수 없습니다.'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."
 )
 
 
@@ -1982,7 +1841,7 @@ QUERY_TERM_SYNONYMS = {
 
 QUERY_GENERIC_TERMS = {
     "방법", "절차", "신청", "주의사항", "유의사항", "모집", "인원", "정원",
-    "모집인원", "모집정원", "정보", "주요", "알려줘", "어디", "어떤", "뭐야", "무엇",
+    "모집인원", "모집정원", "정보", "알려줘", "어디", "어떤", "뭐야", "무엇",
 }
 QUERY_COMPOUND_FUNCTION_TERMS = {"알려줘", "어디", "어떤", "뭐야", "무엇", "무슨", "언제", "어떻게"}
 
@@ -1995,8 +1854,8 @@ QUERY_TABLE_INTENT_TERMS = {
     "점수", "가산점", "등급", "기간", "날짜", "일정", "서류", "자격", "학과", "과목", "항목",
     "복장", "상의", "하의", "신발",
 }
-QUERY_LIST_COLLECTION_TERMS = {"학과", "과목", "교과목", "취업처", "기업", "회사", "서류", "시설", "항목", "종류", "전형", "대상"}
-QUERY_COLLECTION_WHERE_TERMS = {"학과", "과목", "교과목", "취업처", "기업", "회사", "서류", "항목", "종류", "전형", "대상"}
+QUERY_LIST_COLLECTION_TERMS = {"학과", "과목", "서류", "시설", "항목", "종류", "전형", "대상"}
+QUERY_COLLECTION_WHERE_TERMS = {"학과", "과목", "서류", "항목", "종류", "전형", "대상"}
 # "어디"는 "어느 학과"처럼 목록 질문에도 쓰이므로 실제 장소를 뜻하는 anchor에서 제외한다.
 QUERY_PHYSICAL_LOCATION_TERMS = {"위치", "장소", "주소", "소재지", "몇층", "층", "호관"}
 
@@ -2009,7 +1868,7 @@ INTENT_PRIORITY = (
     "eligibility", "count", "schedule", "method", "formula", "list",
 )
 INTENT_QUERY_TERMS = {
-    "list": {"무엇", "뭐", "무슨", "어떤", "목록", "종류", "있어", "있나요", "있습니까", "포함", "교과목", "취업처", "기업", "회사"},
+    "list": {"무엇", "뭐", "무슨", "어떤", "목록", "종류", "있어", "있나요", "있습니까", "포함"},
     "location": {"어디", "위치", "장소", "주소", "소재지", "몇층", "층", "호관", "찾아오"},
     "time": {"시간", "이용시간", "운영시간", "언제", "몇시", "기간", "평일", "주말", "공휴일", "방학"},
     "cost": {"비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료"},
@@ -2022,7 +1881,7 @@ INTENT_QUERY_TERMS = {
     "formula": {"공식", "수식", "계산", "산식"},
 }
 INTENT_EVIDENCE_TERMS = {
-    "list": {"시설", "목록", "종류", "항목", "포함", "운영", "이용", "교과목", "취업처", "기업", "회사"},
+    "list": {"시설", "목록", "종류", "항목", "포함", "운영", "이용"},
     "location": {"위치", "장소", "주소", "소재지", "호관", "층", "도로", "길", "정문", "후문", "옆", "앞", "뒤", "내", "근처", "캠퍼스"},
     "time": {"시간", "이용", "이용시간", "운영시간", "기간", "평일", "주말", "공휴일", "방학", "중식", "휴무", "운영"},
     "cost": {"비용", "금액", "요금", "가격", "납부", "원", "무료", "환불"},
@@ -2334,106 +2193,6 @@ def _lookup_lexical_table_facts(question: str, limit: int = 5) -> tuple[list[str
     )
 
 
-def _card_attribute_terms_for_question(question: str) -> set[str]:
-    """질문이 요구하는 카드 속성명을 추정한다."""
-    normalized = _compact_search_text(question)
-    attributes: set[str] = set()
-    if any(term in normalized for term in ("교과목", "과목", "커리큘럼")):
-        attributes.add("주요 교과목")
-    if any(term in normalized for term in ("취업처", "취업", "기업", "회사", "졸업후")):
-        attributes.add("주요 취업처")
-    return attributes
-
-
-def _extract_card_subject_terms(question: str) -> set[str]:
-    """card_fact lexical 보강 검색에 사용할 카드 제목 후보를 추출한다."""
-    attribute_terms = {"교과목", "과목", "커리큘럼", "취업처", "취업", "기업", "회사", "졸업후"}
-    terms: set[str] = set()
-    for token in re.findall(r"[0-9A-Za-z가-힣]+", question):
-        normalized = _normalize_query_token(token.strip().lower())
-        if len(normalized) < 3:
-            continue
-        if normalized in QUERY_GENERIC_TERMS or normalized in attribute_terms:
-            continue
-        terms.add(normalized)
-    return terms
-
-
-def _score_card_fact_for_question(fact: str, question: str) -> int:
-    """질문과 card_fact의 제목·속성 관련도를 계산한다."""
-    subject_terms = _extract_card_subject_terms(question)
-    attribute_terms = _card_attribute_terms_for_question(question)
-    if not subject_terms or not attribute_terms:
-        return 0
-    if not any(_term_in_text(term, fact) for term in subject_terms):
-        return 0
-    if not any(attribute in fact for attribute in attribute_terms):
-        return 0
-
-    score = 0
-    score += sum(30 for term in subject_terms if _term_in_text(term, fact))
-    score += sum(35 for attribute in attribute_terms if attribute in fact)
-    return score
-
-
-def _lookup_lexical_card_fact_candidates(question: str, limit: int = 5) -> list[dict]:
-    """카드형 문서에서 벡터 검색이 놓치는 card_fact 후보를 score와 함께 찾는다."""
-    subject_terms = _extract_card_subject_terms(question)
-    attribute_terms = _card_attribute_terms_for_question(question)
-    if not subject_terms or not attribute_terms:
-        return []
-
-    try:
-        results = collection.get(
-            where={"chunk_role": "card_fact"},
-            include=["documents", "metadatas"],
-        )
-    except Exception:
-        logger.exception("[query_card_fact_lexical] failed")
-        return []
-
-    candidates: list[tuple[int, str, dict, str]] = []
-    for chunk_id, document, metadata in zip(
-        results.get("ids", []),
-        results.get("documents", []),
-        results.get("metadatas", []),
-    ):
-        score = _score_card_fact_for_question(str(document), question)
-        if score <= 0:
-            continue
-        candidates.append((score, str(chunk_id), metadata or {}, str(document)))
-
-    candidates.sort(key=lambda candidate: candidate[0], reverse=True)
-    selected = candidates[:limit]
-    logger.info(
-        "[query_card_fact_lexical] subject_terms=%s attribute_terms=%s candidates=%s selected=%s",
-        ",".join(sorted(subject_terms)) or "none",
-        ",".join(sorted(attribute_terms)) or "none",
-        len(candidates),
-        len(selected),
-    )
-    return [
-        {
-            "rank": index + 1,
-            "card_fact_score": score,
-            "chunk_id": chunk_id,
-            "document": document,
-            "metadata": metadata,
-        }
-        for index, (score, chunk_id, metadata, document) in enumerate(selected)
-    ]
-
-
-def _lookup_lexical_card_facts(question: str, limit: int = 5) -> tuple[list[str], list[dict], list[str]]:
-    """카드형 문서에서 벡터 검색이 놓치는 card_fact를 얇은 lexical 보강으로 찾는다."""
-    selected = _lookup_lexical_card_fact_candidates(question, limit)
-    return (
-        [candidate["document"] for candidate in selected],
-        [candidate["metadata"] for candidate in selected],
-        [candidate["chunk_id"] for candidate in selected],
-    )
-
-
 def _get_kiwi():
     """Kiwi 형태소 분석기를 lazy initialization으로 준비한다."""
     global _kiwi_analyzer
@@ -2735,11 +2494,6 @@ def _is_table_value_question(question: str) -> bool:
     return bool(subject_terms and intent_terms)
 
 
-def _is_card_attribute_question(question: str) -> bool:
-    """카드 제목의 특정 속성값을 묻는 질문인지 보수적으로 판단한다."""
-    return bool(_extract_card_subject_terms(question) and _card_attribute_terms_for_question(question))
-
-
 def _get_matched_table_facts(meta: dict) -> list[str]:
     """runtime metadata에 누적된 table_fact 목록을 정규화해 반환한다."""
     matched_table_facts = meta.get("matched_table_facts", "")
@@ -2747,16 +2501,6 @@ def _get_matched_table_facts(meta: dict) -> list[str]:
         return [str(fact).strip() for fact in matched_table_facts if str(fact).strip()]
     if matched_table_facts:
         return [str(matched_table_facts).strip()]
-    return []
-
-
-def _get_matched_card_facts(meta: dict) -> list[str]:
-    """runtime metadata에 누적된 card_fact 목록을 정규화해 반환한다."""
-    matched_card_facts = meta.get("matched_card_facts", "")
-    if isinstance(matched_card_facts, list):
-        return [str(fact).strip() for fact in matched_card_facts if str(fact).strip()]
-    if matched_card_facts:
-        return [str(matched_card_facts).strip()]
     return []
 
 
@@ -3118,42 +2862,10 @@ def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[
     return updated_metadatas
 
 
-def _attach_runtime_card_facts(question: str, docs: list[str], metadatas: list[dict]) -> list[dict]:
-    """검색된 raw 청크 안의 2단 카드에서 질문과 맞는 card_fact를 런타임 metadata에 붙인다."""
-    if not _is_card_attribute_question(question):
-        return metadatas
-
-    updated_metadatas: list[dict] = []
-    for doc, meta in zip(docs, metadatas):
-        runtime_meta = dict(meta or {})
-        if runtime_meta.get("chunk_role") == "card_fact":
-            updated_metadatas.append(runtime_meta)
-            continue
-
-        scored_facts: list[tuple[int, str]] = []
-        for fact in _extract_card_facts(doc, runtime_meta):
-            score = _score_card_fact_for_question(fact, question)
-            if score > 0:
-                scored_facts.append((score, fact))
-
-        scored_facts.sort(key=lambda item: item[0], reverse=True)
-        for _, fact in scored_facts[:2]:
-            runtime_meta = _append_runtime_card_fact(runtime_meta, fact)
-        updated_metadatas.append(runtime_meta)
-
-    return updated_metadatas
-
-
 def _best_runtime_table_fact_score(meta: dict, question: str) -> int:
     """runtime metadata에 붙은 table_fact 중 질문과 가장 관련 높은 점수를 반환한다."""
     facts = _get_matched_table_facts(meta)
     return max((_score_table_fact_for_question(fact, question) for fact in facts), default=0)
-
-
-def _best_runtime_card_fact_score(meta: dict, question: str) -> int:
-    """runtime metadata에 붙은 card_fact 중 질문과 가장 관련 높은 점수를 반환한다."""
-    facts = _get_matched_card_facts(meta)
-    return max((_score_card_fact_for_question(fact, question) for fact in facts), default=0)
 
 
 def _score_subject_match(text: str, analysis: QueryAnalysis) -> int:
@@ -3622,14 +3334,6 @@ def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_f
         if len(facts) >= max_facts:
             return facts
 
-    for fact in _get_matched_card_facts(meta or {}):
-        if fact in seen:
-            continue
-        seen.add(fact)
-        facts.append(f"- 카드 속성: {fact}")
-        if len(facts) >= max_facts:
-            return facts
-
     list_facts = _extract_list_section_evidence_fact_lines(text, analysis, max_facts)
     for fact in list_facts:
         if fact in seen:
@@ -3697,16 +3401,13 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     if not relevant_excerpt:
         relevant_excerpt = _select_relevant_excerpt(doc, analysis.context_terms)
     matched_table_facts = _get_matched_table_facts(meta)
-    matched_card_facts = _get_matched_card_facts(meta)
-    table_fact_text = "\n".join(matched_table_facts)
-    card_fact_text = "\n".join(matched_card_facts)
+    fact_text = "\n".join(matched_table_facts)
 
-    table_fact_block = f"\n표 검색 정보:\n{table_fact_text}" if table_fact_text else ""
-    card_fact_block = f"\n카드 검색 정보:\n{card_fact_text}" if card_fact_text else ""
+    table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
     if relevant_excerpt:
-        return f"[출처 {index}]\n{metadata}{table_fact_block}{card_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
-    return f"[출처 {index}]\n{metadata}{table_fact_block}{card_fact_block}{evidence_fact_block}\n전체 내용:\n{doc.strip()}"
+        return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
+    return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n전체 내용:\n{doc.strip()}"
 
 
 def _build_context(docs: list[str], metadatas: list[dict], ids: list[str], analysis: QueryAnalysis) -> str:
@@ -3736,7 +3437,7 @@ def _load_parent_chunk(parent_chunk_id: str) -> tuple[str | None, dict | None]:
 
 
 def _build_parent_metadata_from_fact(fact_meta: dict) -> dict:
-    """파생 fact metadata에서 사용자에게 노출할 부모 raw 청크 metadata를 복원한다."""
+    """table_fact metadata에서 사용자에게 노출할 부모 raw 청크 metadata를 복원한다."""
     parent_meta = dict(fact_meta or {})
     parent_meta["chunk_role"] = "raw"
     if "parent_chunk_index" in parent_meta:
@@ -3766,27 +3467,8 @@ def _append_runtime_table_fact(meta: dict, fact_text: str) -> dict:
     return next_meta
 
 
-def _append_runtime_card_fact(meta: dict, fact_text: str) -> dict:
-    """검색된 card_fact를 원본 청크 runtime metadata에 누적한다."""
-    if not fact_text.strip():
-        return meta
-
-    next_meta = dict(meta)
-    existing = next_meta.get("matched_card_facts")
-    if isinstance(existing, list):
-        if fact_text not in existing:
-            existing.append(fact_text)
-        next_meta["matched_card_facts"] = existing
-    elif existing:
-        if fact_text != existing:
-            next_meta["matched_card_facts"] = [str(existing), fact_text]
-    else:
-        next_meta["matched_card_facts"] = [fact_text]
-    return next_meta
-
-
 def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list[str]) -> tuple[list[str], list[dict], list[str]]:
-    """검색된 table/card fact를 부모 원본 청크와 연결해 답변 context를 구성한다."""
+    """검색된 table_fact를 부모 원본 청크와 연결해 답변 context를 구성한다."""
     expanded_docs: list[str] = []
     expanded_metadatas: list[dict] = []
     expanded_ids: list[str] = []
@@ -3794,8 +3476,7 @@ def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list
 
     for doc, meta, chunk_id in zip(docs, metadatas, ids):
         meta = meta or {}
-        chunk_role = meta.get("chunk_role")
-        if chunk_role not in {"table_fact", "card_fact"}:
+        if meta.get("chunk_role") != "table_fact":
             result_id = str(chunk_id)
             if result_id in seen_indexes:
                 continue
@@ -3822,18 +3503,12 @@ def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list
         fact_text = doc.strip()
         if result_id in seen_indexes:
             existing_index = seen_indexes[result_id]
-            if chunk_role == "card_fact":
-                expanded_metadatas[existing_index] = _append_runtime_card_fact(expanded_metadatas[existing_index], fact_text)
-            else:
-                expanded_metadatas[existing_index] = _append_runtime_table_fact(expanded_metadatas[existing_index], fact_text)
+            expanded_metadatas[existing_index] = _append_runtime_table_fact(expanded_metadatas[existing_index], fact_text)
             continue
 
         runtime_meta = dict(parent_meta or {})
-        runtime_meta["matched_chunk_role"] = chunk_role
-        if chunk_role == "card_fact":
-            runtime_meta = _append_runtime_card_fact(runtime_meta, fact_text)
-        else:
-            runtime_meta = _append_runtime_table_fact(runtime_meta, fact_text)
+        runtime_meta["matched_chunk_role"] = "table_fact"
+        runtime_meta = _append_runtime_table_fact(runtime_meta, fact_text)
         seen_indexes[result_id] = len(expanded_docs)
         expanded_docs.append(parent_doc)
         expanded_metadatas.append(runtime_meta)
@@ -3859,7 +3534,6 @@ def _build_rag_prompt(system_prompt: str | None, context: str, question: str) ->
 - 답변은 [검색 근거]에 직접 적힌 내용만 사용한다.
 - [검색 근거]의 '질문 의도 추출 정보'가 있으면 답변에 가장 먼저 사용한다.
 - [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다.
-- [검색 근거]의 '카드 검색 정보'가 있으면 카드의 제목/속성/값 판단에 우선 사용한다.
 - [검색 근거]의 '질문 관련 발췌'가 있으면 그 발췌에 직접 적힌 항목만 우선 사용한다.
 - 질문 단어와 일치하는 섹션 제목이 있으면 해당 섹션 아래 내용만 답변한다.
 - 같은 청크 안에 다른 섹션이 있어도 질문과 맞지 않으면 답변에 섞지 않는다.
@@ -3870,9 +3544,9 @@ def _build_rag_prompt(system_prompt: str | None, context: str, question: str) ->
 
 
 def _candidate_parent_key(chunk_id: str, metadata: dict) -> str:
-    """파생 fact 후보는 부모 raw chunk 기준으로 trace key를 통일한다."""
+    """table_fact 후보는 부모 raw chunk 기준으로 trace key를 통일한다."""
     parent_chunk_id = str(metadata.get("parent_chunk_id", "")).strip()
-    if metadata.get("chunk_role") in {"table_fact", "card_fact"} and parent_chunk_id:
+    if metadata.get("chunk_role") == "table_fact" and parent_chunk_id:
         return parent_chunk_id
     return str(chunk_id)
 
@@ -3927,7 +3601,7 @@ def _record_vector_trace(
     entry.setdefault("vector_similarity_if_cosine", _similarity_if_cosine(distance, metric))
     entry.setdefault("vector_hit_chunk_id", str(chunk_id))
     entry.setdefault("vector_hit_chunk_role", meta.get("chunk_role", "raw"))
-    if meta.get("chunk_role") in {"table_fact", "card_fact"}:
+    if meta.get("chunk_role") == "table_fact":
         entry.setdefault("vector_hit_fact_preview", _preview_text(doc, 240))
 
 
@@ -3952,19 +3626,6 @@ def _record_table_fact_trace(trace_by_id: dict[str, dict], candidate: dict) -> N
     entry.setdefault("table_fact_score", candidate["table_fact_score"])
     entry.setdefault("table_fact_hit_chunk_id", chunk_id)
     entry.setdefault("table_fact_preview", _preview_text(candidate["document"], 240))
-
-
-def _record_card_fact_trace(trace_by_id: dict[str, dict], candidate: dict) -> None:
-    """card_fact lexical 후보의 score와 부모 chunk 정보를 trace에 기록한다."""
-    chunk_id = str(candidate["chunk_id"])
-    meta = candidate["metadata"] or {}
-    key = _candidate_parent_key(chunk_id, meta)
-    entry = _ensure_trace_entry(trace_by_id, key)
-    _append_trace_method(entry, "card_fact_lexical")
-    entry.setdefault("card_fact_rank", candidate["rank"])
-    entry.setdefault("card_fact_score", candidate["card_fact_score"])
-    entry.setdefault("card_fact_hit_chunk_id", chunk_id)
-    entry.setdefault("card_fact_preview", _preview_text(candidate["document"], 240))
 
 
 def _format_vector_candidate(
@@ -4019,21 +3680,6 @@ def _format_table_fact_candidate(candidate: dict) -> dict:
     return formatted
 
 
-def _format_card_fact_candidate(candidate: dict) -> dict:
-    """card_fact lexical 후보를 trace 응답 형태로 만든다."""
-    formatted = _candidate_location_summary(
-        str(candidate["chunk_id"]),
-        candidate["document"],
-        candidate["metadata"] or {},
-    )
-    formatted.update({
-        "rank": candidate["rank"],
-        "card_fact_score": candidate["card_fact_score"],
-        "parent_chunk_id": (candidate["metadata"] or {}).get("parent_chunk_id"),
-    })
-    return formatted
-
-
 def _format_rerank_candidate(
     rank: int,
     doc: str,
@@ -4052,11 +3698,9 @@ def _format_rerank_candidate(
     heading_score = _score_heading_match(search_text, analysis)
     evidence_fact_score = _score_query_evidence_facts(doc, analysis, meta)
     runtime_table_fact_score = _best_runtime_table_fact_score(meta, question)
-    runtime_card_fact_score = _best_runtime_card_fact_score(meta, question)
-    rerank_score = subject_score + intent_score + heading_score + evidence_fact_score + runtime_table_fact_score + runtime_card_fact_score
+    rerank_score = subject_score + intent_score + heading_score + evidence_fact_score + runtime_table_fact_score
     query_evidence_facts = _extract_query_evidence_fact_lines(doc, analysis, max_facts=5, meta=meta)
     matched_table_facts = _get_matched_table_facts(meta)
-    matched_card_facts = _get_matched_card_facts(meta)
 
     trace_key = _candidate_parent_key(str(chunk_id), meta)
     retrieval = trace_by_id.get(str(chunk_id)) or trace_by_id.get(trace_key) or {"retrieval_methods": []}
@@ -4071,12 +3715,10 @@ def _format_rerank_candidate(
             "heading_match": heading_score,
             "query_evidence": evidence_fact_score,
             "runtime_table_fact": runtime_table_fact_score,
-            "runtime_card_fact": runtime_card_fact_score,
             "rerank_total": rerank_score,
         },
         "query_evidence_facts": query_evidence_facts,
         "matched_table_facts": matched_table_facts,
-        "matched_card_facts": matched_card_facts,
     })
     return formatted
 
@@ -4156,9 +3798,6 @@ def _trace_query_retrieval(
     table_fact_candidates = _lookup_lexical_table_fact_candidates(question)
     for candidate in table_fact_candidates:
         _record_table_fact_trace(trace_by_id, candidate)
-    card_fact_candidates = _lookup_lexical_card_fact_candidates(question)
-    for candidate in card_fact_candidates:
-        _record_card_fact_trace(trace_by_id, candidate)
 
     docs = vector_docs
     metadatas = vector_metadatas
@@ -4171,14 +3810,9 @@ def _trace_query_retrieval(
         docs = [candidate["document"] for candidate in table_fact_candidates] + docs
         metadatas = [candidate["metadata"] for candidate in table_fact_candidates] + metadatas
         ids = [candidate["chunk_id"] for candidate in table_fact_candidates] + ids
-    if card_fact_candidates:
-        docs = [candidate["document"] for candidate in card_fact_candidates] + docs
-        metadatas = [candidate["metadata"] for candidate in card_fact_candidates] + metadatas
-        ids = [candidate["chunk_id"] for candidate in card_fact_candidates] + ids
 
     docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
     metadatas = _attach_runtime_table_facts(question, docs, metadatas, analysis)
-    metadatas = _attach_runtime_card_facts(question, docs, metadatas)
     expanded_candidates = [
         _format_rerank_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, False)
         for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids))
@@ -4232,13 +3866,12 @@ def _trace_query_retrieval(
     ]
 
     logger.info(
-        "[rag_trace] top_k=%s retrieval_limit=%s vector=%s bm25=%s table_fact=%s card_fact=%s final=%s context_chars=%s embed=%.2fs chroma=%.2fs total=%.2fs",
+        "[rag_trace] top_k=%s retrieval_limit=%s vector=%s bm25=%s table_fact=%s final=%s context_chars=%s embed=%.2fs chroma=%.2fs total=%.2fs",
         top_k,
         retrieval_limit,
         len(vector_candidates),
         len(bm25_candidates),
         len(table_fact_candidates),
-        len(card_fact_candidates),
         len(final_docs),
         len(context),
         embedding_elapsed,
@@ -4269,7 +3902,6 @@ def _trace_query_retrieval(
             "vector_candidates": vector_candidates,
             "bm25_candidates": [_format_bm25_candidate(candidate) for candidate in bm25_candidates],
             "table_fact_candidates": [_format_table_fact_candidate(candidate) for candidate in table_fact_candidates],
-            "card_fact_candidates": [_format_card_fact_candidate(candidate) for candidate in card_fact_candidates],
             "expanded_candidates": expanded_candidates,
             "after_table_priority_candidates": after_table_priority_candidates,
             "after_evidence_focus_candidates": after_evidence_focus_candidates,
@@ -4319,7 +3951,6 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     raw_result_count = len(docs)
     bm25_docs, bm25_metadatas, bm25_ids = _lookup_bm25_raw_chunks(analysis, limit=top_k)
     lexical_docs, lexical_metadatas, lexical_ids = _lookup_lexical_table_facts(question)
-    card_docs, card_metadatas, card_ids = _lookup_lexical_card_facts(question)
     if bm25_docs:
         docs = bm25_docs + docs
         metadatas = bm25_metadatas + metadatas
@@ -4328,13 +3959,8 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         docs = lexical_docs + docs
         metadatas = lexical_metadatas + metadatas
         ids = lexical_ids + ids
-    if card_docs:
-        docs = card_docs + docs
-        metadatas = card_metadatas + metadatas
-        ids = card_ids + ids
     docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
     metadatas = _attach_runtime_table_facts(question, docs, metadatas, analysis)
-    metadatas = _attach_runtime_card_facts(question, docs, metadatas)
     docs, metadatas, ids = _prioritize_query_results(docs, metadatas, ids, question)
     docs, metadatas, ids = _rerank_by_query_analysis(docs, metadatas, ids, question, analysis)
     docs, metadatas, ids = _focus_candidates_with_query_evidence(docs, metadatas, ids, analysis)
@@ -4355,7 +3981,6 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "distances": distance_values,
             "bm25_raw_chunks": len(bm25_docs),
             "lexical_table_facts": len(lexical_docs),
-            "lexical_card_facts": len(card_docs),
             "query_intent": analysis.intent,
             "query_subject_terms": sorted(analysis.subject_terms),
         }
@@ -4418,18 +4043,16 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "distance_avg": distance_avg,
         "bm25_raw_chunks": len(bm25_docs),
         "lexical_table_facts": len(lexical_docs),
-        "lexical_card_facts": len(card_docs),
         "query_intent": analysis.intent,
         "query_subject_terms": sorted(analysis.subject_terms),
     }
     logger.info(
-        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s lexical_card_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
+        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
         top_k,
         retrieval_limit,
         raw_result_count,
         len(bm25_docs),
         len(lexical_docs),
-        len(card_docs),
         len(docs),
         analysis.intent or "none",
         ",".join(sorted(analysis.subject_terms)) or "none",
@@ -4441,13 +4064,12 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         _format_decimal(distance_avg),
     )
     logger.info(
-        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s lexical_card_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
         top_k,
         retrieval_limit,
         raw_result_count,
         len(bm25_docs),
         len(lexical_docs),
-        len(card_docs),
         len(docs),
         analysis.intent or "none",
         ",".join(sorted(analysis.subject_terms)) or "none",
