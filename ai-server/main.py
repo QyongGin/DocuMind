@@ -285,14 +285,14 @@ def _annotate_layout_sidecar_metadata(docs: list[Document], sidecar_result) -> l
     return annotated_docs
 
 
-def _build_layout_parallel_index_docs(layout_context: PdfLayoutContext, filename: str) -> list[Document]:
+def _build_layout_parallel_index_docs(layout_context: PdfLayoutContext, filename: str, pdf_path: str) -> list[Document]:
     """layout chunking 모드에서 병렬 layout 보조 검색 chunk를 만든다."""
     if PDF_LAYOUT_MODE != OPENDATALOADER_LAYOUT_CHUNKING_MODE:
         return []
     if layout_context.sidecar.status != "stored" or layout_context.extraction is None:
         return []
 
-    layout_chunks = build_parallel_layout_chunks(layout_context.extraction.blocks, pdf_path=Path(tmp_path))
+    layout_chunks = build_parallel_layout_chunks(layout_context.extraction.blocks, pdf_path=Path(pdf_path))
     index_docs: list[Document] = []
     for chunk_index, chunk in enumerate(layout_chunks):
         metadata = {
@@ -2006,7 +2006,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         overlap_start = time.perf_counter()
         final_docs = _apply_overlap(merged_docs)
         final_docs = _annotate_layout_sidecar_metadata(final_docs, layout_sidecar)
-        layout_index_docs = _build_layout_parallel_index_docs(layout_context, filename)
+        layout_index_docs = _build_layout_parallel_index_docs(layout_context, filename, tmp_path)
         if layout_index_docs:
             logger.info(
                 "[layout_parallel_chunks] document_id=%s filename=%s chunks=%s mode=%s",
