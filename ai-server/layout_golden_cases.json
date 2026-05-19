@@ -1,0 +1,162 @@
+[
+  {
+    "id": "pdf_parallel_layout_page_51",
+    "description": "좌표 기반 layout 비교가 같은 행의 서로 다른 x 위치 block을 찾는지 확인하는 샘플이다. 내용 키워드는 검증 조건으로 사용하지 않는다.",
+    "pdf_path": "Assets/test_docs/2026학년도 입학전형 신입생 모집요강.pdf",
+    "pages": "51",
+    "expectations": {
+      "min_json_bbox_blocks": 10,
+      "min_parallel_row_candidates": 2,
+      "expected_layout_column_count": 2,
+      "min_split_ready_pages": 1,
+      "min_split_ready_rows": 2,
+      "min_body_ready_rows": 2,
+      "max_table_like_candidate_rows": 0,
+      "max_icon_like_candidate_rows": 1,
+      "max_table_ancestor_candidate_rows": 0,
+      "max_parent_region_low_pages": 0
+    }
+  },
+  {
+    "id": "pdf_academic_rules_page_1",
+    "description": "학칙처럼 조항형 문서에서 bbox와 table block이 잡히되, 좌우 병렬 layout 후보가 과도하게 나오지 않는지 확인한다.",
+    "pdf_path": "Assets/test_docs/01-02-01-학칙(20260130).pdf",
+    "pages": "1",
+    "expectations": {
+      "min_json_bbox_blocks": 6,
+      "max_parallel_row_candidates": 0,
+      "max_split_ready_pages": 0,
+      "max_body_ready_rows": 0,
+      "max_parent_region_low_pages": 0,
+      "min_json_type_counts": {
+        "table": 1
+      }
+    }
+  },
+  {
+    "id": "pdf_academic_rules_page_2",
+    "description": "학칙의 일반 list 문서에서 bbox는 잡히지만 병렬 layout 후보가 없어야 한다.",
+    "pdf_path": "Assets/test_docs/01-02-01-학칙(20260130).pdf",
+    "pages": "2",
+    "expectations": {
+      "min_json_bbox_blocks": 8,
+      "max_parallel_row_candidates": 0,
+      "max_split_ready_pages": 0,
+      "max_body_ready_rows": 0,
+      "max_parent_region_low_pages": 0
+    }
+  },
+  {
+    "id": "pdf_leave_return_page_1",
+    "description": "휴학/복학 안내처럼 이미지, 문단, 표가 섞인 일반 행정 문서에서 bbox와 table block이 안정적으로 잡히는지 확인한다.",
+    "pdf_path": "Assets/test_docs/휴학-복학.pdf",
+    "pages": "1",
+    "expectations": {
+      "min_json_bbox_blocks": 5,
+      "max_parallel_row_candidates": 0,
+      "max_split_ready_pages": 0,
+      "max_body_ready_rows": 0,
+      "max_parent_region_low_pages": 0,
+      "min_json_type_counts": {
+        "table": 1
+      }
+    }
+  },
+  {
+    "id": "pdf_leave_return_page_2",
+    "description": "휴학/복학 안내의 두 번째 페이지에서 표와 문단이 있어도 병렬 카드로 분리하지 않는지 확인한다.",
+    "pdf_path": "Assets/test_docs/휴학-복학.pdf",
+    "pages": "2",
+    "expectations": {
+      "min_json_bbox_blocks": 15,
+      "max_parallel_row_candidates": 0,
+      "max_split_ready_pages": 0,
+      "max_body_ready_rows": 0,
+      "max_parent_region_low_pages": 0,
+      "min_json_type_counts": {
+        "table": 2
+      }
+    }
+  },
+  {
+    "id": "pdf_admission_cover_page_1",
+    "description": "이미지와 짧은 제목 중심의 표지 페이지가 column count 때문에 분리 후보로 오인되지 않는지 확인한다.",
+    "pdf_path": "Assets/test_docs/2026학년도 입학전형 신입생 모집요강.pdf",
+    "pages": "1",
+    "expectations": {
+      "min_json_bbox_blocks": 4,
+      "max_parallel_row_candidates": 0,
+      "max_split_ready_pages": 0,
+      "max_body_ready_rows": 0,
+      "max_parent_region_low_pages": 0,
+      "min_json_type_counts": {
+        "image": 1
+      }
+    }
+  },
+  {
+    "id": "pdf_visual_parallel_non_body_page_2",
+    "description": "시각 자료의 병렬 row가 있어도 body row가 아니면 split-ready로 보지 않는지 확인한다.",
+    "pdf_path": "Assets/test_docs/2026학년도 입학전형 신입생 모집요강.pdf",
+    "pages": "2",
+    "expectations": {
+      "min_json_bbox_blocks": 15,
+      "min_parallel_row_candidates": 4,
+      "max_split_ready_pages": 0,
+      "max_body_ready_rows": 0,
+      "max_parent_region_low_pages": 0,
+      "max_table_like_candidate_rows": 2
+    }
+  },
+  {
+    "id": "pdf_statistics_visual_page_10",
+    "description": "통계 시각화와 표가 있는 페이지에서 병렬 숫자 row를 카드 본문으로 오인하지 않는지 확인한다.",
+    "pdf_path": "Assets/test_docs/2026학년도 입학전형 신입생 모집요강.pdf",
+    "pages": "10",
+    "expectations": {
+      "min_json_bbox_blocks": 20,
+      "min_parallel_row_candidates": 4,
+      "max_split_ready_pages": 0,
+      "max_body_ready_rows": 0,
+      "max_parent_region_low_pages": 0,
+      "max_table_like_candidate_rows": 1,
+      "max_icon_like_candidate_rows": 1,
+      "min_json_type_counts": {
+        "table": 2
+      }
+    }
+  },
+  {
+    "id": "pdf_table_layout_page_26",
+    "description": "표 중심 PDF 페이지에서 table block과 bbox가 잡히는지 확인한다. 표 내용 키워드는 검증 조건으로 사용하지 않는다.",
+    "pdf_path": "Assets/test_docs/2026학년도 입학전형 신입생 모집요강.pdf",
+    "pages": "26",
+    "expectations": {
+      "min_json_bbox_blocks": 6,
+      "max_parallel_row_candidates": 0,
+      "max_split_ready_pages": 0,
+      "max_body_ready_rows": 0,
+      "max_parent_region_low_pages": 0,
+      "min_json_type_counts": {
+        "table": 1
+      }
+    }
+  },
+  {
+    "id": "pdf_parallel_layout_page_46",
+    "description": "다른 2단 병렬 학과 안내 페이지에서도 body row 기반 split-ready 판단이 유지되는지 확인한다.",
+    "pdf_path": "Assets/test_docs/2026학년도 입학전형 신입생 모집요강.pdf",
+    "pages": "46",
+    "expectations": {
+      "min_json_bbox_blocks": 20,
+      "min_parallel_row_candidates": 2,
+      "expected_layout_column_count": 2,
+      "min_split_ready_pages": 1,
+      "min_split_ready_rows": 2,
+      "min_body_ready_rows": 2,
+      "max_table_like_candidate_rows": 0,
+      "max_table_ancestor_candidate_rows": 0,
+      "max_parent_region_low_pages": 0
+    }
+  }
+]

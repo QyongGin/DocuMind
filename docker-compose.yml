@@ -71,12 +71,16 @@ services:
       TABLE_FACT_MAX_CHARS: ${TABLE_FACT_MAX_CHARS:-420}
       EMBED_TABLE_RAW_CHUNKS: ${EMBED_TABLE_RAW_CHUNKS:-true}
       EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-64}
+      PDF_LAYOUT_MODE: ${PDF_LAYOUT_MODE:-off}
+      LAYOUT_STORE_DIR: ${LAYOUT_STORE_DIR:-/app/layout_store}
       UPLOAD_READ_CHUNK_BYTES: ${UPLOAD_READ_CHUNK_BYTES:-1048576}
       AI_DEFAULT_TOP_K: ${AI_DEFAULT_TOP_K:-5}
       BM25_INDEX_MAX_ENTRIES: ${BM25_INDEX_MAX_ENTRIES:-50000}
       CHROMA_HOST: chromadb
       CHROMA_PORT: 8000
       TZ: Asia/Seoul
+    volumes:
+      - layout_store:/app/layout_store
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import os, urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3); urllib.request.urlopen(os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip('/') + '/api/tags', timeout=3)\""]
       interval: 15s
@@ -144,3 +148,4 @@ volumes:
   mysql_data:
   ollama_data:
   chroma_data:
+  layout_store:

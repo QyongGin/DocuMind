@@ -14,6 +14,7 @@ from typing import Any
 DEFAULT_COLLECTION_NAME = "documents"
 DEFAULT_LOCAL_CHROMA_PATH = "./chroma_db"
 DEFAULT_HTTP_CHROMA_PORT = 8001
+DEFAULT_LAYOUT_STORE_DIR = "./layout_store"
 
 SHORT_LENGTH_LIMITS = (50, 100, 200)
 REPEATED_LINE_MIN_COUNT = 3
@@ -81,11 +82,48 @@ def _is_table_row(line: str) -> bool:
     return stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2
 
 
-def _is_empty_table_row(line: str) -> bool:
+def _table_cells(line: str) -> list[str]:
     if not _is_table_row(line):
-        return False
-    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        return []
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _is_empty_table_row(line: str) -> bool:
+    cells = _table_cells(line)
     return bool(cells) and all(not cell or re.fullmatch(r"-+", cell) for cell in cells)
+
+
+def _is_table_row_with_empty_cells(line: str) -> bool:
+    if not _is_table_row(line) or _is_table_separator(line):
+        return False
+    cells = _table_cells(line)
+    return bool(cells) and any(not cell for cell in cells) and any(cell for cell in cells)
+
+
+def _is_empty_table_block(lines: list[str]) -> bool:
+    if not lines or not any(_is_table_separator(line) for line in lines):
+        return False
+
+    for line in lines:
+        if _is_table_separator(line):
+            continue
+        cells = _table_cells(line)
+        if any(cell for cell in cells):
+            return False
+    return True
+
+
+def _has_empty_table_block(text: str) -> bool:
+    table_block: list[str] = []
+    for line in text.splitlines():
+        if _is_table_row(line):
+            table_block.append(line)
+            continue
+        if table_block and _is_empty_table_block(table_block):
+            return True
+        table_block = []
+
+    return bool(table_block and _is_empty_table_block(table_block))
 
 
 def _is_visual_or_layout_line(line: str) -> bool:
@@ -122,20 +160,19 @@ def _table_note_lines(text: str) -> list[str]:
     return result
 
 
-def _adjacent_duplicate_phrases(text: str) -> list[str]:
-    phrases = []
-    patterns = [
-        r"(주요\s*교과목)\s+\1",
-        r"(주요\s*취업처)\s+\1",
-        r"(지원자격)\s+\1",
-        r"(제출서류)\s+\1",
-        r"(면접\s*고사)\s+\1",
-    ]
-    normalized = _normalize_line(text)
-    for pattern in patterns:
-        for match in re.finditer(pattern, normalized):
-            phrases.append(match.group(0))
-    return phrases
+def _metadata_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _layout_sidecar_exists(layout_store_dir: str | None, store_key: str) -> bool:
+    if not layout_store_dir or not store_key:
+        return False
+    return (Path(layout_store_dir) / store_key).exists()
 
 
 def _looks_like_orphan_short_chunk(record: ChunkRecord) -> bool:
@@ -234,24 +271,52 @@ def _print_chunks(records: list[ChunkRecord], document_id: str) -> None:
         print()
 
 
-def _build_quality_report(records: list[ChunkRecord], document_id: str | None = None) -> dict[str, Any]:
+def _build_quality_report(
+    records: list[ChunkRecord],
+    document_id: str | None = None,
+    layout_store_dir: str | None = None,
+) -> dict[str, Any]:
     lengths = [record.length for record in records]
     raw_records = [record for record in records if record.chunk_role == "raw"]
     table_fact_records = [record for record in records if record.chunk_role == "table_fact"]
     table_records = [record for record in records if record.block_type == "table" or _has_table(record.document)]
-    section_kind_counts = Counter(
-        str(record.metadata.get("section_kind"))
+    section_scope_counts = Counter(
+        str(record.metadata.get("section_scope"))
         for record in records
-        if record.metadata.get("section_kind")
+        if record.metadata.get("section_scope")
     )
 
     line_counter: Counter[str] = Counter()
     issue_samples: list[ChunkIssue] = []
     note_samples: list[ChunkIssue] = []
-    duplicate_phrase_samples: list[ChunkIssue] = []
-    empty_table_samples: list[ChunkIssue] = []
+    table_with_empty_cells_samples: list[ChunkIssue] = []
+    empty_table_block_samples: list[ChunkIssue] = []
+    layout_store_missing_samples: list[ChunkIssue] = []
+    layout_mode_counts: Counter[str] = Counter()
+    layout_bbox_coverages: list[float] = []
+    layout_store_key_chunks = 0
 
     for record in records:
+        layout_mode = str(record.metadata.get("layout_mode", "")).strip()
+        if layout_mode:
+            layout_mode_counts[layout_mode] += 1
+        layout_store_key = str(record.metadata.get("layout_store_key", "")).strip()
+        if layout_store_key:
+            layout_store_key_chunks += 1
+            if not _layout_sidecar_exists(layout_store_dir, layout_store_key):
+                layout_store_missing_samples.append(
+                    ChunkIssue(
+                        record.index,
+                        "layout_store_missing",
+                        record.length,
+                        record.page,
+                        layout_store_key,
+                    )
+                )
+        layout_bbox_coverage = _metadata_float(record.metadata.get("layout_bbox_coverage"))
+        if layout_bbox_coverage is not None:
+            layout_bbox_coverages.append(layout_bbox_coverage)
+
         for line in record.document.splitlines():
             normalized = _normalize_line(line)
             if len(normalized) >= REPEATED_LINE_MIN_LENGTH:
@@ -265,19 +330,18 @@ def _build_quality_report(records: list[ChunkRecord], document_id: str | None = 
             issue_samples.append(
                 ChunkIssue(record.index, "visual_or_layout_only_chunk", record.length, record.page, _preview(record.document))
             )
-        if any(_is_empty_table_row(line) for line in record.document.splitlines()):
-            empty_table_samples.append(
-                ChunkIssue(record.index, "empty_table_row", record.length, record.page, _preview(record.document))
+        if _has_empty_table_block(record.document):
+            empty_table_block_samples.append(
+                ChunkIssue(record.index, "empty_table_block", record.length, record.page, _preview(record.document))
+            )
+        if any(_is_table_row_with_empty_cells(line) for line in record.document.splitlines()):
+            table_with_empty_cells_samples.append(
+                ChunkIssue(record.index, "table_with_empty_cells", record.length, record.page, _preview(record.document))
             )
         notes = _table_note_lines(record.document)
         if notes:
             note_samples.append(
                 ChunkIssue(record.index, "table_note_candidate", record.length, record.page, " / ".join(notes[:3]))
-            )
-        phrases = _adjacent_duplicate_phrases(record.document)
-        if phrases:
-            duplicate_phrase_samples.append(
-                ChunkIssue(record.index, "duplicated_card_label", record.length, record.page, " / ".join(phrases[:3]))
             )
 
     repeated_lines = [
@@ -310,9 +374,14 @@ def _build_quality_report(records: list[ChunkRecord], document_id: str | None = 
         },
         "quality_flags": {
             "orphan_short_or_visual_samples": [asdict(issue) for issue in issue_samples[:SAMPLE_LIMIT]],
-            "empty_table_samples": [asdict(issue) for issue in empty_table_samples[:SAMPLE_LIMIT]],
+            "empty_table_block_samples": [asdict(issue) for issue in empty_table_block_samples[:SAMPLE_LIMIT]],
+            "table_with_empty_cells_samples": [
+                asdict(issue) for issue in table_with_empty_cells_samples[:SAMPLE_LIMIT]
+            ],
+            "layout_store_missing_samples": [
+                asdict(issue) for issue in layout_store_missing_samples[:SAMPLE_LIMIT]
+            ],
             "table_note_samples": [asdict(issue) for issue in note_samples[:SAMPLE_LIMIT]],
-            "duplicated_card_label_samples": [asdict(issue) for issue in duplicate_phrase_samples[:SAMPLE_LIMIT]],
             "top_repeated_lines": repeated_lines[:SAMPLE_LIMIT],
         },
         "table_stats": {
@@ -325,7 +394,13 @@ def _build_quality_report(records: list[ChunkRecord], document_id: str | None = 
             else 0,
         },
         "metadata_stats": {
-            "section_kind_counts": dict(section_kind_counts.most_common()),
+            "section_scope_chunks": sum(section_scope_counts.values()),
+            "top_section_scopes": dict(section_scope_counts.most_common(10)),
+            "layout_mode_counts": dict(layout_mode_counts.most_common()),
+            "layout_store_key_chunks": layout_store_key_chunks,
+            "avg_layout_bbox_coverage": round(statistics.mean(layout_bbox_coverages), 4)
+            if layout_bbox_coverages
+            else 0,
         },
     }
     return report
@@ -350,12 +425,22 @@ def _print_quality_report(report: dict[str, Any]) -> None:
         print(f"- {key}: {value}")
 
     print("\n## metadata 통계")
-    section_kind_counts = metadata_stats.get("section_kind_counts") or {}
-    if section_kind_counts:
-        for key, value in section_kind_counts.items():
-            print(f"- section_kind={key}: {value}")
+    section_scope_chunks = metadata_stats.get("section_scope_chunks", 0)
+    top_section_scopes = metadata_stats.get("top_section_scopes") or {}
+    print(f"- section_scope_chunks: {section_scope_chunks}")
+    if top_section_scopes:
+        for key, value in top_section_scopes.items():
+            print(f"- section_scope={key}: {value}")
     else:
-        print("- section_kind: 없음")
+        print("- section_scope: 없음")
+    layout_mode_counts = metadata_stats.get("layout_mode_counts") or {}
+    if layout_mode_counts:
+        for key, value in layout_mode_counts.items():
+            print(f"- layout_mode={key}: {value}")
+    else:
+        print("- layout_mode: 없음")
+    print(f"- layout_store_key_chunks: {metadata_stats.get('layout_store_key_chunks', 0)}")
+    print(f"- avg_layout_bbox_coverage: {metadata_stats.get('avg_layout_bbox_coverage', 0)}")
 
     print("\n## 주의할 샘플")
     for group_name, samples in flags.items():
@@ -398,7 +483,7 @@ def _write_markdown(report: dict[str, Any], output_path: str | None) -> None:
         "flowchart TD",
         '    A["ChromaDB 청크 조회"] --> B["길이/역할 통계"]',
         '    A --> C["반복 line 검사"]',
-        '    A --> D["표/주석/카드 위험 검사"]',
+        '    A --> D["표/주석 검사"]',
         '    B --> E["청크 품질 판단"]',
         '    C --> E',
         '    D --> E',
@@ -430,11 +515,20 @@ def _write_markdown(report: dict[str, Any], output_path: str | None) -> None:
             "|---|---:|",
         ]
     )
-    section_kind_counts = metadata_stats.get("section_kind_counts") or {}
-    if section_kind_counts:
-        lines.extend(f"|section_kind={key}|{value}|" for key, value in section_kind_counts.items())
+    section_scope_chunks = metadata_stats.get("section_scope_chunks", 0)
+    top_section_scopes = metadata_stats.get("top_section_scopes") or {}
+    lines.append(f"|section_scope_chunks|{section_scope_chunks}|")
+    if top_section_scopes:
+        lines.extend(f"|section_scope={key}|{value}|" for key, value in top_section_scopes.items())
     else:
-        lines.append("|section_kind|없음|")
+        lines.append("|section_scope|없음|")
+    layout_mode_counts = metadata_stats.get("layout_mode_counts") or {}
+    if layout_mode_counts:
+        lines.extend(f"|layout_mode={key}|{value}|" for key, value in layout_mode_counts.items())
+    else:
+        lines.append("|layout_mode|없음|")
+    lines.append(f"|layout_store_key_chunks|{metadata_stats.get('layout_store_key_chunks', 0)}|")
+    lines.append(f"|avg_layout_bbox_coverage|{metadata_stats.get('avg_layout_bbox_coverage', 0)}|")
     lines.append("")
     lines.append("## 주의할 샘플")
     for group_name, samples in flags.items():
@@ -469,6 +563,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json-output", help="품질 진단 결과 JSON 저장 경로.")
     parser.add_argument("--markdown-output", help="품질 진단 결과 Markdown 저장 경로.")
     parser.add_argument("--collection", default=DEFAULT_COLLECTION_NAME, help="ChromaDB collection 이름.")
+    parser.add_argument(
+        "--layout-store-dir",
+        default=os.getenv("LAYOUT_STORE_DIR", DEFAULT_LAYOUT_STORE_DIR),
+        help="layout sidecar store 경로.",
+    )
     parser.add_argument("--chroma-host", default=os.getenv("CHROMA_HOST"), help="ChromaDB HTTP host.")
     parser.add_argument(
         "--chroma-port",
@@ -497,7 +596,7 @@ def main() -> None:
         records = _get_all_records(collection)
 
     if args.quality:
-        report = _build_quality_report(records, args.document_id)
+        report = _build_quality_report(records, args.document_id, args.layout_store_dir)
         _print_quality_report(report)
         _write_json(report, args.json_output)
         _write_markdown(report, args.markdown_output)

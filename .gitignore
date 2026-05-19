@@ -24,7 +24,9 @@ ai-server/__pycache__/
 ai-server/**/__pycache__/
 ai-server/*.pyc
 ai-server/chroma_db/
+ai-server/layout_store/
 ai-server/rag_eval_results/
+layout_store/
 *.egg-info/
 .env
 

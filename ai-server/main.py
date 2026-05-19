@@ -17,9 +17,18 @@ import logging
 import math
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Lock
 
 from document_blocks import clean_documents_for_chunking
+from layout_blocks import (
+    OPENDATALOADER_LAYOUT_MODE,
+    errored_layout_sidecar,
+    extract_opendataloader_layout,
+    remove_layout_sidecar,
+    skipped_layout_sidecar,
+    store_layout_sidecar,
+)
 
 try:
     from kiwipiepy import Kiwi
@@ -62,6 +71,18 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_choice(name: str, default: str, choices: set[str]) -> str:
+    """허용된 문자열 환경변수만 읽고, 잘못된 값은 기본값으로 되돌린다."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    value = raw_value.strip().lower()
+    if value in choices:
+        return value
+    logger.warning("%s=%s 값이 허용되지 않아 기본값 %s를 사용합니다.", name, raw_value, default)
+    return default
+
+
 # 환경변수로 로컬/Docker 환경 분기
 # 로컬: OLLAMA_BASE_URL 미설정 시 localhost 사용
 # Docker: OLLAMA_BASE_URL=http://ollama:11434
@@ -85,6 +106,8 @@ BM25_INDEX_MAX_ENTRIES = _env_int("BM25_INDEX_MAX_ENTRIES", 50000)
 TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
 TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
 EMBED_TABLE_RAW_CHUNKS = _env_bool("EMBED_TABLE_RAW_CHUNKS", True)
+PDF_LAYOUT_MODE = _env_choice("PDF_LAYOUT_MODE", "off", {"off", OPENDATALOADER_LAYOUT_MODE})
+LAYOUT_STORE_DIR = Path(os.getenv("LAYOUT_STORE_DIR", "./layout_store"))
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
     logger.warning(
@@ -126,7 +149,7 @@ _bm25_sparse_index = None
 _document_progress: dict[int, dict] = {}
 
 logger.info(
-    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s chroma_host=%s chroma_port=%s",
+    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s pdf_layout_mode=%s layout_store_dir=%s chroma_host=%s chroma_port=%s",
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
     OLLAMA_EMBEDDING_MODEL,
@@ -142,6 +165,8 @@ logger.info(
     DEFAULT_TOP_K,
     BM25_INDEX_MAX_ENTRIES,
     EMBED_TABLE_RAW_CHUNKS,
+    PDF_LAYOUT_MODE,
+    str(LAYOUT_STORE_DIR),
     CHROMA_HOST or "persistent",
     CHROMA_PORT
 )
@@ -197,6 +222,52 @@ def _load_documents(tmp_path: str, filename: str) -> list[Document]:
         markdown = MarkItDown().convert(tmp_path).text_content
         return [Document(page_content=markdown)]
     return loader.load()
+
+
+def _extract_and_store_pdf_layout_if_enabled(tmp_path: str, filename: str, document_id: int | None):
+    """feature flag가 켜진 PDF에만 layout sidecar를 생성한다."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if PDF_LAYOUT_MODE == "off":
+        return skipped_layout_sidecar("mode_off")
+    if PDF_LAYOUT_MODE != OPENDATALOADER_LAYOUT_MODE:
+        return skipped_layout_sidecar("unsupported_layout_mode")
+    if ext != "pdf":
+        return skipped_layout_sidecar("non_pdf_document")
+    if document_id is None:
+        return skipped_layout_sidecar("missing_document_id")
+
+    try:
+        layout_result = extract_opendataloader_layout(Path(tmp_path))
+        return store_layout_sidecar(
+            layout_result,
+            LAYOUT_STORE_DIR,
+            document_id,
+            filename,
+            PDF_LAYOUT_MODE,
+        )
+    except Exception as exc:
+        logger.exception(
+            "[layout_sidecar_error] document_id=%s filename=%s mode=%s",
+            document_id,
+            filename,
+            PDF_LAYOUT_MODE,
+        )
+        return errored_layout_sidecar(type(exc).__name__)
+
+
+def _annotate_layout_sidecar_metadata(docs: list[Document], sidecar_result) -> list[Document]:
+    """저장된 layout sidecar 위치를 청크 metadata에 작은 값으로만 남긴다."""
+    if sidecar_result.status != "stored" or not sidecar_result.store_key:
+        return docs
+
+    annotated_docs: list[Document] = []
+    for doc in docs:
+        metadata = dict(doc.metadata)
+        metadata["layout_mode"] = PDF_LAYOUT_MODE
+        metadata["layout_store_key"] = sidecar_result.store_key
+        metadata["layout_bbox_coverage"] = sidecar_result.bbox_coverage
+        annotated_docs.append(Document(page_content=doc.page_content, metadata=metadata))
+    return annotated_docs
 
 
 def _normalize_text(text: str) -> str:
@@ -394,20 +465,6 @@ def _chunk_block_signature(doc: Document) -> str:
     return "text"
 
 
-SECTION_KIND_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("historical_result", ("전년도 입시결과", "입시결과")),
-    ("admission_quota", ("모집인원", "모집 정원", "정원내 전형 모집인원", "정원외 전형 모집인원")),
-    ("admission_schedule", ("전형일정", "일정")),
-    ("interview", ("면접고사", "면접 안내", "면접고사 안내", "면접 질문")),
-    ("eligibility", ("지원자격", "자격")),
-    ("required_documents", ("제출서류", "서류")),
-    ("score_method", ("성적 반영", "성적반영", "수시모집", "정시모집")),
-    ("department_profile", ("학과안내", "주요 교과목", "주요 취업처")),
-    ("scholarship", ("장학", "장학금")),
-    ("facility", ("시설", "편의시설", "생활관", "스터디", "식당", "카페", "편의점")),
-)
-
-
 def _extract_heading_lines(text: str, limit: int = 4) -> list[str]:
     """청크 본문 앞쪽 heading line을 metadata 보강용으로 추출한다."""
     headings: list[str] = []
@@ -440,35 +497,16 @@ def _derive_section_scope(doc: Document) -> str:
     return " > ".join(heading_lines)
 
 
-def _infer_section_kind(section_scope: str, text: str) -> str:
-    """섹션 경로와 본문을 바탕으로 검색에 쓸 대략적인 섹션 종류를 추정한다."""
-    haystack = f"{section_scope}\n{text[:500]}".lower()
-    for section_kind, keywords in SECTION_KIND_RULES:
-        if any(keyword.lower() in haystack for keyword in keywords):
-            return section_kind
-    return "general"
-
-
 def _annotate_section_metadata(docs: list[Document]) -> list[Document]:
-    """청크마다 section_scope와 section_kind metadata를 추가한다."""
+    """청크마다 문서의 실제 heading 경로를 section_scope metadata로 보존한다."""
     annotated_docs: list[Document] = []
     for doc in docs:
         metadata = dict(doc.metadata)
         section_scope = _derive_section_scope(doc)
         if section_scope:
             metadata["section_scope"] = section_scope[:240]
-        metadata["section_kind"] = _infer_section_kind(section_scope, doc.page_content)
         annotated_docs.append(Document(page_content=doc.page_content, metadata=metadata))
     return annotated_docs
-
-
-def _count_section_kinds(docs: list[Document]) -> dict[str, int]:
-    """업로드 로그에 남길 section_kind 분포를 계산한다."""
-    counts: dict[str, int] = {}
-    for doc in docs:
-        section_kind = str(doc.metadata.get("section_kind", "unknown"))
-        counts[section_kind] = counts.get(section_kind, 0) + 1
-    return counts
 
 
 def _can_merge_text_prefix_into_table(buffer: list[Document], doc: Document, next_length: int, short_threshold: int) -> bool:
@@ -1734,6 +1772,22 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         parse_elapsed = time.perf_counter() - parse_start
         _set_document_progress(document_id, 18, "parse", "문서 파싱을 완료했습니다.")
 
+        layout_start = time.perf_counter()
+        layout_sidecar = _extract_and_store_pdf_layout_if_enabled(tmp_path, filename, document_id)
+        layout_elapsed = time.perf_counter() - layout_start
+        logger.info(
+            "[layout_sidecar] document_id=%s filename=%s mode=%s status=%s store_key=%s blocks=%s bbox_coverage=%.4f fallback_reason=%s elapsed=%.2fs",
+            document_id,
+            filename,
+            PDF_LAYOUT_MODE,
+            layout_sidecar.status,
+            layout_sidecar.store_key or "none",
+            layout_sidecar.block_count,
+            layout_sidecar.bbox_coverage,
+            layout_sidecar.fallback_reason or "none",
+            layout_elapsed,
+        )
+
         page_lookup_start = time.perf_counter()
         page_lookup = _build_page_lookup(raw_docs)
         page_lookup_elapsed = time.perf_counter() - page_lookup_start
@@ -1769,12 +1823,13 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         section_start = time.perf_counter()
         section_docs = _annotate_section_metadata(split_docs)
         section_elapsed = time.perf_counter() - section_start
-        section_kind_counts = _count_section_kinds(section_docs)
+        scoped_chunk_count = sum(1 for doc in section_docs if doc.metadata.get("section_scope"))
         logger.info(
-            "[section_scope] document_id=%s filename=%s section_kinds=%s elapsed=%.2fs",
+            "[section_scope] document_id=%s filename=%s scoped_chunks=%s total_chunks=%s elapsed=%.2fs",
             document_id,
             filename,
-            json.dumps(section_kind_counts, ensure_ascii=False, sort_keys=True),
+            scoped_chunk_count,
+            len(section_docs),
             section_elapsed,
         )
 
@@ -1791,6 +1846,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
 
         overlap_start = time.perf_counter()
         final_docs = _apply_overlap(merged_docs)
+        final_docs = _annotate_layout_sidecar_metadata(final_docs, layout_sidecar)
         overlap_elapsed = time.perf_counter() - overlap_start
         _log_chunk_stats(document_id, filename, "final", final_docs)
         _set_document_progress(document_id, 30, "chunking", f"청킹을 완료했습니다. ({len(final_docs)} chunks)")
@@ -1805,7 +1861,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
-            "[upload] document_id=%s filename=%s raw_docs=%s cleaned_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs cleanup=%.2fs split=%.2fs section=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            "[upload] document_id=%s filename=%s raw_docs=%s cleaned_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s layout_mode=%s layout_status=%s parse=%.2fs layout=%.2fs page_lookup=%.2fs normalize=%.2fs cleanup=%.2fs split=%.2fs section=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
             len(raw_docs),
@@ -1822,7 +1878,10 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             TABLE_FACT_MAX_PER_CHUNK,
             EMBED_TABLE_RAW_CHUNKS,
             EMBEDDING_BATCH_SIZE,
+            PDF_LAYOUT_MODE,
+            layout_sidecar.status,
             parse_elapsed,
+            layout_elapsed,
             page_lookup_elapsed,
             normalize_elapsed,
             cleanup_elapsed,
@@ -3677,6 +3736,7 @@ def _append_trace_method(entry: dict, method: str) -> None:
 def _candidate_location_summary(chunk_id: str, doc: str, meta: dict, preview_chars: int = 360) -> dict:
     """trace 후보의 문서 위치와 본문 미리보기를 만든다."""
     meta = meta or {}
+    layout_store_key = str(meta.get("layout_store_key", "")).strip()
     return {
         "chunk_id": str(chunk_id),
         "document_id": meta.get("document_id", ""),
@@ -3688,8 +3748,18 @@ def _candidate_location_summary(chunk_id: str, doc: str, meta: dict, preview_cha
         "page_end": meta.get("page_end"),
         "chunk_index": meta.get("chunk_index", _parse_chunk_index(str(chunk_id))),
         "header_path": _format_header_path(meta),
+        "section_scope": meta.get("section_scope"),
+        "layout_mode": meta.get("layout_mode"),
+        "layout_store_key": layout_store_key or None,
+        "layout_store_exists": _layout_store_key_exists(layout_store_key) if layout_store_key else None,
+        "layout_bbox_coverage": meta.get("layout_bbox_coverage"),
         "content_preview": _preview_text(doc, preview_chars),
     }
+
+
+def _layout_store_key_exists(store_key: str) -> bool:
+    """trace에서 layout sidecar 참조가 실제 파일로 존재하는지 확인한다."""
+    return (LAYOUT_STORE_DIR / store_key).exists()
 
 
 def _record_vector_trace(
@@ -3807,7 +3877,13 @@ def _format_rerank_candidate(
     heading_score = _score_heading_match(search_text, analysis)
     evidence_fact_score = _score_query_evidence_facts(doc, analysis, meta)
     runtime_table_fact_score = _best_runtime_table_fact_score(meta, question)
-    rerank_score = subject_score + intent_score + heading_score + evidence_fact_score + runtime_table_fact_score
+    rerank_score = (
+        subject_score
+        + intent_score
+        + heading_score
+        + evidence_fact_score
+        + runtime_table_fact_score
+    )
     query_evidence_facts = _extract_query_evidence_fact_lines(doc, analysis, max_facts=5, meta=meta)
     matched_table_facts = _get_matched_table_facts(meta)
 
@@ -4225,7 +4301,12 @@ async def delete_document(document_id: int):
     # async 핸들러에서 직접 호출하면 이벤트 루프가 점유되어 다른 요청이 대기하므로
     # /query 핸들러와 동일하게 asyncio.to_thread()로 별도 스레드에서 실행한다.
     deleted_count = await asyncio.to_thread(_delete_from_chroma)
-    return {"status": "success", "deleted_chunks": deleted_count}
+    deleted_layout_sidecars = await asyncio.to_thread(remove_layout_sidecar, LAYOUT_STORE_DIR, document_id)
+    return {
+        "status": "success",
+        "deleted_chunks": deleted_count,
+        "deleted_layout_sidecars": deleted_layout_sidecars,
+    }
 
 
 @app.get("/documents/{document_id}/chunks")

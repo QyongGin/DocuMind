@@ -1,5 +1,6 @@
 venv/
 chroma_db/
+layout_store/
 __pycache__/
 *.pyc
 *.pyo
