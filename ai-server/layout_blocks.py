@@ -18,7 +18,14 @@ from layout_confidence import (
 
 LAYOUT_SCHEMA_VERSION = 2
 OPENDATALOADER_LAYOUT_MODE = "opendataloader_json"
+OPENDATALOADER_LAYOUT_CHUNKING_MODE = "opendataloader_json_chunking"
+OPENDATALOADER_LAYOUT_MODES = {
+    OPENDATALOADER_LAYOUT_MODE,
+    OPENDATALOADER_LAYOUT_CHUNKING_MODE,
+}
 OPENDATALOADER_PARSER_NAME = "opendataloader-pdf"
+DEFAULT_LAYOUT_ROW_TOLERANCE = 12.0
+DEFAULT_LAYOUT_CHUNK_PREVIEW_CHARS = 1200
 
 
 @dataclass(frozen=True)
@@ -89,6 +96,18 @@ class LayoutSidecarResult:
     block_count: int
     bbox_coverage: float
     fallback_reason: str | None
+
+
+@dataclass(frozen=True)
+class ParallelLayoutChunk:
+    """병렬 layout(레이아웃) 페이지에서 만든 보조 검색 chunk(청크)다."""
+
+    page: int | str
+    text: str
+    column_count: int
+    confidence_score: int
+    confidence_level: str
+    row_count: int
 
 
 def load_opendataloader_documents(pdf_path: Path, output_format: str, pages: str | None = None) -> list[Any]:
@@ -474,6 +493,181 @@ def remove_layout_sidecar(store_dir: Path, document_id: int) -> int:
             path.unlink()
             removed_count += 1
     return removed_count
+
+
+def build_parallel_layout_chunks(
+    blocks: list[LayoutBlock],
+    row_tolerance: float = DEFAULT_LAYOUT_ROW_TOLERANCE,
+    preview_chars: int = DEFAULT_LAYOUT_CHUNK_PREVIEW_CHARS,
+) -> list[ParallelLayoutChunk]:
+    """split-ready page(분리 가능 페이지)를 병렬 구조 보조 chunk로 변환한다."""
+    chunks: list[ParallelLayoutChunk] = []
+    blocks_by_page: dict[int | str, list[LayoutBlock]] = defaultdict(list)
+    for block in blocks:
+        page = block.page if block.page is not None else "unknown"
+        blocks_by_page[page].append(block)
+
+    for page, page_blocks in sorted(blocks_by_page.items(), key=lambda item: str(item[0])):
+        row_candidates = find_parallel_row_candidates(page_blocks, row_tolerance, preview_chars)
+        confidence = assess_parallel_layout_confidence(page_blocks, row_candidates)
+        if not confidence.get("eligible_for_split"):
+            continue
+
+        column_count = int(confidence.get("dominant_column_count") or 0)
+        split_rows = _split_ready_body_rows(row_candidates, column_count)
+        if column_count < 2 or not split_rows:
+            continue
+
+        text = _format_parallel_layout_chunk(page, page_blocks, split_rows, column_count, confidence)
+        if not text:
+            continue
+
+        chunks.append(ParallelLayoutChunk(
+            page=page,
+            text=text,
+            column_count=column_count,
+            confidence_score=int(confidence.get("score") or 0),
+            confidence_level=str(confidence.get("level") or "none"),
+            row_count=len(split_rows),
+        ))
+    return chunks
+
+
+def _split_ready_body_rows(row_candidates: list[dict[str, Any]], column_count: int) -> list[dict[str, Any]]:
+    rows = []
+    for candidate in row_candidates:
+        if str(candidate.get("role")) != "body":
+            continue
+        if candidate.get("has_table_ancestor"):
+            continue
+        if int(candidate.get("distinct_columns") or 0) != column_count:
+            continue
+        if len(candidate.get("texts") or []) < column_count:
+            continue
+        rows.append(candidate)
+    return sorted(rows, key=lambda item: float(item.get("normalized_y_center") or 0), reverse=True)
+
+
+def _format_parallel_layout_chunk(
+    page: int | str,
+    page_blocks: list[LayoutBlock],
+    split_rows: list[dict[str, Any]],
+    column_count: int,
+    confidence: dict[str, Any],
+) -> str:
+    column_lines: list[list[str]] = [[] for _ in range(column_count)]
+    for row in split_rows:
+        label = _label_for_parallel_row(page_blocks, row) or "본문"
+        label = _collapse_repeated_phrase(label)
+        for column_index, value in enumerate((row.get("texts") or [])[:column_count]):
+            cleaned_value = _clean_layout_chunk_text(str(value))
+            if cleaned_value:
+                column_lines[column_index].append(f"- {label}: {cleaned_value}")
+
+    if not any(column_lines):
+        return ""
+
+    lines = [
+        "레이아웃 병렬 청크",
+        f"페이지: {page}",
+        f"열 수: {column_count}",
+        f"layout_confidence: {confidence.get('level')} ({confidence.get('score')})",
+    ]
+    common_titles = _common_top_texts(page_blocks, split_rows)
+    if common_titles:
+        lines.append("공통 상단 텍스트:")
+        lines.extend(f"- {_clean_layout_chunk_text(title)}" for title in common_titles)
+
+    for index, values in enumerate(column_lines, start=1):
+        if not values:
+            continue
+        lines.append(f"열 {index}:")
+        lines.extend(values)
+    return "\n".join(lines)
+
+
+def _common_top_texts(page_blocks: list[LayoutBlock], split_rows: list[dict[str, Any]], limit: int = 3) -> list[str]:
+    top_row_y = max(float(row.get("normalized_y_center") or 0) for row in split_rows)
+    headings: list[tuple[float, str]] = []
+    for block in page_blocks:
+        if block.block_type.lower() != "heading" or not block.text or block.normalized_bbox is None:
+            continue
+        row_center = _layout_row_center(block)
+        if row_center is None or row_center <= top_row_y:
+            continue
+        if _looks_like_page_footer(block):
+            continue
+        headings.append((row_center, block.text))
+
+    headings.sort(key=lambda item: item[0], reverse=True)
+    result: list[str] = []
+    for _, text in headings:
+        cleaned = _clean_layout_chunk_text(text)
+        if cleaned and cleaned not in result:
+            result.append(cleaned)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _label_for_parallel_row(page_blocks: list[LayoutBlock], row: dict[str, Any]) -> str:
+    row_y = row.get("normalized_y_center")
+    if row_y is None:
+        return ""
+    row_y_float = float(row_y)
+    candidates: list[tuple[float, str]] = []
+    for block in page_blocks:
+        if not _is_parallel_row_label_candidate(block):
+            continue
+        center_y = _layout_row_center(block)
+        if center_y is None or center_y <= row_y_float:
+            continue
+        distance = center_y - row_y_float
+        if distance <= 0.015 or distance > 0.08:
+            continue
+        candidates.append((distance, block.text))
+
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda item: (item[0], len(item[1])))
+    return _clean_layout_chunk_text(candidates[0][1])
+
+
+def _is_parallel_row_label_candidate(block: LayoutBlock) -> bool:
+    if not block.text or block.normalized_bbox is None:
+        return False
+    if block.block_type.lower() in {"image", "figure", "table"}:
+        return False
+    if _has_table_ancestor(block) or _looks_like_page_footer(block):
+        return False
+    x1, _, x2, _ = block.normalized_bbox
+    width = abs(x2 - x1)
+    if width < 0.3:
+        return False
+    text = _clean_layout_chunk_text(block.text)
+    return bool(text and len(text) <= 120)
+
+
+def _looks_like_page_footer(block: LayoutBlock) -> bool:
+    if block.normalized_bbox is None:
+        return False
+    _, y1, _, y2 = block.normalized_bbox
+    if max(y1, y2) > 0.1:
+        return False
+    return bool(re.search(r"\d{1,4}", block.text or ""))
+
+
+def _clean_layout_chunk_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _collapse_repeated_phrase(text: str) -> str:
+    tokens = text.split()
+    if len(tokens) >= 2 and len(tokens) % 2 == 0:
+        midpoint = len(tokens) // 2
+        if tokens[:midpoint] == tokens[midpoint:]:
+            return " ".join(tokens[:midpoint])
+    return text
 
 
 def bbox_center(block: LayoutBlock) -> tuple[float, float] | None:

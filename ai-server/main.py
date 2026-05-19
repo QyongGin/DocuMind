@@ -22,7 +22,12 @@ from threading import Lock
 
 from document_blocks import clean_documents_for_chunking
 from layout_blocks import (
+    OPENDATALOADER_LAYOUT_CHUNKING_MODE,
     OPENDATALOADER_LAYOUT_MODE,
+    OPENDATALOADER_LAYOUT_MODES,
+    LayoutExtractionResult,
+    LayoutSidecarResult,
+    build_parallel_layout_chunks,
     errored_layout_sidecar,
     extract_opendataloader_layout,
     remove_layout_sidecar,
@@ -106,7 +111,7 @@ BM25_INDEX_MAX_ENTRIES = _env_int("BM25_INDEX_MAX_ENTRIES", 50000)
 TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
 TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
 EMBED_TABLE_RAW_CHUNKS = _env_bool("EMBED_TABLE_RAW_CHUNKS", True)
-PDF_LAYOUT_MODE = _env_choice("PDF_LAYOUT_MODE", "off", {"off", OPENDATALOADER_LAYOUT_MODE})
+PDF_LAYOUT_MODE = _env_choice("PDF_LAYOUT_MODE", "off", {"off", *OPENDATALOADER_LAYOUT_MODES})
 LAYOUT_STORE_DIR = Path(os.getenv("LAYOUT_STORE_DIR", "./layout_store"))
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
@@ -206,6 +211,14 @@ def health():
     return {"status": "ok"}
 
 
+@dataclass(frozen=True)
+class PdfLayoutContext:
+    """PDF layout sidecar 저장 결과와 메모리상 layout 추출 결과를 함께 보관한다."""
+
+    sidecar: LayoutSidecarResult
+    extraction: LayoutExtractionResult | None = None
+
+
 def _load_documents(tmp_path: str, filename: str) -> list[Document]:
     """
     확장자에 따라 파서를 분기하고 LangChain Document 리스트를 반환한다.
@@ -224,27 +237,28 @@ def _load_documents(tmp_path: str, filename: str) -> list[Document]:
     return loader.load()
 
 
-def _extract_and_store_pdf_layout_if_enabled(tmp_path: str, filename: str, document_id: int | None):
+def _extract_and_store_pdf_layout_if_enabled(tmp_path: str, filename: str, document_id: int | None) -> PdfLayoutContext:
     """feature flag가 켜진 PDF에만 layout sidecar를 생성한다."""
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if PDF_LAYOUT_MODE == "off":
-        return skipped_layout_sidecar("mode_off")
-    if PDF_LAYOUT_MODE != OPENDATALOADER_LAYOUT_MODE:
-        return skipped_layout_sidecar("unsupported_layout_mode")
+        return PdfLayoutContext(skipped_layout_sidecar("mode_off"))
+    if PDF_LAYOUT_MODE not in OPENDATALOADER_LAYOUT_MODES:
+        return PdfLayoutContext(skipped_layout_sidecar("unsupported_layout_mode"))
     if ext != "pdf":
-        return skipped_layout_sidecar("non_pdf_document")
+        return PdfLayoutContext(skipped_layout_sidecar("non_pdf_document"))
     if document_id is None:
-        return skipped_layout_sidecar("missing_document_id")
+        return PdfLayoutContext(skipped_layout_sidecar("missing_document_id"))
 
     try:
         layout_result = extract_opendataloader_layout(Path(tmp_path))
-        return store_layout_sidecar(
+        sidecar_result = store_layout_sidecar(
             layout_result,
             LAYOUT_STORE_DIR,
             document_id,
             filename,
             PDF_LAYOUT_MODE,
         )
+        return PdfLayoutContext(sidecar=sidecar_result, extraction=layout_result)
     except Exception as exc:
         logger.exception(
             "[layout_sidecar_error] document_id=%s filename=%s mode=%s",
@@ -252,7 +266,7 @@ def _extract_and_store_pdf_layout_if_enabled(tmp_path: str, filename: str, docum
             filename,
             PDF_LAYOUT_MODE,
         )
-        return errored_layout_sidecar(type(exc).__name__)
+        return PdfLayoutContext(errored_layout_sidecar(type(exc).__name__))
 
 
 def _annotate_layout_sidecar_metadata(docs: list[Document], sidecar_result) -> list[Document]:
@@ -268,6 +282,38 @@ def _annotate_layout_sidecar_metadata(docs: list[Document], sidecar_result) -> l
         metadata["layout_bbox_coverage"] = sidecar_result.bbox_coverage
         annotated_docs.append(Document(page_content=doc.page_content, metadata=metadata))
     return annotated_docs
+
+
+def _build_layout_parallel_index_docs(layout_context: PdfLayoutContext, filename: str) -> list[Document]:
+    """layout chunking 모드에서 병렬 layout 보조 검색 chunk를 만든다."""
+    if PDF_LAYOUT_MODE != OPENDATALOADER_LAYOUT_CHUNKING_MODE:
+        return []
+    if layout_context.sidecar.status != "stored" or layout_context.extraction is None:
+        return []
+
+    layout_chunks = build_parallel_layout_chunks(layout_context.extraction.blocks)
+    index_docs: list[Document] = []
+    for chunk_index, chunk in enumerate(layout_chunks):
+        metadata = {
+            "source": filename,
+            "chunk_role": "layout_parallel",
+            "block_type": "layout_parallel",
+            "layout_chunk_index": chunk_index,
+            "layout_page": chunk.page,
+            "layout_column_count": chunk.column_count,
+            "layout_confidence_score": chunk.confidence_score,
+            "layout_confidence_level": chunk.confidence_level,
+            "layout_parallel_row_count": chunk.row_count,
+            "layout_mode": PDF_LAYOUT_MODE,
+            "layout_store_key": layout_context.sidecar.store_key,
+            "layout_bbox_coverage": layout_context.sidecar.bbox_coverage,
+        }
+        if isinstance(chunk.page, int):
+            metadata["page"] = chunk.page
+            metadata["page_start"] = chunk.page
+            metadata["page_end"] = chunk.page
+        index_docs.append(Document(page_content=chunk.text, metadata=metadata))
+    return index_docs
 
 
 def _normalize_text(text: str) -> str:
@@ -1633,6 +1679,7 @@ def _build_index_documents(
     filename: str,
     document_id: int,
     page_lookup: list[dict],
+    extra_index_docs: list[Document] | None = None,
 ) -> tuple[list[Document], float, int]:
     """원본 청크와 검색용 table fact 문서를 함께 만든다."""
     index_docs: list[Document] = []
@@ -1664,6 +1711,12 @@ def _build_index_documents(
             index_docs.append(Document(page_content=fact, metadata=fact_metadata))
             table_fact_count += 1
 
+    for extra_doc in extra_index_docs or []:
+        metadata = dict(extra_doc.metadata)
+        metadata["document_id"] = str(document_id)
+        metadata.setdefault("source", filename)
+        index_docs.append(Document(page_content=extra_doc.page_content, metadata=metadata))
+
     return index_docs, page_match_elapsed, table_fact_count
 
 
@@ -1673,11 +1726,20 @@ def _build_index_document_id(document_id: int, metadata: dict, fallback_index: i
         parent_index = metadata.get("parent_chunk_index", fallback_index)
         fact_index = metadata.get("fact_index", 0)
         return f"{document_id}_{parent_index}_fact_{fact_index}"
+    if metadata.get("chunk_role") == "layout_parallel":
+        layout_chunk_index = metadata.get("layout_chunk_index", fallback_index)
+        return f"{document_id}_layout_{layout_chunk_index}"
     chunk_index = metadata.get("chunk_index", fallback_index)
     return f"{document_id}_{chunk_index}"
 
 
-def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float, int, int]:
+def _store_document_chunks(
+    final_docs: list[Document],
+    filename: str,
+    document_id: int,
+    page_lookup: list[dict],
+    extra_index_docs: list[Document] | None = None,
+) -> tuple[float, float, float, int, int]:
     """
     문서 청크를 batch embedding 후 ChromaDB에 batch 저장한다.
     청크별 HTTP 호출을 피하기 위해 EMBEDDING_BATCH_SIZE 단위로 묶어 처리한다.
@@ -1687,6 +1749,7 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
         filename,
         document_id,
         page_lookup,
+        extra_index_docs,
     )
     embedding_elapsed = 0.0
     chroma_elapsed = 0.0
@@ -1773,7 +1836,8 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         _set_document_progress(document_id, 18, "parse", "문서 파싱을 완료했습니다.")
 
         layout_start = time.perf_counter()
-        layout_sidecar = _extract_and_store_pdf_layout_if_enabled(tmp_path, filename, document_id)
+        layout_context = _extract_and_store_pdf_layout_if_enabled(tmp_path, filename, document_id)
+        layout_sidecar = layout_context.sidecar
         layout_elapsed = time.perf_counter() - layout_start
         logger.info(
             "[layout_sidecar] document_id=%s filename=%s mode=%s status=%s store_key=%s blocks=%s bbox_coverage=%.4f fallback_reason=%s elapsed=%.2fs",
@@ -1847,6 +1911,15 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         overlap_start = time.perf_counter()
         final_docs = _apply_overlap(merged_docs)
         final_docs = _annotate_layout_sidecar_metadata(final_docs, layout_sidecar)
+        layout_index_docs = _build_layout_parallel_index_docs(layout_context, filename)
+        if layout_index_docs:
+            logger.info(
+                "[layout_parallel_chunks] document_id=%s filename=%s chunks=%s mode=%s",
+                document_id,
+                filename,
+                len(layout_index_docs),
+                PDF_LAYOUT_MODE,
+            )
         overlap_elapsed = time.perf_counter() - overlap_start
         _log_chunk_stats(document_id, filename, "final", final_docs)
         _set_document_progress(document_id, 30, "chunking", f"청킹을 완료했습니다. ({len(final_docs)} chunks)")
@@ -1856,12 +1929,13 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             final_docs,
             filename,
             document_id,
-            page_lookup
+            page_lookup,
+            layout_index_docs,
         )
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
-            "[upload] document_id=%s filename=%s raw_docs=%s cleaned_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s layout_mode=%s layout_status=%s parse=%.2fs layout=%.2fs page_lookup=%.2fs normalize=%.2fs cleanup=%.2fs split=%.2fs section=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            "[upload] document_id=%s filename=%s raw_docs=%s cleaned_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s layout_parallel_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s layout_mode=%s layout_status=%s parse=%.2fs layout=%.2fs page_lookup=%.2fs normalize=%.2fs cleanup=%.2fs split=%.2fs section=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
             len(raw_docs),
@@ -1872,6 +1946,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             len(final_docs),
             index_entries,
             table_fact_entries,
+            len(layout_index_docs),
             CHUNK_SIZE,
             CHUNK_OVERLAP,
             CHUNK_MERGE_MIN_SIZE,

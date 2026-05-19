@@ -279,6 +279,7 @@ def _build_quality_report(
     lengths = [record.length for record in records]
     raw_records = [record for record in records if record.chunk_role == "raw"]
     table_fact_records = [record for record in records if record.chunk_role == "table_fact"]
+    layout_parallel_records = [record for record in records if record.chunk_role == "layout_parallel"]
     table_records = [record for record in records if record.block_type == "table" or _has_table(record.document)]
     section_scope_counts = Counter(
         str(record.metadata.get("section_scope"))
@@ -363,6 +364,7 @@ def _build_quality_report(
             "total_chunks": len(records),
             "raw_chunks": len(raw_records),
             "table_fact_chunks": len(table_fact_records),
+            "layout_parallel_chunks": len(layout_parallel_records),
             "table_like_chunks": len(table_records),
             "total_chars": sum(lengths),
             "min_chars": min(lengths) if lengths else 0,
