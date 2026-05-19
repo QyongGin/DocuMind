@@ -798,10 +798,17 @@ def _split_markdown_table_blocks(text: str) -> list[tuple[str, str]]:
         current_lines = []
 
     for line in text.splitlines():
+        if not line.strip():
+            if current_type == "table":
+                flush()
+            elif current_type == "text":
+                current_lines.append(line)
+            continue
+
         line_type = "table" if _is_markdown_table_line(line) else "text"
         if current_type is None:
             current_type = line_type
-        if line_type != current_type and line.strip():
+        if line_type != current_type:
             flush()
             current_type = line_type
         current_lines.append(line)
@@ -925,6 +932,10 @@ def _is_probable_subheader_row(row: list[str]) -> bool:
     if len(non_empty_cells) < 2:
         return False
     if any(re.search(r"\d", cell) for cell in non_empty_cells):
+        return False
+    if any(re.match(r"^[-*ㆍ·]\s+", cell.strip()) for cell in non_empty_cells):
+        return False
+    if any(len(cell) > 24 for cell in non_empty_cells):
         return False
     return True
 
@@ -1050,6 +1061,84 @@ def _build_row_legend_pairs(row: list[str], legends: dict[str, str]) -> list[str
     return pairs
 
 
+def _split_table_cell_items(value: str) -> list[str]:
+    """표 cell 내부의 bullet 항목을 개별 item으로 분리한다."""
+    cleaned = _clean_table_cell(value)
+    if not cleaned:
+        return []
+
+    items = [
+        item.strip(" ;")
+        for item in re.split(r"(?:^|\s+)[-*ㆍ·]\s+", cleaned)
+        if item.strip(" ;")
+    ]
+    if len(items) <= 1:
+        return [cleaned]
+    return items
+
+
+def _parse_labeled_table_item(item: str) -> tuple[str, str] | None:
+    """'상의: 흰색 티셔츠'처럼 cell item 안에 들어 있는 label/value를 분리한다."""
+    match = re.match(r"^([^:：]{1,30})\s*[:：]\s*(.+)$", item.strip())
+    if not match:
+        return None
+
+    label = _clean_table_cell(match.group(1)).strip(" -")
+    value = _clean_table_cell(match.group(2)).strip(" -")
+    if not label or not value:
+        return None
+    if re.search(r"[.!?。]$", label):
+        return None
+    return label, value
+
+
+def _build_row_descriptor_text(row: list[str], column_labels: list[str], max_columns: int = 2) -> str:
+    """cell item fact에 붙일 앞쪽 행 식별자 설명을 만든다."""
+    descriptors: list[str] = []
+    for index, value in enumerate(row[:max_columns]):
+        if _is_empty_table_cell(value):
+            continue
+        label = column_labels[index] if index < len(column_labels) else f"열 {index + 1}"
+        if label.startswith("열 "):
+            continue
+        descriptors.append(f"{label}={value}")
+    return ", ".join(descriptors)
+
+
+def _build_cell_item_facts(caption: str, row: list[str], column_labels: list[str]) -> list[str]:
+    """여러 bullet을 담은 표 cell을 작은 검색 fact들로 분해한다."""
+    subject, _ = _select_row_subject(row, column_labels)
+    subject = _clean_table_subject(subject)
+    descriptor_text = _build_row_descriptor_text(row, column_labels)
+    facts: list[str] = []
+
+    for index, value in enumerate(row):
+        if _is_empty_table_cell(value):
+            continue
+        label = column_labels[index] if index < len(column_labels) else f"열 {index + 1}"
+        if label.startswith("열 "):
+            continue
+
+        cleaned_value = _clean_table_cell(value)
+        has_bullet_marker = bool(re.search(r"(?:^|\s+)[-*ㆍ·]\s+", cleaned_value))
+        items = _split_table_cell_items(value)
+        labeled_items = [_parse_labeled_table_item(item) for item in items]
+        if len(items) <= 1 and not (has_bullet_marker and any(labeled_items)):
+            continue
+
+        for item, labeled_item in zip(items, labeled_items, strict=False):
+            if labeled_item:
+                item_label, item_value = labeled_item
+                fact = f"{caption}: {subject} {item_label} 항목은 {item_value}이다."
+            else:
+                fact = f"{caption}: {subject}의 {label} 항목은 {item}이다."
+            if descriptor_text:
+                fact = f"{fact} 행 정보: {descriptor_text}."
+            facts.append(fact)
+
+    return facts
+
+
 def _build_row_summary_fact(caption: str, row: list[str], column_labels: list[str], legends: dict[str, str] | None = None) -> str:
     """표의 한 행을 key=value 형태의 검색 가능한 문장으로 만든다."""
     pairs: list[str] = _build_row_legend_pairs(row, legends or {})
@@ -1113,16 +1202,20 @@ def _extract_table_facts(text: str, metadata: dict) -> list[str]:
 
             filled_row = list(row)
             for index in range(min(2, len(filled_row))):
-                if _is_empty_table_cell(filled_row[index]) and previous_values.get(index):
-                    filled_row[index] = previous_values[index]
-                elif not _is_empty_table_cell(filled_row[index]):
+                if not _is_empty_table_cell(filled_row[index]):
                     previous_values[index] = filled_row[index]
+                    for trailing_index in range(index + 1, min(2, len(filled_row))):
+                        previous_values.pop(trailing_index, None)
+                elif previous_values.get(index):
+                    filled_row[index] = previous_values[index]
 
             row_summary = _build_row_summary_fact(caption, filled_row, column_labels, legends)
             if row_summary:
                 table_facts.append(row_summary)
             else:
                 table_facts.extend(_build_symbol_facts(caption, filled_row, column_labels, legends))
+
+            table_facts.extend(_build_cell_item_facts(caption, filled_row, column_labels))
 
             if generate_matrix_facts:
                 table_facts.extend(_build_matrix_facts(caption, filled_row, column_labels))
@@ -2813,6 +2906,8 @@ def _looks_like_attire_value(text: str) -> bool:
 
 def _table_fact_has_attire_answer(fact: str) -> bool:
     """table_fact가 복장 행 또는 복장 값을 담고 있는지 판단한다."""
+    if "복장" in fact and _looks_like_attire_value(fact):
+        return True
     row_subject = _extract_table_fact_row_subject(fact).lower()
     if "복장" in row_subject and _looks_like_attire_value(fact):
         return True
@@ -2827,6 +2922,12 @@ def _table_fact_has_attire_answer(fact: str) -> bool:
 
 def _extract_attire_value_from_table_fact(fact: str) -> str:
     """복장 table_fact에서 답변에 사용할 착용 항목 값을 추출한다."""
+    labeled_item_match = re.search(r"(상의|하의|신발)\s*항목은\s*(.+?)(?:이다\.?|$)", fact)
+    if labeled_item_match:
+        label = labeled_item_match.group(1).strip()
+        value = _clean_table_fact_answer_value(labeled_item_match.group(2))
+        return f"{label}: {value}"
+
     candidates: list[str] = []
     for key, value in _extract_table_fact_pairs(fact):
         if "구분" in key and "복장" in value and not _looks_like_attire_value(value):
