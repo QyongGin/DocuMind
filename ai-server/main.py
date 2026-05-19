@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
+from typing import Any
 
 from document_blocks import clean_documents_for_chunking
 from layout_blocks import (
@@ -291,7 +292,7 @@ def _build_layout_parallel_index_docs(layout_context: PdfLayoutContext, filename
     if layout_context.sidecar.status != "stored" or layout_context.extraction is None:
         return []
 
-    layout_chunks = build_parallel_layout_chunks(layout_context.extraction.blocks)
+    layout_chunks = build_parallel_layout_chunks(layout_context.extraction.blocks, pdf_path=Path(tmp_path))
     index_docs: list[Document] = []
     for chunk_index, chunk in enumerate(layout_chunks):
         metadata = {
@@ -304,6 +305,7 @@ def _build_layout_parallel_index_docs(layout_context: PdfLayoutContext, filename
             "layout_confidence_score": chunk.confidence_score,
             "layout_confidence_level": chunk.confidence_level,
             "layout_parallel_row_count": chunk.row_count,
+            "layout_column_titles": " | ".join(chunk.column_titles),
             "layout_mode": PDF_LAYOUT_MODE,
             "layout_store_key": layout_context.sidecar.store_key,
             "layout_bbox_coverage": layout_context.sidecar.bbox_coverage,
@@ -2057,11 +2059,12 @@ MANDATORY_RAG_PROMPT = (
     "4. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다.\n"
     "5. 표에서 숫자, 날짜, 인원, 점수, 기간을 답할 때는 질문의 행 이름과 열 이름에 직접 대응하는 값만 사용한다.\n"
     "6. 여러 표가 검색되면 질문의 단어와 가장 많이 겹치는 표 제목, 행 이름, 열 이름을 가진 근거를 우선한다.\n"
-    "7. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
-    "8. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
-    "9. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
-    "10. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다.\n"
-    "11. '제공된 문서에서는 확인할 수 없습니다.'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."
+    "7. 검색 근거에 '레이아웃 병렬 청크'와 '열 N 제목'이 있으면 질문의 대상과 같은 열 제목 아래 값만 사용한다.\n"
+    "8. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
+    "9. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
+    "10. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
+    "11. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다.\n"
+    "12. '제공된 문서에서는 확인할 수 없습니다.'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."
 )
 
 
@@ -2115,7 +2118,7 @@ INTENT_QUERY_TERMS = {
     "location": {"어디", "위치", "장소", "주소", "소재지", "몇층", "층", "호관", "찾아오"},
     "time": {"시간", "이용시간", "운영시간", "언제", "몇시", "기간", "평일", "주말", "공휴일", "방학"},
     "cost": {"비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료"},
-    "attire": {"복장", "옷", "상의", "하의", "신발", "티셔츠", "스타킹", "단화"},
+    "attire": {"복장", "옷", "옷차림", "입어", "입어야", "착용", "상의", "하의", "신발", "티셔츠", "스타킹", "단화"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "준비물"},
     "eligibility": {"자격", "지원자격", "대상", "조건", "요건"},
     "count": {"인원", "정원", "모집인원", "모집정원", "몇명", "명"},
@@ -2128,7 +2131,7 @@ INTENT_EVIDENCE_TERMS = {
     "location": {"위치", "장소", "주소", "소재지", "호관", "층", "도로", "길", "정문", "후문", "옆", "앞", "뒤", "내", "근처", "캠퍼스"},
     "time": {"시간", "이용", "이용시간", "운영시간", "기간", "평일", "주말", "공휴일", "방학", "중식", "휴무", "운영"},
     "cost": {"비용", "금액", "요금", "가격", "납부", "원", "무료", "환불"},
-    "attire": {"복장", "수험생", "상의", "하의", "신발", "티셔츠", "스타킹", "단화", "바지", "스커트"},
+    "attire": {"복장", "옷", "옷차림", "입어", "입어야", "착용", "수험생", "상의", "하의", "신발", "티셔츠", "스타킹", "단화", "바지", "스커트"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "발급", "원본", "사본"},
     "eligibility": {"자격", "대상", "조건", "요건", "해당자", "지원"},
     "count": {"인원", "정원", "모집", "모집인원", "모집정원", "명", "합계", "총"},
@@ -3569,6 +3572,10 @@ def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_f
     seen: set[str] = set()
     facts: list[str] = []
 
+    layout_facts = _extract_layout_parallel_evidence_fact_lines(text, analysis, max_facts)
+    if layout_facts:
+        return layout_facts
+
     for fact in _get_query_evidence_facts_from_meta(meta or {}):
         if fact in seen:
             continue
@@ -3603,6 +3610,106 @@ def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_f
     return facts
 
 
+def _extract_layout_parallel_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_facts: int = 5) -> list[str]:
+    """layout_parallel chunk에서 질문 대상 column(열)의 속성 값을 추출한다."""
+    if "레이아웃 병렬 청크" not in text or "열 " not in text:
+        return []
+
+    columns = _parse_layout_parallel_columns(text)
+    if not columns:
+        return []
+
+    primary_terms = analysis.primary_terms
+    subject_terms = analysis.subject_terms | analysis.context_terms
+    primary_matched_titles = {
+        column.get("title", "")
+        for column in columns
+        if column.get("title") and any(_term_in_text(term, column.get("title", "")) for term in primary_terms)
+    }
+
+    facts: list[str] = []
+    for column in columns:
+        title = column.get("title", "")
+        if primary_matched_titles:
+            if title not in primary_matched_titles:
+                continue
+        elif title and not any(_term_in_text(term, title) for term in subject_terms):
+            continue
+        elif not title and not _layout_common_title_matches_subject(text, subject_terms):
+            continue
+
+        for label, value in column.get("items", []):
+            if not _layout_label_matches_query(label, analysis):
+                continue
+            subject_label = title or "해당 열"
+            facts.append(f"- {subject_label} {label}: {value}")
+            if len(facts) >= max_facts:
+                return facts
+    return facts
+
+
+def _parse_layout_parallel_columns(text: str) -> list[dict[str, Any]]:
+    columns: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        title_match = re.match(r"^열\s+(\d+)\s+제목\s*:\s*(.+)$", line)
+        plain_match = re.match(r"^열\s+(\d+)\s*:\s*$", line)
+        if title_match or plain_match:
+            if current is not None:
+                columns.append(current)
+            current = {
+                "index": int((title_match or plain_match).group(1)),
+                "title": _clean_table_cell(title_match.group(2)) if title_match else "",
+                "items": [],
+            }
+            continue
+
+        if current is None or not line.startswith("- "):
+            continue
+        item = line[2:].strip()
+        if ":" not in item:
+            continue
+        label, value = item.split(":", 1)
+        label = _clean_table_cell(label)
+        value = _clean_table_cell(value)
+        if label and value:
+            current["items"].append((label, value))
+
+    if current is not None:
+        columns.append(current)
+    return columns
+
+
+def _layout_common_title_matches_subject(text: str, query_terms: set[str]) -> bool:
+    common_text_lines: list[str] = []
+    in_common_section = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line == "공통 상단 텍스트:":
+            in_common_section = True
+            continue
+        if in_common_section and line.startswith("열 "):
+            break
+        if in_common_section and line.startswith("- "):
+            common_text_lines.append(line[2:].strip())
+
+    common_text = " ".join(common_text_lines)
+    return bool(common_text and any(_term_in_text(term, common_text) for term in query_terms))
+
+
+def _layout_label_matches_query(label: str, analysis: QueryAnalysis) -> bool:
+    normalized_label = re.sub(r"\s+", "", label)
+    query_terms = analysis.primary_terms | analysis.context_terms
+    if any(term in query_terms for term in {"교과목", "주요교과목", "과목"}):
+        return "교과목" in normalized_label or "과목" in normalized_label
+    if any(term in query_terms for term in {"취업", "취업처", "주요취업처"}):
+        return "취업" in normalized_label
+    if analysis.intent == "list":
+        return label != "본문"
+    return _line_has_intent_evidence(f"{label}: ", analysis)
+
+
 def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts: int = 5, meta: dict | None = None) -> str:
     """검색된 chunk에서 질문 subject와 intent가 직접 만나는 항목 근거를 추출한다."""
     return "\n".join(_extract_query_evidence_fact_lines(text, analysis, max_facts, meta))
@@ -3614,7 +3721,9 @@ def _score_query_evidence_facts(text: str, analysis: QueryAnalysis, meta: dict |
     facts = _extract_query_evidence_fact_lines(text, analysis, max_facts=5, meta=meta)
     if not facts:
         return 0
-    if runtime_facts and analysis.intent == "list":
+    if (meta or {}).get("chunk_role") == "layout_parallel":
+        base_score = 360
+    elif runtime_facts and analysis.intent == "list":
         base_score = 520
     else:
         base_score = 140 if analysis.intent in STRICT_LOCAL_EVIDENCE_INTENTS else 90

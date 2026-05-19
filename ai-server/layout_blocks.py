@@ -108,6 +108,15 @@ class ParallelLayoutChunk:
     confidence_score: int
     confidence_level: str
     row_count: int
+    column_titles: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _PdfTextSpan:
+    """PDF text layer(텍스트 레이어)에서 읽은 좌표 포함 span(글자 묶음)이다."""
+
+    text: str
+    bbox: tuple[float, float, float, float]
 
 
 def load_opendataloader_documents(pdf_path: Path, output_format: str, pages: str | None = None) -> list[Any]:
@@ -497,6 +506,7 @@ def remove_layout_sidecar(store_dir: Path, document_id: int) -> int:
 
 def build_parallel_layout_chunks(
     blocks: list[LayoutBlock],
+    pdf_path: Path | None = None,
     row_tolerance: float = DEFAULT_LAYOUT_ROW_TOLERANCE,
     preview_chars: int = DEFAULT_LAYOUT_CHUNK_PREVIEW_CHARS,
 ) -> list[ParallelLayoutChunk]:
@@ -518,7 +528,8 @@ def build_parallel_layout_chunks(
         if column_count < 2 or not split_rows:
             continue
 
-        text = _format_parallel_layout_chunk(page, page_blocks, split_rows, column_count, confidence)
+        column_titles = _extract_parallel_column_titles(pdf_path, page, page_blocks, split_rows, column_count)
+        text = _format_parallel_layout_chunk(page, page_blocks, split_rows, column_count, confidence, column_titles)
         if not text:
             continue
 
@@ -529,6 +540,7 @@ def build_parallel_layout_chunks(
             confidence_score=int(confidence.get("score") or 0),
             confidence_level=str(confidence.get("level") or "none"),
             row_count=len(split_rows),
+            column_titles=column_titles,
         ))
     return chunks
 
@@ -554,6 +566,7 @@ def _format_parallel_layout_chunk(
     split_rows: list[dict[str, Any]],
     column_count: int,
     confidence: dict[str, Any],
+    column_titles: tuple[str, ...] = (),
 ) -> str:
     column_lines: list[list[str]] = [[] for _ in range(column_count)]
     for row in split_rows:
@@ -581,9 +594,269 @@ def _format_parallel_layout_chunk(
     for index, values in enumerate(column_lines, start=1):
         if not values:
             continue
-        lines.append(f"열 {index}:")
+        title = column_titles[index - 1] if index <= len(column_titles) else ""
+        if title:
+            lines.append(f"열 {index} 제목: {title}")
+        else:
+            lines.append(f"열 {index}:")
         lines.extend(values)
     return "\n".join(lines)
+
+
+def _extract_parallel_column_titles(
+    pdf_path: Path | None,
+    page: int | str,
+    page_blocks: list[LayoutBlock],
+    split_rows: list[dict[str, Any]],
+    column_count: int,
+) -> tuple[str, ...]:
+    """PDF text layer 좌표로 column별 title(제목)을 안전하게 연결한다."""
+    if pdf_path is None or not isinstance(page, int):
+        return ()
+
+    column_ranges = _column_x_ranges_from_rows(split_rows, column_count)
+    if len(column_ranges) != column_count:
+        return ()
+
+    title_blocks = _title_candidate_blocks(page_blocks, split_rows)
+    if not title_blocks:
+        return ()
+
+    spans = _extract_pdf_text_spans_for_blocks(pdf_path, page, title_blocks)
+    if not spans:
+        return ()
+
+    title_rows = _group_pdf_spans_by_row(spans)
+    candidates: list[tuple[float, tuple[str, ...]]] = []
+    for row_spans in title_rows:
+        assigned = _assign_title_spans_to_columns(row_spans, column_ranges)
+        if len(assigned) != column_count:
+            continue
+        titles = tuple(_clean_layout_chunk_text(assigned[index].text) for index in range(column_count))
+        if not _looks_like_column_title_row(titles):
+            continue
+        candidates.append((_score_column_title_row(titles, assigned), titles))
+
+    if not candidates:
+        return ()
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _column_x_ranges_from_rows(
+    split_rows: list[dict[str, Any]],
+    column_count: int,
+) -> list[tuple[float, float]]:
+    ranges_by_column: list[list[tuple[float, float]]] = [[] for _ in range(column_count)]
+    for row in split_rows:
+        for index, raw_range in enumerate((row.get("x_ranges") or [])[:column_count]):
+            if not raw_range or len(raw_range) != 2:
+                continue
+            left, right = float(raw_range[0]), float(raw_range[1])
+            ranges_by_column[index].append((left, right))
+
+    column_ranges: list[tuple[float, float]] = []
+    for ranges in ranges_by_column:
+        if not ranges:
+            return []
+        left_values = [left for left, _ in ranges]
+        right_values = [right for _, right in ranges]
+        column_ranges.append((min(left_values), max(right_values)))
+    return column_ranges
+
+
+def _title_candidate_blocks(page_blocks: list[LayoutBlock], split_rows: list[dict[str, Any]]) -> list[LayoutBlock]:
+    top_row_y = max(float(row.get("normalized_y_center") or 0) for row in split_rows)
+    candidates: list[LayoutBlock] = []
+    for block in page_blocks:
+        if block.block_type.lower() != "heading" or not block.text or block.bbox is None:
+            continue
+        row_center = _layout_row_center(block)
+        if row_center is None or row_center <= top_row_y:
+            continue
+        if _looks_like_page_footer(block):
+            continue
+        candidates.append(block)
+    return candidates
+
+
+def _extract_pdf_text_spans_for_blocks(
+    pdf_path: Path,
+    page_number: int,
+    blocks: list[LayoutBlock],
+) -> list[_PdfTextSpan]:
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        return []
+
+    try:
+        document = pdfium.PdfDocument(str(pdf_path))
+        page = document[page_number - 1]
+        text_page = page.get_textpage()
+        spans: list[_PdfTextSpan] = []
+        seen_spans: set[tuple[str, tuple[int, int, int, int]]] = set()
+        for block in blocks:
+            for span in _extract_pdf_text_spans_for_block(text_page, block):
+                bbox_key = tuple(round(value) for value in span.bbox)
+                span_key = (span.text, bbox_key)
+                if span_key in seen_spans:
+                    continue
+                seen_spans.add(span_key)
+                spans.append(span)
+        text_page.close()
+        page.close()
+        document.close()
+        return spans
+    except Exception:
+        return []
+
+
+def _extract_pdf_text_spans_for_block(text_page: Any, block: LayoutBlock) -> list[_PdfTextSpan]:
+    if block.bbox is None:
+        return []
+
+    block_left, block_bottom, block_right, block_top = block.bbox
+    margin = 3.0
+    spans: list[_PdfTextSpan] = []
+    current_chars: list[str] = []
+    current_boxes: list[tuple[float, float, float, float]] = []
+    previous_box: tuple[float, float, float, float] | None = None
+
+    def flush_current() -> None:
+        if not current_chars or not current_boxes:
+            return
+        text = _clean_layout_chunk_text("".join(current_chars))
+        if not text:
+            return
+        left = min(box[0] for box in current_boxes)
+        bottom = min(box[1] for box in current_boxes)
+        right = max(box[2] for box in current_boxes)
+        top = max(box[3] for box in current_boxes)
+        spans.append(_PdfTextSpan(text=text, bbox=(left, bottom, right, top)))
+
+    for char_index in range(text_page.count_chars()):
+        char = text_page.get_text_range(char_index, 1)
+        char_box = text_page.get_charbox(char_index)
+        if not char_box:
+            continue
+        center_x = (char_box[0] + char_box[2]) / 2
+        center_y = (char_box[1] + char_box[3]) / 2
+        inside_block = (
+            block_left - margin <= center_x <= block_right + margin
+            and block_bottom - margin <= center_y <= block_top + margin
+        )
+
+        if not inside_block or char.isspace():
+            flush_current()
+            current_chars = []
+            current_boxes = []
+            previous_box = None
+            continue
+
+        if previous_box is not None and _is_pdf_span_break(previous_box, char_box):
+            flush_current()
+            current_chars = []
+            current_boxes = []
+
+        current_chars.append(char)
+        current_boxes.append(char_box)
+        previous_box = char_box
+
+    flush_current()
+    return spans
+
+
+def _is_pdf_span_break(
+    previous_box: tuple[float, float, float, float],
+    current_box: tuple[float, float, float, float],
+) -> bool:
+    previous_width = max(previous_box[2] - previous_box[0], 1.0)
+    horizontal_gap = current_box[0] - previous_box[2]
+    vertical_gap = abs(((current_box[1] + current_box[3]) / 2) - ((previous_box[1] + previous_box[3]) / 2))
+    return horizontal_gap > previous_width * 1.8 or vertical_gap > previous_width * 1.5
+
+
+def _group_pdf_spans_by_row(spans: list[_PdfTextSpan], tolerance: float = 8.0) -> list[list[_PdfTextSpan]]:
+    rows: list[list[_PdfTextSpan]] = []
+    for span in sorted(spans, key=lambda item: _span_y_center(item), reverse=True):
+        for row in rows:
+            if abs(_span_y_center(row[0]) - _span_y_center(span)) <= tolerance:
+                row.append(span)
+                break
+        else:
+            rows.append([span])
+
+    return [sorted(row, key=lambda item: item.bbox[0]) for row in rows]
+
+
+def _assign_title_spans_to_columns(
+    spans: list[_PdfTextSpan],
+    column_ranges: list[tuple[float, float]],
+) -> dict[int, _PdfTextSpan]:
+    assigned: dict[int, _PdfTextSpan] = {}
+    for span in spans:
+        title = _clean_layout_chunk_text(span.text)
+        if not title or len(title) < 2:
+            continue
+        if _is_weak_column_title(title):
+            continue
+
+        span_center = _span_x_center(span)
+        column_index = _nearest_column_index(span_center, column_ranges)
+        if column_index is None:
+            continue
+        if column_index in assigned:
+            return {}
+        assigned[column_index] = span
+    return assigned
+
+
+def _nearest_column_index(center_x: float, column_ranges: list[tuple[float, float]]) -> int | None:
+    best_index: int | None = None
+    best_distance = float("inf")
+    for index, (left, right) in enumerate(column_ranges):
+        column_center = (left + right) / 2
+        width = max(right - left, 1.0)
+        distance = abs(center_x - column_center)
+        if distance > width * 0.75:
+            continue
+        if distance < best_distance:
+            best_index = index
+            best_distance = distance
+    return best_index
+
+
+def _looks_like_column_title_row(titles: tuple[str, ...]) -> bool:
+    if len(set(titles)) != len(titles):
+        return False
+    if any(_is_weak_column_title(title) for title in titles):
+        return False
+    return True
+
+
+def _is_weak_column_title(title: str) -> bool:
+    compact = re.sub(r"\s+", "", title)
+    if len(compact) < 4:
+        return True
+    digit_count = sum(char.isdigit() for char in compact)
+    if digit_count / max(len(compact), 1) > 0.25:
+        return True
+    return compact in {"심화과정", "주요교과목", "주요취업처"}
+
+
+def _score_column_title_row(titles: tuple[str, ...], spans: dict[int, _PdfTextSpan]) -> float:
+    average_length = sum(len(title) for title in titles) / max(len(titles), 1)
+    average_height = sum(span.bbox[3] - span.bbox[1] for span in spans.values()) / max(len(spans), 1)
+    return average_length * 10 + average_height
+
+
+def _span_x_center(span: _PdfTextSpan) -> float:
+    return (span.bbox[0] + span.bbox[2]) / 2
+
+
+def _span_y_center(span: _PdfTextSpan) -> float:
+    return (span.bbox[1] + span.bbox[3]) / 2
 
 
 def _common_top_texts(page_blocks: list[LayoutBlock], split_rows: list[dict[str, Any]], limit: int = 3) -> list[str]:
