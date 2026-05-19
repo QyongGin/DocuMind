@@ -19,6 +19,8 @@ import time
 from dataclasses import dataclass
 from threading import Lock
 
+from document_blocks import clean_documents_for_chunking
+
 try:
     from kiwipiepy import Kiwi
 except ImportError:
@@ -390,6 +392,83 @@ def _chunk_block_signature(doc: Document) -> str:
     if doc.metadata.get("block_type") == "table":
         return "table"
     return "text"
+
+
+SECTION_KIND_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("historical_result", ("전년도 입시결과", "입시결과")),
+    ("admission_quota", ("모집인원", "모집 정원", "정원내 전형 모집인원", "정원외 전형 모집인원")),
+    ("admission_schedule", ("전형일정", "일정")),
+    ("interview", ("면접고사", "면접 안내", "면접고사 안내", "면접 질문")),
+    ("eligibility", ("지원자격", "자격")),
+    ("required_documents", ("제출서류", "서류")),
+    ("score_method", ("성적 반영", "성적반영", "수시모집", "정시모집")),
+    ("department_profile", ("학과안내", "주요 교과목", "주요 취업처")),
+    ("scholarship", ("장학", "장학금")),
+    ("facility", ("시설", "편의시설", "생활관", "스터디", "식당", "카페", "편의점")),
+)
+
+
+def _extract_heading_lines(text: str, limit: int = 4) -> list[str]:
+    """청크 본문 앞쪽 heading line을 metadata 보강용으로 추출한다."""
+    headings: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            headings.append(stripped.lstrip("#").strip())
+            if len(headings) >= limit:
+                break
+            continue
+        if headings:
+            break
+    return headings
+
+
+def _derive_section_scope(doc: Document) -> str:
+    """청크가 속한 문서 섹션 경로를 metadata와 본문 heading에서 만든다."""
+    header_path = _format_header_path(doc.metadata)
+    heading_lines = _extract_heading_lines(doc.page_content)
+    if header_path and heading_lines:
+        path_parts = [part.strip() for part in header_path.split(">") if part.strip()]
+        for heading in heading_lines:
+            if heading not in path_parts:
+                path_parts.append(heading)
+        return " > ".join(path_parts)
+    if header_path:
+        return header_path
+    return " > ".join(heading_lines)
+
+
+def _infer_section_kind(section_scope: str, text: str) -> str:
+    """섹션 경로와 본문을 바탕으로 검색에 쓸 대략적인 섹션 종류를 추정한다."""
+    haystack = f"{section_scope}\n{text[:500]}".lower()
+    for section_kind, keywords in SECTION_KIND_RULES:
+        if any(keyword.lower() in haystack for keyword in keywords):
+            return section_kind
+    return "general"
+
+
+def _annotate_section_metadata(docs: list[Document]) -> list[Document]:
+    """청크마다 section_scope와 section_kind metadata를 추가한다."""
+    annotated_docs: list[Document] = []
+    for doc in docs:
+        metadata = dict(doc.metadata)
+        section_scope = _derive_section_scope(doc)
+        if section_scope:
+            metadata["section_scope"] = section_scope[:240]
+        metadata["section_kind"] = _infer_section_kind(section_scope, doc.page_content)
+        annotated_docs.append(Document(page_content=doc.page_content, metadata=metadata))
+    return annotated_docs
+
+
+def _count_section_kinds(docs: list[Document]) -> dict[str, int]:
+    """업로드 로그에 남길 section_kind 분포를 계산한다."""
+    counts: dict[str, int] = {}
+    for doc in docs:
+        section_kind = str(doc.metadata.get("section_kind", "unknown"))
+        counts[section_kind] = counts.get(section_kind, 0) + 1
+    return counts
 
 
 def _can_merge_text_prefix_into_table(buffer: list[Document], doc: Document, next_length: int, short_threshold: int) -> bool:
@@ -1666,14 +1745,41 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         normalize_elapsed = time.perf_counter() - normalize_start
         _set_document_progress(document_id, 25, "normalize", "문서 텍스트를 정리했습니다.")
 
+        cleanup_start = time.perf_counter()
+        cleaned_docs, cleanup_stats = clean_documents_for_chunking(normalized_docs)
+        cleanup_elapsed = time.perf_counter() - cleanup_start
+        logger.info(
+            "[document_cleanup] document_id=%s filename=%s input_docs=%s output_docs=%s removed_empty_table_blocks=%s removed_boilerplate_lines=%s removed_empty_documents=%s elapsed=%.2fs",
+            document_id,
+            filename,
+            cleanup_stats.input_documents,
+            cleanup_stats.output_documents,
+            cleanup_stats.removed_empty_table_blocks,
+            cleanup_stats.removed_boilerplate_lines,
+            cleanup_stats.removed_empty_documents,
+            cleanup_elapsed,
+        )
+
         # Two-Pass 청킹 + 연속 중복 line 정리 + 수동 overlap 후처리
         split_start = time.perf_counter()
-        split_docs = _split_loaded_documents(normalized_docs)
+        split_docs = _split_loaded_documents(cleaned_docs)
         split_elapsed = time.perf_counter() - split_start
         _log_chunk_stats(document_id, filename, "split", split_docs)
 
+        section_start = time.perf_counter()
+        section_docs = _annotate_section_metadata(split_docs)
+        section_elapsed = time.perf_counter() - section_start
+        section_kind_counts = _count_section_kinds(section_docs)
+        logger.info(
+            "[section_scope] document_id=%s filename=%s section_kinds=%s elapsed=%.2fs",
+            document_id,
+            filename,
+            json.dumps(section_kind_counts, ensure_ascii=False, sort_keys=True),
+            section_elapsed,
+        )
+
         dedupe_start = time.perf_counter()
-        deduped_docs = _dedupe_chunk_documents(split_docs)
+        deduped_docs = _dedupe_chunk_documents(section_docs)
         dedupe_elapsed = time.perf_counter() - dedupe_start
         _log_chunk_stats(document_id, filename, "deduped", deduped_docs)
         _set_document_progress(document_id, 28, "chunking", "문서를 청크로 나누고 있습니다.")
@@ -1699,10 +1805,11 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
-            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            "[upload] document_id=%s filename=%s raw_docs=%s cleaned_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs cleanup=%.2fs split=%.2fs section=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
             len(raw_docs),
+            len(cleaned_docs),
             len(split_docs),
             len(deduped_docs),
             len(merged_docs),
@@ -1718,7 +1825,9 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             parse_elapsed,
             page_lookup_elapsed,
             normalize_elapsed,
+            cleanup_elapsed,
             split_elapsed,
+            section_elapsed,
             dedupe_elapsed,
             merge_elapsed,
             overlap_elapsed,

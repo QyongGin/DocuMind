@@ -239,6 +239,11 @@ def _build_quality_report(records: list[ChunkRecord], document_id: str | None = 
     raw_records = [record for record in records if record.chunk_role == "raw"]
     table_fact_records = [record for record in records if record.chunk_role == "table_fact"]
     table_records = [record for record in records if record.block_type == "table" or _has_table(record.document)]
+    section_kind_counts = Counter(
+        str(record.metadata.get("section_kind"))
+        for record in records
+        if record.metadata.get("section_kind")
+    )
 
     line_counter: Counter[str] = Counter()
     issue_samples: list[ChunkIssue] = []
@@ -319,6 +324,9 @@ def _build_quality_report(records: list[ChunkRecord], document_id: str | None = 
             if table_records
             else 0,
         },
+        "metadata_stats": {
+            "section_kind_counts": dict(section_kind_counts.most_common()),
+        },
     }
     return report
 
@@ -327,6 +335,7 @@ def _print_quality_report(report: dict[str, Any]) -> None:
     summary = report["summary"]
     flags = report["quality_flags"]
     table_stats = report["table_stats"]
+    metadata_stats = report.get("metadata_stats", {})
 
     print("# RAG 청크 품질 진단")
     if report.get("document_id") is not None:
@@ -339,6 +348,14 @@ def _print_quality_report(report: dict[str, Any]) -> None:
     print("\n## 표 통계")
     for key, value in table_stats.items():
         print(f"- {key}: {value}")
+
+    print("\n## metadata 통계")
+    section_kind_counts = metadata_stats.get("section_kind_counts") or {}
+    if section_kind_counts:
+        for key, value in section_kind_counts.items():
+            print(f"- section_kind={key}: {value}")
+    else:
+        print("- section_kind: 없음")
 
     print("\n## 주의할 샘플")
     for group_name, samples in flags.items():
@@ -372,6 +389,7 @@ def _write_markdown(report: dict[str, Any], output_path: str | None) -> None:
     summary = report["summary"]
     flags = report["quality_flags"]
     table_stats = report["table_stats"]
+    metadata_stats = report.get("metadata_stats", {})
 
     lines = [
         "# RAG 청크 품질 진단 보고서",
@@ -403,6 +421,20 @@ def _write_markdown(report: dict[str, Any], output_path: str | None) -> None:
         ]
     )
     lines.extend(f"|{key}|{value}|" for key, value in table_stats.items())
+    lines.extend(
+        [
+            "",
+            "## metadata 통계",
+            "",
+            "|항목|값|",
+            "|---|---:|",
+        ]
+    )
+    section_kind_counts = metadata_stats.get("section_kind_counts") or {}
+    if section_kind_counts:
+        lines.extend(f"|section_kind={key}|{value}|" for key, value in section_kind_counts.items())
+    else:
+        lines.append("|section_kind|없음|")
     lines.append("")
     lines.append("## 주의할 샘플")
     for group_name, samples in flags.items():
