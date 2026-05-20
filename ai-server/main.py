@@ -2948,7 +2948,16 @@ def _extract_attire_value_from_table_fact(fact: str) -> str:
 def _table_bridge_attribute_terms(analysis: QueryAnalysis) -> set[str]:
     """표 관계 resolver에서 속성 행/열을 찾을 때 사용할 intent 표현을 만든다."""
     if not analysis.intent:
-        return set()
+        terms = set()
+        terms.update(
+            term for term in analysis.context_terms
+            if term in QUERY_TABLE_INTENT_TERMS and term not in QUERY_GENERIC_TERMS
+        )
+        terms.update(
+            term for term in analysis.primary_terms
+            if term in QUERY_TABLE_INTENT_TERMS and term not in QUERY_GENERIC_TERMS
+        )
+        return {term for term in terms if len(term) >= 2 and term not in QUERY_COMPOUND_FUNCTION_TERMS}
 
     terms = set(INTENT_QUERY_TERMS.get(analysis.intent, set()))
     terms.update(INTENT_EVIDENCE_TERMS.get(analysis.intent, set()))
@@ -2963,8 +2972,6 @@ def _table_bridge_attribute_terms(analysis: QueryAnalysis) -> set[str]:
 
 def _table_fact_matches_query_attribute(fact: str, analysis: QueryAnalysis) -> bool:
     """table_fact가 질문이 묻는 속성 행/열/값을 포함하는지 판단한다."""
-    if not analysis.intent:
-        return False
     if analysis.intent == "attire":
         return _table_fact_has_attire_answer(fact)
 
@@ -2996,6 +3003,8 @@ def _is_table_label_pair(key: str, value: str, analysis: QueryAnalysis) -> bool:
     if normalized_value in {"수시", "정시", "수시1차", "수시2차"}:
         return True
     if analysis.intent and normalized_value in INTENT_QUERY_TERMS.get(analysis.intent, set()):
+        return True
+    if normalized_value in _table_bridge_attribute_terms(analysis):
         return True
     return False
 
@@ -3030,7 +3039,11 @@ def _extract_attribute_value_from_table_fact(fact: str, analysis: QueryAnalysis)
         key_matches_attribute = any(_term_in_text(term, key) for term in attribute_terms)
         value_has_intent = _line_has_intent_evidence(value, analysis)
         if row_is_attribute or key_matches_attribute or value_has_intent:
-            candidates.append(_clean_table_fact_answer_value(value))
+            cleaned_value = _clean_table_fact_answer_value(value)
+            if row_is_attribute and not key_matches_attribute:
+                candidates.append(f"{key}: {cleaned_value}")
+            else:
+                candidates.append(cleaned_value)
 
     if candidates:
         return "; ".join(candidate for candidate in candidates if candidate)
@@ -3039,13 +3052,13 @@ def _extract_attribute_value_from_table_fact(fact: str, analysis: QueryAnalysis)
 
 def _infer_table_bridge_attribute_label(attribute_fact: str, analysis: QueryAnalysis) -> str:
     """질문과 속성 fact에서 evidence label에 넣을 속성명을 고른다."""
-    if not analysis.intent:
-        return "관련 정보"
-
     if analysis.intent == "attire":
         return "복장"
 
     attribute_terms = _table_bridge_attribute_terms(analysis)
+    if not attribute_terms:
+        return INTENT_DEFAULT_LABELS.get(analysis.intent or "", "관련 정보")
+
     row_subject = _extract_table_fact_row_subject(attribute_fact)
     for term in sorted(attribute_terms, key=len, reverse=True):
         if _term_in_text(term, row_subject):
@@ -3084,7 +3097,7 @@ def _extract_subject_label_from_table_facts(facts: list[str], analysis: QueryAna
     candidates: list[tuple[int, int, str]] = []
     for fact in subject_facts:
         for token in re.findall(r"[0-9A-Za-z가-힣]+", fact):
-            normalized = re.sub(r"(이다|입니다)$", "", token.strip())
+            normalized = _normalize_query_token(re.sub(r"(이다|입니다)$", "", token.strip()))
             if len(normalized) < 2:
                 continue
             matched_terms = [term for term in query_terms if _term_in_text(term, normalized)]
@@ -3282,7 +3295,8 @@ def _derive_table_legend_list_evidence_facts(facts: list[str], analysis: QueryAn
 
 def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis) -> list[str]:
     """같은 표 안의 subject 행과 속성 행을 조합해 질문에 직접 답하는 fact를 만든다."""
-    if analysis.intent not in TABLE_BRIDGE_EVIDENCE_INTENTS or not facts:
+    attribute_terms = _table_bridge_attribute_terms(analysis)
+    if not facts or (analysis.intent not in TABLE_BRIDGE_EVIDENCE_INTENTS and not attribute_terms):
         return []
 
     legend_list_evidence = _derive_table_legend_list_evidence_facts(facts, analysis)
@@ -3320,7 +3334,13 @@ def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis
 
 def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[dict], analysis: QueryAnalysis | None = None) -> list[dict]:
     """검색된 raw 청크 안의 표에서 질문과 맞는 fact를 런타임 metadata에 붙인다."""
-    should_extract_bridge_evidence = analysis is not None and analysis.intent in TABLE_BRIDGE_EVIDENCE_INTENTS
+    should_extract_bridge_evidence = (
+        analysis is not None
+        and (
+            analysis.intent in TABLE_BRIDGE_EVIDENCE_INTENTS
+            or (analysis.intent is None and _is_table_value_question(question))
+        )
+    )
     if not _is_table_value_question(question) and not should_extract_bridge_evidence:
         return metadatas
 
