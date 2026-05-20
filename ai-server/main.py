@@ -3103,13 +3103,154 @@ def _extract_subject_label_from_table_facts(facts: list[str], analysis: QueryAna
 
 def _legend_description_matches_query(description: str, analysis: QueryAnalysis) -> bool:
     """범례 설명이 질문의 주제와 직접 맞는지 판단한다."""
+    return _score_legend_description_match(description, analysis) > 0
+
+
+def _score_legend_description_match(description: str, analysis: QueryAnalysis) -> int:
+    """범례 설명과 질문의 겹침 정도를 계산한다."""
     query_terms = {
         term for term in (analysis.primary_terms | analysis.subject_terms | analysis.context_terms)
         if len(term) >= 2 and term not in QUERY_GENERIC_TERMS and term not in QUERY_COMPOUND_FUNCTION_TERMS
     }
     if not query_terms:
+        return 0
+
+    score = 0
+    for term in query_terms:
+        if not _term_in_text(term, description):
+            continue
+        if term in QUERY_LIST_COLLECTION_TERMS or term in QUERY_TABLE_INTENT_TERMS:
+            score += 1
+        else:
+            score += 3
+    return score
+
+
+def _may_be_table_legend_list_query(question: str, analysis: QueryAnalysis) -> bool:
+    """표 범례가 붙은 행 목록을 물을 가능성이 있는 질문인지 보수적으로 판단한다."""
+    normalized_question = _compact_search_text(question)
+    if analysis.intent == "list":
+        return True
+    if "표시" in normalized_question:
+        return True
+    if not any(term in normalized_question for term in QUERY_LIST_COLLECTION_TERMS):
         return False
-    return any(_term_in_text(term, description) for term in query_terms)
+    return any(term in normalized_question for term in ("개설", "해당", "대상", "목록", "종류", "어디", "무엇", "어떤", "무슨"))
+
+
+def _safe_sort_number(value: Any) -> int:
+    """metadata 정렬용 숫자를 안전하게 int로 변환한다."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _lookup_table_legend_aggregate_candidates(question: str, analysis: QueryAnalysis, limit: int = 3) -> list[dict]:
+    """질문과 맞는 표 범례가 붙은 모든 행 subject를 집계한 후보를 만든다."""
+    if not _may_be_table_legend_list_query(question, analysis):
+        return []
+
+    try:
+        results = collection.get(
+            where={"chunk_role": "table_fact"},
+            include=["documents", "metadatas"],
+        )
+    except Exception:
+        logger.exception("[query_table_legend_aggregate] failed")
+        return []
+
+    grouped: dict[tuple[str, str, str], dict] = {}
+    for chunk_id, document, metadata in zip(
+        results.get("ids", []),
+        results.get("documents", []),
+        results.get("metadatas", []),
+    ):
+        fact = str(document)
+        meta = metadata or {}
+        subject = _extract_table_fact_row_subject(fact)
+        if not subject:
+            continue
+
+        for key, value in _extract_table_fact_pairs(fact):
+            if "표시" not in key:
+                continue
+            match_score = _score_legend_description_match(value, analysis)
+            if match_score < 3:
+                continue
+
+            group_key = (
+                str(meta.get("document_id", "")),
+                str(meta.get("source", "")),
+                _clean_table_fact_answer_value(value),
+            )
+            group = grouped.setdefault(
+                group_key,
+                {
+                    "match_score": match_score,
+                    "document_id": meta.get("document_id", ""),
+                    "source": meta.get("source", ""),
+                    "description": _clean_table_fact_answer_value(value),
+                    "subjects": [],
+                    "pages": [],
+                    "rows": [],
+                },
+            )
+            group["match_score"] = max(group["match_score"], match_score)
+            if subject not in group["subjects"]:
+                group["subjects"].append(subject)
+            group["pages"].append(meta.get("page") or meta.get("page_start"))
+            group["rows"].append((
+                meta.get("parent_chunk_index", meta.get("chunk_index", 0)),
+                meta.get("fact_index", 0),
+                str(chunk_id),
+                subject,
+            ))
+
+    candidates = []
+    for index, group in enumerate(grouped.values()):
+        subjects = []
+        for _, _, _, subject in sorted(
+            group["rows"],
+            key=lambda row: (_safe_sort_number(row[0]), _safe_sort_number(row[1]), row[2]),
+        ):
+            if subject not in subjects:
+                subjects.append(subject)
+        if not subjects:
+            continue
+
+        pages = [page for page in group["pages"] if page is not None]
+        evidence_fact = f"- {group['description']}: {', '.join(subjects)}"
+        doc = f"표 범례 목록 근거\n{evidence_fact}"
+        meta = {
+            "chunk_role": "table_legend_aggregate",
+            "document_id": group["document_id"],
+            "source": group["source"],
+            "page_start": min(pages) if pages else None,
+            "page_end": max(pages) if pages else None,
+            "query_evidence_facts": [evidence_fact],
+            "legend_description": group["description"],
+            "legend_subject_count": len(subjects),
+        }
+        candidates.append({
+            "rank": index + 1,
+            "legend_score": group["match_score"],
+            "chunk_id": f"legend_aggregate_{index}",
+            "document": doc,
+            "metadata": meta,
+        })
+
+    candidates.sort(key=lambda candidate: (-candidate["legend_score"], -candidate["metadata"]["legend_subject_count"]))
+    selected = candidates[:limit]
+    logger.info(
+        "[query_table_legend_aggregate] candidates=%s selected=%s",
+        len(candidates),
+        len(selected),
+    )
+    return [
+        {**candidate, "rank": index + 1}
+        for index, candidate in enumerate(selected)
+    ]
 
 
 def _derive_table_legend_list_evidence_facts(facts: list[str], analysis: QueryAnalysis) -> list[str]:
@@ -3766,9 +3907,6 @@ def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_f
     if layout_facts:
         return layout_facts
 
-    if not analysis.intent:
-        return []
-
     for fact in _get_query_evidence_facts_from_meta(meta or {}):
         if fact in seen:
             continue
@@ -3776,6 +3914,9 @@ def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_f
         facts.append(fact)
         if len(facts) >= max_facts:
             return facts
+
+    if not analysis.intent:
+        return facts
 
     list_facts = _extract_list_section_evidence_fact_lines(text, analysis, max_facts)
     for fact in list_facts:
@@ -3982,7 +4123,7 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     if page_label:
         metadata_lines.append(f"위치: {page_label}")
 
-    chunk_label = _format_chunk_label(meta, chunk_id)
+    chunk_label = "" if meta.get("chunk_role") == "table_legend_aggregate" else _format_chunk_label(meta, chunk_id)
     if chunk_label:
         metadata_lines.append(f"청크: {chunk_label}")
 
@@ -4000,7 +4141,7 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
 
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
-    if evidence_facts and meta.get("chunk_role") == "layout_parallel":
+    if evidence_facts and meta.get("chunk_role") in {"layout_parallel", "table_legend_aggregate"}:
         return f"[출처 {index}]\n{metadata}{evidence_fact_block}"
     if relevant_excerpt:
         return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
@@ -4288,6 +4429,22 @@ def _format_table_fact_candidate(candidate: dict) -> dict:
     return formatted
 
 
+def _format_table_legend_aggregate_candidate(candidate: dict) -> dict:
+    """표 범례 집계 후보를 trace 응답 형태로 만든다."""
+    formatted = _candidate_location_summary(
+        str(candidate["chunk_id"]),
+        candidate["document"],
+        candidate["metadata"] or {},
+    )
+    formatted.update({
+        "rank": candidate["rank"],
+        "legend_score": candidate["legend_score"],
+        "legend_subject_count": (candidate["metadata"] or {}).get("legend_subject_count", 0),
+        "query_evidence_facts": _get_query_evidence_facts_from_meta(candidate["metadata"] or {}),
+    })
+    return formatted
+
+
 def _format_rerank_candidate(
     rank: int,
     doc: str,
@@ -4412,10 +4569,15 @@ def _trace_query_retrieval(
     table_fact_candidates = _lookup_lexical_table_fact_candidates(question)
     for candidate in table_fact_candidates:
         _record_table_fact_trace(trace_by_id, candidate)
+    table_legend_candidates = _lookup_table_legend_aggregate_candidates(question, analysis)
 
     docs = vector_docs
     metadatas = vector_metadatas
     ids = vector_ids
+    if table_legend_candidates:
+        docs = [candidate["document"] for candidate in table_legend_candidates] + docs
+        metadatas = [candidate["metadata"] for candidate in table_legend_candidates] + metadatas
+        ids = [candidate["chunk_id"] for candidate in table_legend_candidates] + ids
     if bm25_candidates:
         docs = [candidate["document"] for candidate in bm25_candidates] + docs
         metadatas = [candidate["metadata"] for candidate in bm25_candidates] + metadatas
@@ -4480,12 +4642,13 @@ def _trace_query_retrieval(
     ]
 
     logger.info(
-        "[rag_trace] top_k=%s retrieval_limit=%s vector=%s bm25=%s table_fact=%s final=%s context_chars=%s embed=%.2fs chroma=%.2fs total=%.2fs",
+        "[rag_trace] top_k=%s retrieval_limit=%s vector=%s bm25=%s table_fact=%s table_legend=%s final=%s context_chars=%s embed=%.2fs chroma=%.2fs total=%.2fs",
         top_k,
         retrieval_limit,
         len(vector_candidates),
         len(bm25_candidates),
         len(table_fact_candidates),
+        len(table_legend_candidates),
         len(final_docs),
         len(context),
         embedding_elapsed,
@@ -4516,6 +4679,10 @@ def _trace_query_retrieval(
             "vector_candidates": vector_candidates,
             "bm25_candidates": [_format_bm25_candidate(candidate) for candidate in bm25_candidates],
             "table_fact_candidates": [_format_table_fact_candidate(candidate) for candidate in table_fact_candidates],
+            "table_legend_candidates": [
+                _format_table_legend_aggregate_candidate(candidate)
+                for candidate in table_legend_candidates
+            ],
             "expanded_candidates": expanded_candidates,
             "after_table_priority_candidates": after_table_priority_candidates,
             "after_evidence_focus_candidates": after_evidence_focus_candidates,
@@ -4565,6 +4732,11 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     raw_result_count = len(docs)
     bm25_docs, bm25_metadatas, bm25_ids = _lookup_bm25_raw_chunks(analysis, limit=top_k)
     lexical_docs, lexical_metadatas, lexical_ids = _lookup_lexical_table_facts(question)
+    table_legend_candidates = _lookup_table_legend_aggregate_candidates(question, analysis)
+    if table_legend_candidates:
+        docs = [candidate["document"] for candidate in table_legend_candidates] + docs
+        metadatas = [candidate["metadata"] for candidate in table_legend_candidates] + metadatas
+        ids = [candidate["chunk_id"] for candidate in table_legend_candidates] + ids
     if bm25_docs:
         docs = bm25_docs + docs
         metadatas = bm25_metadatas + metadatas
@@ -4595,6 +4767,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "distances": distance_values,
             "bm25_raw_chunks": len(bm25_docs),
             "lexical_table_facts": len(lexical_docs),
+            "table_legend_aggregates": len(table_legend_candidates),
             "query_intent": analysis.intent,
             "query_subject_terms": sorted(analysis.subject_terms),
         }
@@ -4657,16 +4830,18 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "distance_avg": distance_avg,
         "bm25_raw_chunks": len(bm25_docs),
         "lexical_table_facts": len(lexical_docs),
+        "table_legend_aggregates": len(table_legend_candidates),
         "query_intent": analysis.intent,
         "query_subject_terms": sorted(analysis.subject_terms),
     }
     logger.info(
-        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
+        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s table_legend_aggregates=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
         top_k,
         retrieval_limit,
         raw_result_count,
         len(bm25_docs),
         len(lexical_docs),
+        len(table_legend_candidates),
         len(docs),
         analysis.intent or "none",
         ",".join(sorted(analysis.subject_terms)) or "none",
@@ -4678,12 +4853,13 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         _format_decimal(distance_avg),
     )
     logger.info(
-        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s table_legend_aggregates=%s docs=%s intent=%s subject_terms=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
         top_k,
         retrieval_limit,
         raw_result_count,
         len(bm25_docs),
         len(lexical_docs),
+        len(table_legend_candidates),
         len(docs),
         analysis.intent or "none",
         ",".join(sorted(analysis.subject_terms)) or "none",
