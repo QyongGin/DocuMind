@@ -2181,8 +2181,9 @@ QUERY_TERM_SYNONYMS = {
 QUERY_GENERIC_TERMS = {
     "방법", "절차", "신청", "주의사항", "유의사항", "모집", "인원", "정원",
     "모집인원", "모집정원", "정보", "알려줘", "어디", "어떤", "뭐야", "무엇",
+    "주요", "관련",
 }
-QUERY_COMPOUND_FUNCTION_TERMS = {"알려줘", "어디", "어떤", "뭐야", "무엇", "무슨", "언제", "어떻게"}
+QUERY_COMPOUND_FUNCTION_TERMS = {"알려줘", "어디", "어떤", "뭐야", "무엇", "무슨", "언제", "어떻게", "주요", "관련"}
 
 QUERY_WEAK_SUBJECT_TERMS = {
     "학생", "재학생", "학교", "대학", "우리", "인하공업전문대학", "인하공전",
@@ -2203,7 +2204,7 @@ BM25_K1 = 1.5
 BM25_B = 0.75
 KIWI_SEARCH_TAG_PREFIXES = ("NN", "SL", "SN", "XR")
 INTENT_PRIORITY = (
-    "location", "time", "cost", "attire", "documents",
+    "location", "time", "cost", "attire", "documents", "employment",
     "eligibility", "count", "schedule", "method", "formula", "list",
 )
 INTENT_QUERY_TERMS = {
@@ -2213,6 +2214,7 @@ INTENT_QUERY_TERMS = {
     "cost": {"비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료"},
     "attire": {"복장", "옷", "옷차림", "입어", "입어야", "착용", "상의", "하의", "신발", "티셔츠", "스타킹", "단화"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "준비물"},
+    "employment": {"취업", "취업처"},
     "eligibility": {"자격", "지원자격", "대상", "조건", "요건"},
     "count": {"인원", "정원", "모집인원", "모집정원", "몇명", "명"},
     "method": {"방법", "절차", "어떻게", "신청", "진행", "처리"},
@@ -2226,6 +2228,7 @@ INTENT_EVIDENCE_TERMS = {
     "cost": {"비용", "금액", "요금", "가격", "납부", "원", "무료", "환불"},
     "attire": {"복장", "옷", "옷차림", "입어", "입어야", "착용", "수험생", "상의", "하의", "신발", "티셔츠", "스타킹", "단화", "바지", "스커트"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "발급", "원본", "사본"},
+    "employment": {"취업", "취업처", "기업", "회사", "기관", "졸업"},
     "eligibility": {"자격", "대상", "조건", "요건", "해당자", "지원"},
     "count": {"인원", "정원", "모집", "모집인원", "모집정원", "명", "합계", "총"},
     "method": {"방법", "절차", "신청", "제출", "접수", "처리", "승인"},
@@ -2269,15 +2272,16 @@ QUERY_NON_SUBJECT_PATTERNS = (
 STRICT_LOCAL_EVIDENCE_INTENTS = {"location", "time", "cost", "count", "attire"}
 EVIDENCE_FOCUSED_INTENTS = {
     "location", "time", "cost", "count", "list", "attire",
-    "documents", "eligibility", "method", "schedule", "formula",
+    "documents", "employment", "eligibility", "method", "schedule", "formula",
 }
 TABLE_BRIDGE_EVIDENCE_INTENTS = {
-    "attire", "documents", "eligibility", "count", "method", "schedule", "time", "cost", "location", "formula", "list",
+    "attire", "documents", "employment", "eligibility", "count", "method", "schedule", "time", "cost", "location", "formula", "list",
 }
 TABLE_DIRECT_ROW_ATTRIBUTE_INTENTS = {"count", "formula"}
 INTENT_DEFAULT_LABELS = {
     "attire": "복장",
     "documents": "준비물/서류",
+    "employment": "취업처",
     "eligibility": "자격",
     "count": "인원",
     "list": "목록",
@@ -2586,6 +2590,8 @@ def _detect_query_intent(question: str, tokens: list[str]) -> str | None:
     """질문이 묻는 속성 intent를 보수적으로 분류한다."""
     normalized_question = question.lower().replace(" ", "")
     token_set = set(tokens)
+    if "취업" in normalized_question:
+        return "employment"
     if _is_collection_list_question(normalized_question):
         return "list"
     for intent in INTENT_PRIORITY:
@@ -3417,7 +3423,28 @@ def _specific_query_subject_terms(analysis: QueryAnalysis, evidence_texts: list[
         term for term in matched_terms
         if matched_counts[term] < len(evidence_texts)
     }
-    return discriminating_terms or matched_terms
+    return _prefer_specific_subject_terms(discriminating_terms or matched_terms)
+
+
+def _prefer_specific_subject_terms(terms: set[str]) -> set[str]:
+    """더 긴 subject 표현 안에 포함되는 짧은 조각 term은 제외한다."""
+    if len(terms) <= 1:
+        return terms
+
+    compact_terms = {term: _compact_search_text(term) for term in terms}
+    selected: set[str] = set()
+    for term, compact_term in compact_terms.items():
+        if not compact_term:
+            continue
+        has_more_specific_term = any(
+            term != other
+            and len(compact_other) > len(compact_term)
+            and compact_term in compact_other
+            for other, compact_other in compact_terms.items()
+        )
+        if not has_more_specific_term:
+            selected.add(term)
+    return selected or terms
 
 
 def _evidence_facts_match_specific_subject(evidence_facts: list[str], subject_terms: set[str]) -> bool:
