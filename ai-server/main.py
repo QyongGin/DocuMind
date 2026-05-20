@@ -3349,21 +3349,27 @@ def _focus_candidates_with_query_evidence(
     if not docs or analysis.intent not in EVIDENCE_FOCUSED_INTENTS:
         return docs, metadatas, ids
 
-    evidence_items: list[tuple[str, dict, str]] = []
-    subject_evidence_items: list[tuple[str, dict, str]] = []
+    evidence_items: list[tuple[str, dict, str, list[str]]] = []
     fallback_items: list[tuple[str, dict, str]] = []
     for doc, meta, chunk_id in zip(docs, metadatas, ids):
         evidence_facts = _extract_query_evidence_fact_lines(doc, analysis, max_facts=5, meta=meta or {})
         if evidence_facts:
-            item = (doc, meta or {}, chunk_id)
-            evidence_items.append(item)
-            if _evidence_facts_match_specific_subject(evidence_facts, analysis):
-                subject_evidence_items.append(item)
+            evidence_items.append((doc, meta or {}, chunk_id, evidence_facts))
         else:
             fallback_items.append((doc, meta or {}, chunk_id))
 
     if not evidence_items:
         return docs, metadatas, ids
+
+    subject_terms = _specific_query_subject_terms(
+        analysis,
+        ["\n".join(evidence_facts) for _, _, _, evidence_facts in evidence_items],
+    )
+    subject_evidence_items = [
+        (doc, meta, chunk_id)
+        for doc, meta, chunk_id, evidence_facts in evidence_items
+        if _evidence_facts_match_specific_subject(evidence_facts, subject_terms)
+    ]
 
     logger.info(
         "[query_evidence_focus] intent=%s evidence_candidates=%s subject_evidence_candidates=%s fallback_candidates=%s",
@@ -3372,7 +3378,9 @@ def _focus_candidates_with_query_evidence(
         len(subject_evidence_items),
         len(fallback_items),
     )
-    focused_items = subject_evidence_items or evidence_items
+    focused_items = subject_evidence_items or [
+        (doc, meta, chunk_id) for doc, meta, chunk_id, _ in evidence_items
+    ]
     return (
         [doc for doc, _, _ in focused_items],
         [meta for _, meta, _ in focused_items],
@@ -3380,26 +3388,43 @@ def _focus_candidates_with_query_evidence(
     )
 
 
-def _specific_query_subject_terms(analysis: QueryAnalysis) -> set[str]:
-    """evidence focus에서 intent 단어를 제외한 실제 질문 대상 표현만 고른다."""
+def _specific_query_subject_terms(analysis: QueryAnalysis, evidence_texts: list[str]) -> set[str]:
+    """여러 evidence 후보를 구분해 주는 실제 질문 대상 표현을 고른다."""
     excluded_terms = set(QUERY_GENERIC_TERMS)
     excluded_terms.update(QUERY_TABLE_INTENT_TERMS)
-    excluded_terms.update({"주요", "관련", "항목", "교과목", "주요교과목", "취업", "취업처", "주요취업처"})
+    excluded_terms.update(QUERY_COMPOUND_FUNCTION_TERMS)
+    excluded_terms.update({"주요", "관련", "항목"})
     if analysis.intent:
         excluded_terms.update(INTENT_QUERY_TERMS.get(analysis.intent, set()))
         excluded_terms.update(INTENT_EVIDENCE_TERMS.get(analysis.intent, set()))
 
-    return {
+    candidate_terms = {
         term for term in (analysis.primary_terms | analysis.subject_terms)
         if len(term) >= 3 and term not in excluded_terms and term not in QUERY_WEAK_SUBJECT_TERMS
     }
+    if not candidate_terms or not evidence_texts:
+        return candidate_terms
+
+    matched_counts = {
+        term: sum(1 for evidence_text in evidence_texts if _term_in_text(term, evidence_text))
+        for term in candidate_terms
+    }
+    matched_terms = {term for term, count in matched_counts.items() if count > 0}
+    if not matched_terms:
+        return candidate_terms
+
+    discriminating_terms = {
+        term for term in matched_terms
+        if matched_counts[term] < len(evidence_texts)
+    }
+    return discriminating_terms or matched_terms
 
 
-def _evidence_facts_match_specific_subject(evidence_facts: list[str], analysis: QueryAnalysis) -> bool:
-    """구조화 근거가 질문의 실제 subject를 직접 포함하는지 확인한다."""
-    subject_terms = _specific_query_subject_terms(analysis)
+def _evidence_facts_match_specific_subject(evidence_facts: list[str], subject_terms: set[str]) -> bool:
+    """구조화 근거가 선별된 subject 표현을 직접 포함하는지 확인한다."""
     if not subject_terms:
         return False
+
     evidence_text = "\n".join(evidence_facts)
     return any(_term_in_text(term, evidence_text) for term in subject_terms)
 
