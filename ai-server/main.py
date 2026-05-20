@@ -150,10 +150,8 @@ collection = client.get_or_create_collection("documents")
 _progress_lock = Lock()
 _kiwi_lock = Lock()
 _bm25_index_lock = Lock()
-_subject_alias_lock = Lock()
 _kiwi_analyzer = None
 _bm25_sparse_index = None
-_subject_alias_records: list[tuple[str, str]] | None = None
 _document_progress: dict[int, dict] = {}
 
 logger.info(
@@ -2431,115 +2429,10 @@ def _term_in_text(term: str, text: str) -> bool:
     return _compact_search_text(normalized_term) in _compact_search_text(normalized_text)
 
 
-def _is_query_alias_candidate(term: str) -> bool:
-    """질문에 나온 짧은 한글 축약어 후보인지 판단한다."""
-    compact = _compact_search_text(_normalize_query_token(term))
-    if not 2 <= len(compact) <= 4:
-        return False
-    if not re.fullmatch(r"[가-힣]+", compact):
-        return False
-    if compact in QUERY_GENERIC_TERMS or compact in QUERY_TABLE_INTENT_TERMS:
-        return False
-    if compact in QUERY_COMPOUND_FUNCTION_TERMS or compact in QUERY_WEAK_SUBJECT_TERMS:
-        return False
-    if any(re.match(pattern, compact) for pattern in QUERY_NON_SUBJECT_PATTERNS):
-        return False
-    return True
-
-
-def _derive_subject_alias_key(subject: str) -> str:
-    """색인된 subject label에서 형태소 첫 글자 기반 축약 key를 만든다."""
-    tokens = [
-        _compact_search_text(token)
-        for token in _tokenize_sparse_search(subject)
-    ]
-    meaningful_tokens = [
-        token for token in tokens
-        if len(token) >= 2
-        and re.match(r"[가-힣]", token)
-        and token not in QUERY_COMPOUND_FUNCTION_TERMS
-        and token not in QUERY_TABLE_INTENT_TERMS
-        and token not in QUERY_WEAK_SUBJECT_TERMS
-    ]
-    alias_key = "".join(token[0] for token in meaningful_tokens)
-    return alias_key if len(alias_key) >= 2 else ""
-
-
-def _get_subject_alias_records() -> list[tuple[str, str]]:
-    """
-    Chroma에 색인된 table_fact 행 주어에서 축약어 매칭 후보를 만든다.
-    문서에 실제 존재하는 subject만 쓰기 때문에 특정 문서 전용 매핑을 두지 않는다.
-    """
-    global _subject_alias_records
-    with _subject_alias_lock:
-        if _subject_alias_records is not None:
-            return list(_subject_alias_records)
-
-    try:
-        results = collection.get(
-            where={"chunk_role": "table_fact"},
-            include=["documents"],
-        )
-    except Exception:
-        logger.exception("[query_subject_alias] failed_to_load_table_subjects")
-        return []
-
-    by_subject: dict[str, tuple[str, str]] = {}
-    for document in results.get("documents", []):
-        subject = _extract_table_fact_row_subject(str(document))
-        compact_subject = _compact_search_text(subject)
-        if len(compact_subject) < 3:
-            continue
-
-        alias_key = _derive_subject_alias_key(subject)
-        if not alias_key:
-            continue
-        by_subject.setdefault(compact_subject, (subject, alias_key))
-
-    records = sorted(by_subject.values(), key=lambda item: item[0])
-    with _subject_alias_lock:
-        _subject_alias_records = records
-
-    logger.info("[query_subject_alias] indexed_subjects=%s", len(records))
-    return list(records)
-
-
-def _expand_query_subject_aliases(terms: set[str]) -> set[str]:
-    """질문 축약어가 색인된 subject의 축약 key와 유일하게 맞으면 원문 subject를 반환한다."""
-    alias_terms = {
-        _compact_search_text(term)
-        for term in terms
-        if _is_query_alias_candidate(term)
-    }
-    if not alias_terms:
-        return set()
-
-    records = _get_subject_alias_records()
-    if not records:
-        return set()
-
-    expanded_subjects: set[str] = set()
-    for alias in alias_terms:
-        matched_subjects = {
-            subject for subject, alias_key in records
-            if alias_key == alias or alias_key.startswith(alias)
-        }
-        if len(matched_subjects) == 1:
-            expanded_subjects.update(matched_subjects)
-        elif len(matched_subjects) > 1:
-            logger.info(
-                "[query_subject_alias] ambiguous alias=%s matches=%s",
-                alias,
-                ",".join(sorted(matched_subjects)),
-            )
-    return expanded_subjects
-
-
 def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
     """table_fact lexical 보강 검색에 사용할 주제어와 의도어를 나눈다."""
     subject_terms: set[str] = set()
     intent_terms: set[str] = set()
-    alias_candidate_terms: set[str] = set()
     normalized_question = _compact_search_text(question)
 
     for token in re.findall(r"[0-9A-Za-z가-힣]+", question):
@@ -2553,15 +2446,12 @@ def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
         if expanded_terms & QUERY_TABLE_INTENT_TERMS:
             intent_terms.update(term for term in expanded_terms if len(term) >= 2)
         else:
-            if _is_query_alias_candidate(normalized):
-                alias_candidate_terms.add(normalized)
             subject_terms.update(term for term in expanded_terms if len(term) >= 3 and term not in QUERY_GENERIC_TERMS)
 
     if "전공심화" in normalized_question and ("과목" in normalized_question or "학과" in normalized_question):
         subject_terms.update({"전공심화", "전공심화과정"})
         intent_terms.update({"학과", "개설학과", "모집단위"})
 
-    subject_terms.update(_expand_query_subject_aliases(subject_terms | alias_candidate_terms))
     return subject_terms, intent_terms
 
 
@@ -2739,34 +2629,6 @@ def _is_non_subject_query_token(token: str, intent_terms: set[str]) -> bool:
     return False
 
 
-def _augment_query_analysis_with_subject_aliases(question: str, analysis: QueryAnalysis) -> QueryAnalysis:
-    """질문 속 짧은 축약어를 색인된 subject label로 확장해 검색과 근거 선택에 반영한다."""
-    alias_terms = set(_extract_ordered_query_terms(question))
-    alias_terms.update(analysis.primary_terms)
-    alias_terms.update(analysis.subject_terms)
-    expanded_subjects = _expand_query_subject_aliases(alias_terms)
-    if not expanded_subjects:
-        return analysis
-
-    expanded_tokens = list(analysis.tokens)
-    expanded_context_terms = set(analysis.context_terms)
-    for subject in sorted(expanded_subjects):
-        expanded_context_terms.add(subject)
-        for token in _tokenize_sparse_search(subject):
-            if token not in expanded_tokens:
-                expanded_tokens.append(token)
-            if len(token) >= 2:
-                expanded_context_terms.add(token)
-
-    return QueryAnalysis(
-        tokens=expanded_tokens,
-        subject_terms=analysis.subject_terms | expanded_subjects,
-        intent=analysis.intent,
-        primary_terms=analysis.primary_terms | expanded_subjects,
-        context_terms={term for term in expanded_context_terms if len(term) >= 2},
-    )
-
-
 def _analyze_query(question: str) -> QueryAnalysis:
     """검색 후보 재정렬에 사용할 subject와 intent를 분석한다."""
     tokens = _tokenize_sparse_search(question)
@@ -2791,14 +2653,13 @@ def _analyze_query(question: str) -> QueryAnalysis:
     context_terms.update(raw_terms)
     context_terms.update(subject_terms)
     context_terms.update(primary_terms)
-    analysis = QueryAnalysis(
+    return QueryAnalysis(
         tokens=tokens,
         subject_terms=subject_terms,
         intent=intent,
         primary_terms=primary_terms,
         context_terms={term for term in context_terms if len(term) >= 2},
     )
-    return _augment_query_analysis_with_subject_aliases(question, analysis)
 
 
 def _build_sparse_search_text(document: str, metadata: dict) -> str:
@@ -2811,11 +2672,9 @@ def _build_sparse_search_text(document: str, metadata: dict) -> str:
 
 def _invalidate_bm25_sparse_index() -> None:
     """문서 업로드/삭제 후 다음 질의에서 BM25 index를 다시 만들도록 무효화한다."""
-    global _bm25_sparse_index, _subject_alias_records
+    global _bm25_sparse_index
     with _bm25_index_lock:
         _bm25_sparse_index = None
-    with _subject_alias_lock:
-        _subject_alias_records = None
 
 
 def _build_sparse_index_record(chunk_id: str, document: str, metadata: dict) -> SparseIndexRecord:
