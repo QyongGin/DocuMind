@@ -3350,10 +3350,15 @@ def _focus_candidates_with_query_evidence(
         return docs, metadatas, ids
 
     evidence_items: list[tuple[str, dict, str]] = []
+    subject_evidence_items: list[tuple[str, dict, str]] = []
     fallback_items: list[tuple[str, dict, str]] = []
     for doc, meta, chunk_id in zip(docs, metadatas, ids):
-        if _extract_query_evidence_fact_lines(doc, analysis, max_facts=1, meta=meta or {}):
-            evidence_items.append((doc, meta or {}, chunk_id))
+        evidence_facts = _extract_query_evidence_fact_lines(doc, analysis, max_facts=5, meta=meta or {})
+        if evidence_facts:
+            item = (doc, meta or {}, chunk_id)
+            evidence_items.append(item)
+            if _evidence_facts_match_specific_subject(evidence_facts, analysis):
+                subject_evidence_items.append(item)
         else:
             fallback_items.append((doc, meta or {}, chunk_id))
 
@@ -3361,17 +3366,42 @@ def _focus_candidates_with_query_evidence(
         return docs, metadatas, ids
 
     logger.info(
-        "[query_evidence_focus] intent=%s evidence_candidates=%s fallback_candidates=%s",
+        "[query_evidence_focus] intent=%s evidence_candidates=%s subject_evidence_candidates=%s fallback_candidates=%s",
         analysis.intent,
         len(evidence_items),
+        len(subject_evidence_items),
         len(fallback_items),
     )
-    focused_items = evidence_items
+    focused_items = subject_evidence_items or evidence_items
     return (
         [doc for doc, _, _ in focused_items],
         [meta for _, meta, _ in focused_items],
         [chunk_id for _, _, chunk_id in focused_items],
     )
+
+
+def _specific_query_subject_terms(analysis: QueryAnalysis) -> set[str]:
+    """evidence focus에서 intent 단어를 제외한 실제 질문 대상 표현만 고른다."""
+    excluded_terms = set(QUERY_GENERIC_TERMS)
+    excluded_terms.update(QUERY_TABLE_INTENT_TERMS)
+    excluded_terms.update({"주요", "관련", "항목", "교과목", "주요교과목", "취업", "취업처", "주요취업처"})
+    if analysis.intent:
+        excluded_terms.update(INTENT_QUERY_TERMS.get(analysis.intent, set()))
+        excluded_terms.update(INTENT_EVIDENCE_TERMS.get(analysis.intent, set()))
+
+    return {
+        term for term in (analysis.primary_terms | analysis.subject_terms)
+        if len(term) >= 3 and term not in excluded_terms and term not in QUERY_WEAK_SUBJECT_TERMS
+    }
+
+
+def _evidence_facts_match_specific_subject(evidence_facts: list[str], analysis: QueryAnalysis) -> bool:
+    """구조화 근거가 질문의 실제 subject를 직접 포함하는지 확인한다."""
+    subject_terms = _specific_query_subject_terms(analysis)
+    if not subject_terms:
+        return False
+    evidence_text = "\n".join(evidence_facts)
+    return any(_term_in_text(term, evidence_text) for term in subject_terms)
 
 
 def _prioritize_query_results(docs: list[str], metadatas: list[dict], ids: list[str], question: str) -> tuple[list[str], list[dict], list[str]]:
@@ -3858,6 +3888,8 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
 
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
+    if evidence_facts and meta.get("chunk_role") == "layout_parallel":
+        return f"[출처 {index}]\n{metadata}{evidence_fact_block}"
     if relevant_excerpt:
         return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
     return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n전체 내용:\n{doc.strip()}"
