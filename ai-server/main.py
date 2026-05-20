@@ -905,6 +905,100 @@ def _extract_table_caption(text: str, metadata: dict) -> str:
     return header_path or "문서 표"
 
 
+def _clean_table_scope_part(value: str) -> str:
+    """표 주변 제목 후보를 scope 조각으로 쓰기 좋게 정리한다."""
+    cleaned = value.strip()
+    cleaned = cleaned.lstrip("#").strip()
+    cleaned = re.sub(r"^[-*ㆍ·]\s*", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip(" >")
+
+
+def _table_scope_heading_level(line: str) -> int | None:
+    """표 주변 text line이 문서 구조 제목이면 outline level을 반환한다."""
+    stripped = line.strip()
+    if not stripped or _is_markdown_table_line(stripped):
+        return None
+
+    hash_match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+    if hash_match:
+        return min(len(hash_match.group(1)), 6)
+
+    cleaned = _clean_table_scope_part(stripped)
+    if not cleaned or len(cleaned) > 100:
+        return None
+    if re.search(r"https?://|www\.", cleaned, flags=re.IGNORECASE):
+        return None
+    if re.search(r"[.!?。]$", cleaned):
+        return None
+
+    if re.match(r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫIVXLCDM]+\.\s*\S+", cleaned):
+        return 1
+    if re.match(r"^\d+(?:\.\d+)*\.\s*\S+", cleaned):
+        return 2
+    if re.match(r"^[가-힣]\.\s*\S+", cleaned):
+        return 3
+    if re.match(r"^[①-⑳]\s*\S+", cleaned):
+        return 4
+    if re.match(r"^(표|Table)\s*\d", cleaned, flags=re.IGNORECASE):
+        return 5
+    return None
+
+
+def _update_table_scope_outline(outline: dict[int, str], text: str) -> None:
+    """표 앞 text block에서 구조 제목을 읽어 현재 outline을 갱신한다."""
+    for line in text.splitlines():
+        level = _table_scope_heading_level(line)
+        if level is None:
+            continue
+
+        part = _clean_table_scope_part(line)
+        if not part:
+            continue
+        outline[level] = part
+        for stale_level in [stored_level for stored_level in outline if stored_level > level]:
+            outline.pop(stale_level, None)
+
+
+def _extract_local_table_caption(context_text: str, metadata: dict) -> str:
+    """한 table block 바로 앞의 제목 후보를 뽑는다."""
+    structural_candidates: list[str] = []
+    for line in context_text.splitlines():
+        if _table_scope_heading_level(line) is not None:
+            cleaned = _clean_table_scope_part(line)
+            if cleaned:
+                structural_candidates.append(cleaned)
+
+    if structural_candidates:
+        return structural_candidates[-1]
+    return _extract_table_caption(context_text, metadata)
+
+
+def _compose_table_scope(metadata: dict, outline: dict[int, str], local_caption: str) -> str:
+    """metadata 섹션 경로, 앞선 구조 제목, 바로 앞 caption을 합쳐 table별 scope를 만든다."""
+    parts: list[str] = []
+    header_path = _format_header_path(metadata)
+    if header_path:
+        parts.extend(_clean_table_scope_part(part) for part in header_path.split(" > "))
+    parts.extend(outline[level] for level in sorted(outline))
+    if local_caption:
+        parts.append(local_caption)
+
+    deduped: list[str] = []
+    seen_compact: set[str] = set()
+    for part in parts:
+        cleaned = _clean_table_scope_part(part)
+        compact = _compact_search_text(cleaned)
+        if not cleaned or not compact or compact in seen_compact:
+            continue
+        seen_compact.add(compact)
+        deduped.append(cleaned)
+
+    if deduped:
+        return " > ".join(deduped[-6:])
+    return header_path or "문서 표"
+
+
 def _parse_markdown_table(block_text: str) -> tuple[list[list[str]], list[list[str]]]:
     """Markdown table block에서 header row와 body row를 분리한다."""
     lines = [line.strip() for line in block_text.splitlines() if _is_markdown_table_line(line)]
@@ -1168,9 +1262,10 @@ def _truncate_table_fact(fact: str) -> str:
 def _extract_table_facts(text: str, metadata: dict) -> list[str]:
     """Markdown 표에서 원본 청크와 별도로 색인할 구조화 fact를 생성한다."""
     legends = _extract_table_legends(text)
-    caption = _extract_table_caption(text, metadata)
     facts: list[str] = []
     seen: set[str] = set()
+    text_context_blocks: list[str] = []
+    table_scope_outline: dict[int, str] = {}
 
     def append_fact(fact: str) -> None:
         if len(facts) >= TABLE_FACT_MAX_PER_CHUNK:
@@ -1182,8 +1277,16 @@ def _extract_table_facts(text: str, metadata: dict) -> list[str]:
         facts.append(normalized)
 
     for block_type, block_text in _split_markdown_table_blocks(text):
+        if block_type == "text":
+            text_context_blocks.append(block_text)
+            _update_table_scope_outline(table_scope_outline, block_text)
+            continue
         if block_type != "table":
             continue
+
+        local_context = "\n\n".join(text_context_blocks[-3:])
+        local_caption = _extract_local_table_caption(local_context, metadata)
+        caption = _compose_table_scope(metadata, table_scope_outline, local_caption)
 
         header_rows, body_rows = _parse_markdown_table(block_text)
         if not header_rows or not body_rows:
@@ -2970,6 +3073,86 @@ def _table_bridge_attribute_terms(analysis: QueryAnalysis) -> set[str]:
     return {term for term in terms if len(term) >= 2 and term not in QUERY_COMPOUND_FUNCTION_TERMS}
 
 
+def _normalize_table_scope_query_term(term: str) -> str:
+    """조사·요청 어미가 붙은 질문 표현을 표 scope 매칭용 단어로 정규화한다."""
+    compact = _compact_search_text(term)
+    if not compact:
+        return ""
+    if re.search(r"(알려|설명|궁금|무엇|무슨|어떤|어디|언제|어떻게)", compact):
+        return ""
+
+    suffixes = (
+        "에따른", "에대한", "에관한", "관련된", "관련한", "따른", "대한", "관한",
+        "할때", "할", "때",
+    )
+    if compact in suffixes:
+        return ""
+    changed = True
+    while changed:
+        changed = False
+        for suffix in suffixes:
+            if compact.endswith(suffix) and len(compact) > len(suffix) + 1:
+                compact = compact[:-len(suffix)]
+                changed = True
+                break
+    return compact
+
+
+def _table_bridge_scope_terms(analysis: QueryAnalysis) -> set[str]:
+    """속성명이 아니라 어떤 표를 말하는지 구분하는 질문 표현을 고른다."""
+    excluded_terms = set(QUERY_GENERIC_TERMS)
+    excluded_terms.update(QUERY_TABLE_INTENT_TERMS)
+    excluded_terms.update(QUERY_COMPOUND_FUNCTION_TERMS)
+    excluded_terms.update(QUERY_WEAK_SUBJECT_TERMS)
+    attribute_terms = _table_bridge_attribute_terms(analysis)
+    excluded_terms.update(attribute_terms)
+    if analysis.intent:
+        excluded_terms.update(INTENT_QUERY_TERMS.get(analysis.intent, set()))
+        excluded_terms.update(INTENT_EVIDENCE_TERMS.get(analysis.intent, set()))
+
+    terms: set[str] = set()
+    for term in analysis.primary_terms | analysis.subject_terms:
+        compact = _normalize_table_scope_query_term(term)
+        if len(compact) < 2 or term in excluded_terms:
+            continue
+        if any(attribute in compact or compact in attribute for attribute in attribute_terms):
+            continue
+        if compact in excluded_terms:
+            continue
+        terms.add(compact)
+    return terms
+
+
+def _score_table_scope_match(text: str, scope_terms: set[str]) -> int:
+    """table_fact가 질문의 표 구분 표현을 얼마나 포함하는지 점수화한다."""
+    score = 0
+    for term in scope_terms:
+        if _term_in_text(term, text):
+            score += max(1, len(_compact_search_text(term)))
+    return score
+
+
+def _select_discriminating_table_scope_terms(facts: list[str], analysis: QueryAnalysis) -> set[str]:
+    """여러 table_fact 중 질문 대상 표만 가르는 scope term을 선택한다."""
+    scope_terms = _table_bridge_scope_terms(analysis)
+    if not scope_terms or not facts:
+        return set()
+
+    matched_counts = {
+        term: sum(1 for fact in facts if _term_in_text(term, fact))
+        for term in scope_terms
+    }
+    matched_terms = {term for term, count in matched_counts.items() if count > 0}
+    if not matched_terms:
+        return scope_terms
+
+    discriminating_terms = {
+        term for term in matched_terms
+        if matched_counts[term] < len(facts)
+    }
+    return _prefer_specific_subject_terms(discriminating_terms or matched_terms)
+
+
 def _table_fact_matches_query_attribute(fact: str, analysis: QueryAnalysis) -> bool:
     """table_fact가 질문이 묻는 속성 행/열/값을 포함하는지 판단한다."""
     if analysis.intent == "attire":
@@ -3040,6 +3223,11 @@ def _extract_attribute_value_from_table_fact(fact: str, analysis: QueryAnalysis)
         value_has_intent = _line_has_intent_evidence(value, analysis)
         if row_is_attribute or key_matches_attribute or value_has_intent:
             cleaned_value = _clean_table_fact_answer_value(value)
+            if row_is_attribute and (
+                _term_in_text(cleaned_value, row_subject)
+                or any(_term_in_text(term, cleaned_value) for term in attribute_terms)
+            ):
+                continue
             if row_is_attribute and not key_matches_attribute:
                 candidates.append(f"{key}: {cleaned_value}")
             else:
@@ -3078,13 +3266,36 @@ def _infer_table_bridge_attribute_label(attribute_fact: str, analysis: QueryAnal
 def _build_table_bridge_label(subject_label: str, attribute_label: str, analysis: QueryAnalysis) -> str:
     """subject와 속성명을 합쳐 LLM에 줄 직접 근거 label을 만든다."""
     parts = [subject_label.strip()] if subject_label.strip() else []
-    for term in TABLE_BRIDGE_CONTEXT_LABEL_TERMS:
-        if term in analysis.context_terms and not any(term in part for part in parts + [attribute_label]):
-            parts.append(term)
-            break
-    if attribute_label.strip():
+    if not parts:
+        for term in TABLE_BRIDGE_CONTEXT_LABEL_TERMS:
+            if term in analysis.context_terms and term not in attribute_label:
+                parts.append(term)
+                break
+    if attribute_label.strip() and not any(_term_in_text(attribute_label, part) for part in parts):
         parts.append(attribute_label.strip())
     return " ".join(parts).strip() or INTENT_DEFAULT_LABELS.get(analysis.intent or "", "관련 정보")
+
+
+def _extract_scope_label_from_table_facts(facts: list[str], scope_terms: set[str]) -> str:
+    """scope term이 들어 있는 table caption 조각을 evidence label로 선택한다."""
+    if not scope_terms:
+        return ""
+
+    candidates: list[tuple[int, int, str]] = []
+    for fact in facts:
+        caption = fact.split(":", 1)[0].strip()
+        for part in caption.split(" > "):
+            cleaned = _clean_table_scope_part(part)
+            if not cleaned:
+                continue
+            score = _score_table_scope_match(cleaned, scope_terms)
+            if score > 0:
+                candidates.append((score, len(_compact_search_text(cleaned)), cleaned))
+
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return candidates[0][2]
 
 
 def _extract_subject_label_from_table_facts(facts: list[str], analysis: QueryAnalysis) -> str:
@@ -3307,7 +3518,7 @@ def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis
     if not subject_related:
         return []
 
-    attribute_facts = []
+    attribute_facts: list[str] = []
     for fact in facts:
         if not _table_fact_matches_query_attribute(fact, analysis):
             continue
@@ -3317,7 +3528,21 @@ def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis
     if not attribute_facts:
         return []
 
-    subject_label = _extract_subject_label_from_table_facts(facts, analysis)
+    scope_terms = _select_discriminating_table_scope_terms(attribute_facts, analysis)
+    if scope_terms:
+        scoped_attribute_facts = [
+            fact for fact in attribute_facts
+            if _score_table_scope_match(fact, scope_terms) > 0
+        ]
+        if scoped_attribute_facts:
+            max_scope_score = max(_score_table_scope_match(fact, scope_terms) for fact in scoped_attribute_facts)
+            attribute_facts = [
+                fact for fact in scoped_attribute_facts
+                if _score_table_scope_match(fact, scope_terms) == max_scope_score
+            ]
+
+    scope_label = _extract_scope_label_from_table_facts(attribute_facts, scope_terms)
+    subject_label = scope_label or _extract_subject_label_from_table_facts(facts, analysis)
     evidence_facts: list[str] = []
     seen_values: set[str] = set()
 
