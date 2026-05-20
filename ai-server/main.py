@@ -2204,7 +2204,7 @@ BM25_K1 = 1.5
 BM25_B = 0.75
 KIWI_SEARCH_TAG_PREFIXES = ("NN", "SL", "SN", "XR")
 INTENT_PRIORITY = (
-    "location", "time", "cost", "attire", "documents", "employment",
+    "location", "time", "cost", "attire", "documents",
     "eligibility", "count", "schedule", "method", "formula", "list",
 )
 INTENT_QUERY_TERMS = {
@@ -2214,7 +2214,6 @@ INTENT_QUERY_TERMS = {
     "cost": {"비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료"},
     "attire": {"복장", "옷", "옷차림", "입어", "입어야", "착용", "상의", "하의", "신발", "티셔츠", "스타킹", "단화"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "준비물"},
-    "employment": {"취업", "취업처"},
     "eligibility": {"자격", "지원자격", "대상", "조건", "요건"},
     "count": {"인원", "정원", "모집인원", "모집정원", "몇명", "명"},
     "method": {"방법", "절차", "어떻게", "신청", "진행", "처리"},
@@ -2228,7 +2227,6 @@ INTENT_EVIDENCE_TERMS = {
     "cost": {"비용", "금액", "요금", "가격", "납부", "원", "무료", "환불"},
     "attire": {"복장", "옷", "옷차림", "입어", "입어야", "착용", "수험생", "상의", "하의", "신발", "티셔츠", "스타킹", "단화", "바지", "스커트"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "발급", "원본", "사본"},
-    "employment": {"취업", "취업처", "기업", "회사", "기관", "졸업"},
     "eligibility": {"자격", "대상", "조건", "요건", "해당자", "지원"},
     "count": {"인원", "정원", "모집", "모집인원", "모집정원", "명", "합계", "총"},
     "method": {"방법", "절차", "신청", "제출", "접수", "처리", "승인"},
@@ -2272,16 +2270,15 @@ QUERY_NON_SUBJECT_PATTERNS = (
 STRICT_LOCAL_EVIDENCE_INTENTS = {"location", "time", "cost", "count", "attire"}
 EVIDENCE_FOCUSED_INTENTS = {
     "location", "time", "cost", "count", "list", "attire",
-    "documents", "employment", "eligibility", "method", "schedule", "formula",
+    "documents", "eligibility", "method", "schedule", "formula",
 }
 TABLE_BRIDGE_EVIDENCE_INTENTS = {
-    "attire", "documents", "employment", "eligibility", "count", "method", "schedule", "time", "cost", "location", "formula", "list",
+    "attire", "documents", "eligibility", "count", "method", "schedule", "time", "cost", "location", "formula", "list",
 }
 TABLE_DIRECT_ROW_ATTRIBUTE_INTENTS = {"count", "formula"}
 INTENT_DEFAULT_LABELS = {
     "attire": "복장",
     "documents": "준비물/서류",
-    "employment": "취업처",
     "eligibility": "자격",
     "count": "인원",
     "list": "목록",
@@ -2590,8 +2587,6 @@ def _detect_query_intent(question: str, tokens: list[str]) -> str | None:
     """질문이 묻는 속성 intent를 보수적으로 분류한다."""
     normalized_question = question.lower().replace(" ", "")
     token_set = set(tokens)
-    if "취업" in normalized_question:
-        return "employment"
     if _is_collection_list_question(normalized_question):
         return "list"
     for intent in INTENT_PRIORITY:
@@ -3352,7 +3347,7 @@ def _focus_candidates_with_query_evidence(
     analysis: QueryAnalysis,
 ) -> tuple[list[str], list[dict], list[str]]:
     """구조화 근거가 확인된 후보가 있으면 최종 context를 그 후보들로 좁힌다."""
-    if not docs or analysis.intent not in EVIDENCE_FOCUSED_INTENTS:
+    if not docs:
         return docs, metadatas, ids
 
     evidence_items: list[tuple[str, dict, str, list[str]]] = []
@@ -3367,31 +3362,46 @@ def _focus_candidates_with_query_evidence(
     if not evidence_items:
         return docs, metadatas, ids
 
+    if analysis.intent and analysis.intent not in EVIDENCE_FOCUSED_INTENTS:
+        return docs, metadatas, ids
+
+    focus_evidence_items = [
+        item for item in evidence_items
+        if _is_structured_query_evidence_item(item[1])
+    ] or evidence_items
     subject_terms = _specific_query_subject_terms(
         analysis,
-        ["\n".join(evidence_facts) for _, _, _, evidence_facts in evidence_items],
+        ["\n".join(evidence_facts) for _, _, _, evidence_facts in focus_evidence_items],
     )
     subject_evidence_items = [
         (doc, meta, chunk_id)
-        for doc, meta, chunk_id, evidence_facts in evidence_items
+        for doc, meta, chunk_id, evidence_facts in focus_evidence_items
         if _evidence_facts_match_specific_subject(evidence_facts, subject_terms)
     ]
 
     logger.info(
-        "[query_evidence_focus] intent=%s evidence_candidates=%s subject_evidence_candidates=%s fallback_candidates=%s",
+        "[query_evidence_focus] intent=%s evidence_candidates=%s structured_evidence_candidates=%s subject_evidence_candidates=%s fallback_candidates=%s",
         analysis.intent,
         len(evidence_items),
+        len(focus_evidence_items),
         len(subject_evidence_items),
         len(fallback_items),
     )
     focused_items = subject_evidence_items or [
-        (doc, meta, chunk_id) for doc, meta, chunk_id, _ in evidence_items
+        (doc, meta, chunk_id) for doc, meta, chunk_id, _ in focus_evidence_items
     ]
     return (
         [doc for doc, _, _ in focused_items],
         [meta for _, meta, _ in focused_items],
         [chunk_id for _, _, chunk_id in focused_items],
     )
+
+
+def _is_structured_query_evidence_item(meta: dict) -> bool:
+    """layout/table처럼 구조에서 직접 추출된 evidence 후보인지 확인한다."""
+    if meta.get("chunk_role") in {"layout_parallel", "table_fact"}:
+        return True
+    return bool(_get_query_evidence_facts_from_meta(meta))
 
 
 def _specific_query_subject_terms(analysis: QueryAnalysis, evidence_texts: list[str]) -> set[str]:
@@ -3749,15 +3759,15 @@ def _extract_list_section_evidence_fact_lines(text: str, analysis: QueryAnalysis
 
 def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_facts: int = 5, meta: dict | None = None) -> list[str]:
     """검색된 chunk에서 질문 subject와 intent가 직접 만나는 항목 근거 line들을 추출한다."""
-    if not analysis.intent:
-        return []
-
     seen: set[str] = set()
     facts: list[str] = []
 
     layout_facts = _extract_layout_parallel_evidence_fact_lines(text, analysis, max_facts)
     if layout_facts:
         return layout_facts
+
+    if not analysis.intent:
+        return []
 
     for fact in _get_query_evidence_facts_from_meta(meta or {}):
         if fact in seen:
@@ -3882,15 +3892,65 @@ def _layout_common_title_matches_subject(text: str, query_terms: set[str]) -> bo
 
 
 def _layout_label_matches_query(label: str, analysis: QueryAnalysis) -> bool:
-    normalized_label = re.sub(r"\s+", "", label)
-    query_terms = analysis.primary_terms | analysis.context_terms
-    if any(term in query_terms for term in {"교과목", "주요교과목", "과목"}):
-        return "교과목" in normalized_label or "과목" in normalized_label
-    if any(term in query_terms for term in {"취업", "취업처", "주요취업처"}):
-        return "취업" in normalized_label
+    """문서 label과 질문 속성 phrase가 직접 맞는지 판단한다."""
+    if _label_matches_query_phrase(label, analysis):
+        return True
     if analysis.intent == "list":
-        return label != "본문"
+        return False
     return _line_has_intent_evidence(f"{label}: ", analysis)
+
+
+def _label_matches_query_phrase(label: str, analysis: QueryAnalysis) -> bool:
+    """질문에 실제로 등장한 phrase와 문서 label을 범용적으로 대조한다."""
+    label_terms = _extract_label_match_terms(label)
+    if not label_terms:
+        return False
+
+    query_terms = _extract_query_label_match_terms(analysis)
+    if not query_terms:
+        return False
+
+    label_compact = _compact_search_text(label)
+    if len(label_compact) >= 2 and label_compact in query_terms:
+        return True
+
+    for label_term in label_terms:
+        if label_term in query_terms:
+            return True
+        if any(query_term.endswith(label_term) for query_term in query_terms if len(query_term) > len(label_term)):
+            return True
+        if any(label_term.endswith(query_term) for query_term in query_terms if len(query_term) >= 2):
+            return True
+    return False
+
+
+def _extract_label_match_terms(label: str) -> set[str]:
+    """layout/table label에서 질문 phrase와 비교할 핵심 term을 만든다."""
+    terms: set[str] = set()
+    for token in re.findall(r"[0-9A-Za-z가-힣]+", label):
+        normalized = _normalize_query_token(token)
+        compact = _compact_search_text(normalized)
+        if len(compact) < 2:
+            continue
+        if compact in QUERY_GENERIC_TERMS or compact in QUERY_COMPOUND_FUNCTION_TERMS:
+            continue
+        terms.add(compact)
+    return terms
+
+
+def _extract_query_label_match_terms(analysis: QueryAnalysis) -> set[str]:
+    """질문에서 label 매칭에 사용할 속성 후보 term을 추린다."""
+    terms: set[str] = set()
+    for term in analysis.primary_terms:
+        compact = _compact_search_text(_normalize_query_token(term))
+        if len(compact) < 2:
+            continue
+        if compact in QUERY_GENERIC_TERMS or compact in QUERY_COMPOUND_FUNCTION_TERMS:
+            continue
+        if compact in QUERY_WEAK_SUBJECT_TERMS:
+            continue
+        terms.add(compact)
+    return terms
 
 
 def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts: int = 5, meta: dict | None = None) -> str:
