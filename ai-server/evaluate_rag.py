@@ -25,7 +25,14 @@ DEFAULT_UNSUPPORTED_KEYWORDS = [
 
 
 def _normalize_text(value: Any) -> str:
-    return "".join(str(value or "").lower().split())
+    replacements = str.maketrans({
+        "Ⅰ": "I",
+        "Ⅱ": "II",
+        "Ⅲ": "III",
+        "Ⅳ": "IV",
+        "Ⅴ": "V",
+    })
+    return "".join(str(value or "").translate(replacements).lower().split())
 
 
 def _contains_keyword(text: str, keyword: str) -> bool:
@@ -42,6 +49,18 @@ def _matched_keywords(text: str, keywords: list[str]) -> list[str]:
 
 def _contains_any_keyword(text: str, keywords: list[str]) -> bool:
     return any(_contains_keyword(text, keyword) for keyword in keywords)
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _keyword_list(case: dict, key: str) -> list[str]:
+    return [str(item) for item in _as_list(case.get(key)) if str(item).strip()]
 
 
 def _stringify(value: Any) -> str:
@@ -83,14 +102,122 @@ def _first_matching_rank(candidates: list[dict], keywords: list[str]) -> int | N
     return None
 
 
+def _parse_expected_pages(value: Any) -> list[int]:
+    pages = []
+    for item in _as_list(value):
+        try:
+            pages.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return pages
+
+
+def _candidate_pages(candidate: dict) -> set[int]:
+    pages = set()
+    for key in ("page", "page_start", "page_end"):
+        value = candidate.get(key)
+        try:
+            if value is not None and str(value).strip():
+                pages.add(int(value))
+        except (TypeError, ValueError):
+            continue
+
+    page_start = candidate.get("page_start")
+    page_end = candidate.get("page_end")
+    try:
+        start = int(page_start)
+        end = int(page_end)
+        if start <= end and end - start <= 20:
+            pages.update(range(start, end + 1))
+    except (TypeError, ValueError):
+        pass
+    return pages
+
+
+def _missing_pages(candidates: list[dict], expected_pages: list[int]) -> list[int]:
+    if not expected_pages:
+        return []
+    found_pages = set()
+    for candidate in candidates:
+        found_pages.update(_candidate_pages(candidate))
+    return [page for page in expected_pages if page not in found_pages]
+
+
+def _page_evidence_missing_keywords(
+    candidates: list[dict],
+    expected_pages: list[int],
+    keywords: list[str],
+) -> list[str]:
+    if not expected_pages or not keywords:
+        return []
+    for candidate in candidates:
+        if not (_candidate_pages(candidate) & set(expected_pages)):
+            continue
+        if not _missing_keywords(_stringify(candidate), keywords):
+            return []
+    return keywords
+
+
+def _candidate_role_hits(candidates: list[dict], forbidden_roles: list[str], mode: str) -> list[str]:
+    hits = []
+    forbidden = {str(role) for role in forbidden_roles}
+    if not forbidden:
+        return hits
+    selected_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate.get("selected_for_prompt") is not False
+    ]
+    if mode == "only_without_raw":
+        has_selected_raw = any(
+            str(candidate.get("chunk_role") or "raw") == "raw"
+            for candidate in selected_candidates
+        )
+        if has_selected_raw:
+            return []
+    for candidate in selected_candidates:
+        roles = [
+            candidate.get("chunk_role"),
+            candidate.get("matched_chunk_role"),
+            candidate.get("vector_hit_chunk_role"),
+        ]
+        for role in roles:
+            role_text = str(role or "")
+            if role_text in forbidden:
+                rank = candidate.get("rank", "?")
+                chunk_id = candidate.get("chunk_id", "")
+                hits.append(f"rank={rank} chunk={chunk_id} role={role_text}")
+    return hits
+
+
+def _evidence_facts_text(candidates: list[dict]) -> str:
+    facts = []
+    for candidate in candidates:
+        facts.extend(str(fact) for fact in _as_list(candidate.get("query_evidence_facts")))
+    return "\n".join(facts)
+
+
 def _evaluate_trace(case: dict, trace: dict) -> dict:
-    expected_evidence_keywords = case.get("expected_evidence_keywords", [])
-    expected_source_keywords = case.get("expected_source_keywords", [])
+    expected_evidence_keywords = _keyword_list(case, "expected_evidence_keywords")
+    forbidden_evidence_keywords = _keyword_list(case, "forbidden_evidence_keywords")
+    expected_source_keywords = _keyword_list(case, "expected_source_keywords")
+    expected_source_content_keywords = _keyword_list(case, "expected_source_content_keywords")
+    forbidden_source_content_keywords = _keyword_list(case, "forbidden_source_content_keywords")
+    expected_pages = _parse_expected_pages(case.get("expected_pages"))
+    forbidden_candidate_roles = _keyword_list(case, "forbidden_candidate_roles")
+    forbidden_candidate_roles_mode = str(case.get("forbidden_candidate_roles_mode") or "any_selected")
+    require_page_evidence = bool(
+        case.get(
+            "require_evidence_on_expected_page",
+            bool(expected_pages and expected_evidence_keywords),
+        )
+    )
     unsupported = bool(case.get("unsupported", False))
     stages = trace.get("stages", {})
     final_candidates = stages.get("final_candidates", [])
     final_context = trace.get("final_context", "")
     final_text = final_context + "\n" + _stringify(final_candidates)
+    evidence_facts_text = _evidence_facts_text(final_candidates)
     final_source_text = "\n".join(
         _stringify(
             {
@@ -100,6 +227,10 @@ def _evaluate_trace(case: dict, trace: dict) -> dict:
                 "chunk_id": candidate.get("chunk_id"),
             }
         )
+        for candidate in final_candidates
+    )
+    final_source_content_text = "\n".join(
+        str(candidate.get("content_preview", ""))
         for candidate in final_candidates
     )
 
@@ -114,6 +245,33 @@ def _evaluate_trace(case: dict, trace: dict) -> dict:
 
     source_missing = _missing_keywords(final_source_text, expected_source_keywords)
     source_pass = None if not expected_source_keywords else not source_missing
+    trace_source_content_missing = _missing_keywords(final_source_content_text, expected_source_content_keywords)
+    trace_source_content_pass = (
+        None if not expected_source_content_keywords else not trace_source_content_missing
+    )
+    forbidden_trace_source_content_hits = _matched_keywords(
+        final_source_content_text,
+        forbidden_source_content_keywords,
+    )
+    trace_source_content_contamination_pass = (
+        None if not forbidden_source_content_keywords else not forbidden_trace_source_content_hits
+    )
+    forbidden_evidence_hits = _matched_keywords(evidence_facts_text, forbidden_evidence_keywords)
+    evidence_contamination_pass = None if not forbidden_evidence_keywords else not forbidden_evidence_hits
+    page_missing = _missing_pages(final_candidates, expected_pages)
+    page_pass = None if not expected_pages else not page_missing
+    missing_page_evidence_keywords = (
+        _page_evidence_missing_keywords(final_candidates, expected_pages, expected_evidence_keywords)
+        if require_page_evidence
+        else []
+    )
+    page_evidence_pass = None if not require_page_evidence else not missing_page_evidence_keywords
+    forbidden_candidate_role_hits = _candidate_role_hits(
+        final_candidates,
+        forbidden_candidate_roles,
+        forbidden_candidate_roles_mode,
+    )
+    candidate_role_pass = None if not forbidden_candidate_roles else not forbidden_candidate_role_hits
     selected_methods = sorted(
         {
             method
@@ -123,15 +281,37 @@ def _evaluate_trace(case: dict, trace: dict) -> dict:
     )
 
     trace_pass = all(
-        value is not False for value in (evidence_pass, source_pass)
+        value is not False
+        for value in (
+            evidence_pass,
+            source_pass,
+            trace_source_content_pass,
+            trace_source_content_contamination_pass,
+            evidence_contamination_pass,
+            page_pass,
+            page_evidence_pass,
+            candidate_role_pass,
+        )
     )
     return {
         "trace_pass": trace_pass,
         "evidence_pass": evidence_pass,
         "source_pass": source_pass,
+        "evidence_contamination_pass": evidence_contamination_pass,
+        "trace_source_content_pass": trace_source_content_pass,
+        "trace_source_content_contamination_pass": trace_source_content_contamination_pass,
+        "page_pass": page_pass,
+        "page_evidence_pass": page_evidence_pass,
+        "candidate_role_pass": candidate_role_pass,
         "evidence_rank": evidence_rank,
         "missing_evidence_keywords": evidence_missing,
         "missing_source_keywords": source_missing,
+        "missing_trace_source_content_keywords": trace_source_content_missing,
+        "forbidden_trace_source_content_hits": forbidden_trace_source_content_hits,
+        "forbidden_evidence_hits": forbidden_evidence_hits,
+        "missing_expected_pages": page_missing,
+        "missing_page_evidence_keywords": missing_page_evidence_keywords,
+        "forbidden_candidate_role_hits": forbidden_candidate_role_hits,
         "final_candidate_count": len(final_candidates),
         "selected_retrieval_methods": selected_methods,
         "query_analysis": trace.get("query_analysis", {}),
@@ -148,12 +328,12 @@ def _evaluate_answer(case: dict, query_response: dict | None) -> dict:
 
     answer = str(query_response.get("answer", ""))
     unsupported = bool(case.get("unsupported", False))
-    expected_answer_keywords = case.get("expected_answer_keywords", [])
-    forbidden_answer_keywords = case.get("forbidden_answer_keywords", [])
-    unsupported_answer_keywords = case.get(
-        "unsupported_answer_keywords",
-        DEFAULT_UNSUPPORTED_KEYWORDS,
-    )
+    expected_answer_keywords = _keyword_list(case, "expected_answer_keywords")
+    forbidden_answer_keywords = _keyword_list(case, "forbidden_answer_keywords")
+    unsupported_answer_keywords = _keyword_list(case, "unsupported_answer_keywords") or DEFAULT_UNSUPPORTED_KEYWORDS
+    expected_source_content_keywords = _keyword_list(case, "expected_source_content_keywords")
+    forbidden_source_content_keywords = _keyword_list(case, "forbidden_source_content_keywords")
+    source_content = "\n".join(str(source.get("content", "")) for source in query_response.get("sources", []))
 
     forbidden_hits = _matched_keywords(answer, forbidden_answer_keywords)
     if unsupported:
@@ -168,8 +348,25 @@ def _evaluate_answer(case: dict, query_response: dict | None) -> dict:
         expected_pass = None
         answer_evaluation = "no_expected_answer_keywords"
 
-    answer_pass = expected_pass is not False and not forbidden_hits
-    if expected_pass is None and not forbidden_hits:
+    missing_source_content_keywords = _missing_keywords(source_content, expected_source_content_keywords)
+    source_content_pass = None if not expected_source_content_keywords else not missing_source_content_keywords
+    forbidden_source_content_hits = _matched_keywords(source_content, forbidden_source_content_keywords)
+    source_content_contamination_pass = (
+        None if not forbidden_source_content_keywords else not forbidden_source_content_hits
+    )
+
+    answer_pass = (
+        expected_pass is not False
+        and not forbidden_hits
+        and source_content_pass is not False
+        and source_content_contamination_pass is not False
+    )
+    if (
+        expected_pass is None
+        and not forbidden_hits
+        and source_content_pass is not False
+        and source_content_contamination_pass is not False
+    ):
         answer_pass = None
 
     return {
@@ -178,14 +375,26 @@ def _evaluate_answer(case: dict, query_response: dict | None) -> dict:
         "answer": answer,
         "missing_answer_keywords": missing_answer_keywords if not unsupported else [],
         "forbidden_answer_hits": forbidden_hits,
+        "source_content_pass": source_content_pass,
+        "source_content_contamination_pass": source_content_contamination_pass,
+        "missing_source_content_keywords": missing_source_content_keywords,
+        "forbidden_source_content_hits": forbidden_source_content_hits,
         "source_count": len(query_response.get("sources", [])),
     }
 
 
-def _question_variants(case: dict) -> list[tuple[str, str]]:
-    variants = [("primary", case["question"])]
+def _question_variants(case: dict) -> list[tuple[str, dict, str]]:
+    variants = [("primary", case, case["question"])]
     for index, variant in enumerate(case.get("variants", []), start=1):
-        variants.append((f"variant_{index}", str(variant)))
+        variants.append((f"variant_{index}", case, str(variant)))
+    for index, scope_case in enumerate(case.get("scope_variant_cases", []), start=1):
+        if not isinstance(scope_case, dict) or not scope_case.get("question"):
+            continue
+        variant_case = dict(case)
+        variant_case.update(scope_case)
+        variant_case["id"] = case.get("id")
+        name = str(scope_case.get("name") or f"scope_variant_{index}")
+        variants.append((name, variant_case, str(scope_case["question"])))
     return variants
 
 
@@ -229,6 +438,7 @@ def _run_single_question(args: argparse.Namespace, case: dict, variant_name: str
         "id": case.get("id"),
         "variant": variant_name,
         "category": case.get("category", "uncategorized"),
+        "group": case.get("group"),
         "question": question,
         "top_k": top_k,
         "overall_pass": overall_pass,
@@ -243,15 +453,16 @@ def _run_evaluation(args: argparse.Namespace) -> dict:
     cases = _select_cases(_load_cases(args.questions), set(args.case_id), args.limit)
     results = []
     for case in cases:
-        for variant_name, question in _question_variants(case):
+        for variant_name, variant_case, question in _question_variants(case):
             try:
-                results.append(_run_single_question(args, case, variant_name, question))
+                results.append(_run_single_question(args, variant_case, variant_name, question))
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
                 results.append(
                     {
-                        "id": case.get("id"),
+                        "id": variant_case.get("id"),
                         "variant": variant_name,
-                        "category": case.get("category", "uncategorized"),
+                        "category": variant_case.get("category", "uncategorized"),
+                        "group": variant_case.get("group"),
                         "question": question,
                         "overall_pass": False,
                         "trace_pass": False,
@@ -281,12 +492,18 @@ def _build_summary(results: list[dict]) -> dict:
     ]
     answer_passes = sum(1 for result in answer_evaluated if result.get("answer_pass") is True)
     by_category: dict[str, dict] = {}
+    by_group: dict[str, dict] = {}
     for result in results:
         category = str(result.get("category") or "uncategorized")
         item = by_category.setdefault(category, {"total": 0, "overall_pass": 0, "trace_pass": 0})
         item["total"] += 1
         item["overall_pass"] += 1 if result.get("overall_pass") is True else 0
         item["trace_pass"] += 1 if result.get("trace_pass") is True else 0
+        group = str(result.get("group") or "ungrouped")
+        group_item = by_group.setdefault(group, {"total": 0, "overall_pass": 0, "trace_pass": 0})
+        group_item["total"] += 1
+        group_item["overall_pass"] += 1 if result.get("overall_pass") is True else 0
+        group_item["trace_pass"] += 1 if result.get("trace_pass") is True else 0
 
     return {
         "total": total,
@@ -298,6 +515,7 @@ def _build_summary(results: list[dict]) -> dict:
         "answer_pass": answer_passes,
         "answer_pass_rate": round(answer_passes / len(answer_evaluated), 4) if answer_evaluated else None,
         "by_category": by_category,
+        "by_group": by_group,
     }
 
 
@@ -314,15 +532,26 @@ def _write_csv(path: Path, data: dict) -> None:
         "id",
         "variant",
         "category",
+        "group",
         "overall_pass",
         "trace_pass",
         "answer_pass",
+        "page_pass",
+        "page_evidence_pass",
         "evidence_rank",
         "final_candidate_count",
         "selected_retrieval_methods",
         "missing_evidence_keywords",
+        "forbidden_evidence_hits",
+        "missing_trace_source_content_keywords",
+        "forbidden_trace_source_content_hits",
+        "missing_expected_pages",
+        "missing_page_evidence_keywords",
+        "forbidden_candidate_role_hits",
         "missing_answer_keywords",
         "forbidden_answer_hits",
+        "missing_source_content_keywords",
+        "forbidden_source_content_hits",
         "trace_elapsed",
         "query_elapsed",
         "question",
@@ -332,7 +561,20 @@ def _write_csv(path: Path, data: dict) -> None:
         writer.writeheader()
         for result in data["results"]:
             row = dict(result)
-            for key in ("selected_retrieval_methods", "missing_evidence_keywords", "missing_answer_keywords", "forbidden_answer_hits"):
+            for key in (
+                "selected_retrieval_methods",
+                "missing_evidence_keywords",
+                "forbidden_evidence_hits",
+                "missing_trace_source_content_keywords",
+                "forbidden_trace_source_content_hits",
+                "missing_expected_pages",
+                "missing_page_evidence_keywords",
+                "forbidden_candidate_role_hits",
+                "missing_answer_keywords",
+                "forbidden_answer_hits",
+                "missing_source_content_keywords",
+                "forbidden_source_content_hits",
+            ):
                 row[key] = "|".join(str(item) for item in row.get(key, []))
             writer.writerow(row)
 
@@ -353,7 +595,21 @@ def _print_summary(data: dict) -> None:
     if failed:
         print("Failed cases:")
         for result in failed[:20]:
-            reason = result.get("error") or ", ".join(result.get("missing_evidence_keywords", [])) or "answer/citation check failed"
+            reason = (
+                result.get("error")
+                or ", ".join(result.get("missing_evidence_keywords", []))
+                or ", ".join(str(page) for page in result.get("missing_expected_pages", []))
+                or ", ".join(result.get("missing_page_evidence_keywords", []))
+                or ", ".join(result.get("forbidden_evidence_hits", []))
+                or ", ".join(result.get("missing_trace_source_content_keywords", []))
+                or ", ".join(result.get("forbidden_trace_source_content_hits", []))
+                or ", ".join(result.get("forbidden_candidate_role_hits", []))
+                or ", ".join(result.get("missing_answer_keywords", []))
+                or ", ".join(result.get("forbidden_answer_hits", []))
+                or ", ".join(result.get("missing_source_content_keywords", []))
+                or ", ".join(result.get("forbidden_source_content_hits", []))
+                or "answer/citation check failed"
+            )
             print(f"- {result.get('id')} [{result.get('variant')}]: {reason}")
 
 
