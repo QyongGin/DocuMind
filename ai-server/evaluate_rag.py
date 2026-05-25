@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -22,20 +23,70 @@ DEFAULT_UNSUPPORTED_KEYWORDS = [
     "문서에서는 확인할 수 없습니다",
     "찾을 수 없습니다",
 ]
+ROMAN_NUMERAL_TRANSLATION = str.maketrans({
+    "Ⅰ": "I",
+    "Ⅱ": "II",
+    "Ⅲ": "III",
+    "Ⅳ": "IV",
+    "Ⅴ": "V",
+})
+NUMERIC_VALUE_SUFFIXES = ("명", "점", "원", "등급", "일", "쪽", "페이지", "%")
+
+
+def _translated_text(value: Any) -> str:
+    return str(value or "").translate(ROMAN_NUMERAL_TRANSLATION).lower()
 
 
 def _normalize_text(value: Any) -> str:
-    replacements = str.maketrans({
-        "Ⅰ": "I",
-        "Ⅱ": "II",
-        "Ⅲ": "III",
-        "Ⅳ": "IV",
-        "Ⅴ": "V",
-    })
-    return "".join(str(value or "").translate(replacements).lower().split())
+    return "".join(_translated_text(value).split())
+
+
+def _numeric_search_text(value: Any) -> str:
+    return re.sub(r"(?<=\d),(?=\d)", "", _translated_text(value))
+
+
+def _numeric_keyword_text(value: Any) -> str:
+    return "".join(_numeric_search_text(value).split())
+
+
+def _numeric_run_pattern(value: str) -> str:
+    return rf"(?<![\d.,]){re.escape(value)}(?![\d.,])"
+
+
+def _bare_numeric_keyword_pattern(keyword: str) -> str:
+    suffix_pattern = "|".join(re.escape(suffix) for suffix in NUMERIC_VALUE_SUFFIXES)
+    escaped_keyword = re.escape(keyword)
+    return (
+        rf"(?:(?<![\d.,]){escaped_keyword}(?:{suffix_pattern})"
+        rf"|(?<![0-9A-Za-z가-힣_.]){escaped_keyword}(?![0-9A-Za-z가-힣_.]))"
+    )
+
+
+def _numeric_keyword_pattern(keyword: str) -> str | None:
+    compact_keyword = _numeric_keyword_text(keyword)
+    if not re.search(r"\d", compact_keyword):
+        return None
+    if re.fullmatch(r"\d+(?:\.\d+)?", compact_keyword):
+        return _bare_numeric_keyword_pattern(compact_keyword)
+
+    parts = []
+    index = 0
+    while index < len(compact_keyword):
+        decimal_match = re.match(r"\d+(?:\.\d+)?", compact_keyword[index:])
+        if decimal_match:
+            number = decimal_match.group(0)
+            parts.append(_numeric_run_pattern(number))
+            index += len(number)
+            continue
+        parts.append(re.escape(compact_keyword[index]))
+        index += 1
+    return r"\s*".join(parts)
 
 
 def _contains_keyword(text: str, keyword: str) -> bool:
+    numeric_pattern = _numeric_keyword_pattern(keyword)
+    if numeric_pattern:
+        return re.search(numeric_pattern, _numeric_search_text(text)) is not None
     return _normalize_text(keyword) in _normalize_text(text)
 
 
