@@ -1,8 +1,8 @@
 venv/
 chroma_db/
-layout_store/
 __pycache__/
 *.pyc
 *.pyo
 debug_text.py
+check_chunks.py
 chunking_report.md

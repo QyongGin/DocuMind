@@ -17,24 +17,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from threading import Lock
-from typing import Any
-
-from document_blocks import clean_documents_for_chunking
-from layout_blocks import (
-    OPENDATALOADER_LAYOUT_CHUNKING_MODE,
-    OPENDATALOADER_LAYOUT_MODE,
-    OPENDATALOADER_LAYOUT_MODES,
-    LayoutExtractionResult,
-    LayoutSidecarResult,
-    build_parallel_layout_chunks,
-    errored_layout_sidecar,
-    extract_opendataloader_layout,
-    remove_layout_sidecar,
-    skipped_layout_sidecar,
-    store_layout_sidecar,
-)
 
 try:
     from kiwipiepy import Kiwi
@@ -77,18 +60,6 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _env_choice(name: str, default: str, choices: set[str]) -> str:
-    """허용된 문자열 환경변수만 읽고, 잘못된 값은 기본값으로 되돌린다."""
-    raw_value = os.getenv(name)
-    if raw_value is None:
-        return default
-    value = raw_value.strip().lower()
-    if value in choices:
-        return value
-    logger.warning("%s=%s 값이 허용되지 않아 기본값 %s를 사용합니다.", name, raw_value, default)
-    return default
-
-
 # 환경변수로 로컬/Docker 환경 분기
 # 로컬: OLLAMA_BASE_URL 미설정 시 localhost 사용
 # Docker: OLLAMA_BASE_URL=http://ollama:11434
@@ -112,8 +83,6 @@ BM25_INDEX_MAX_ENTRIES = _env_int("BM25_INDEX_MAX_ENTRIES", 50000)
 TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
 TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
 EMBED_TABLE_RAW_CHUNKS = _env_bool("EMBED_TABLE_RAW_CHUNKS", True)
-PDF_LAYOUT_MODE = _env_choice("PDF_LAYOUT_MODE", "off", {"off", *OPENDATALOADER_LAYOUT_MODES})
-LAYOUT_STORE_DIR = Path(os.getenv("LAYOUT_STORE_DIR", "./layout_store"))
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
     logger.warning(
@@ -155,7 +124,7 @@ _bm25_sparse_index = None
 _document_progress: dict[int, dict] = {}
 
 logger.info(
-    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s pdf_layout_mode=%s layout_store_dir=%s chroma_host=%s chroma_port=%s",
+    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s chroma_host=%s chroma_port=%s",
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
     OLLAMA_EMBEDDING_MODEL,
@@ -171,8 +140,6 @@ logger.info(
     DEFAULT_TOP_K,
     BM25_INDEX_MAX_ENTRIES,
     EMBED_TABLE_RAW_CHUNKS,
-    PDF_LAYOUT_MODE,
-    str(LAYOUT_STORE_DIR),
     CHROMA_HOST or "persistent",
     CHROMA_PORT
 )
@@ -212,14 +179,6 @@ def health():
     return {"status": "ok"}
 
 
-@dataclass(frozen=True)
-class PdfLayoutContext:
-    """PDF layout sidecar 저장 결과와 메모리상 layout 추출 결과를 함께 보관한다."""
-
-    sidecar: LayoutSidecarResult
-    extraction: LayoutExtractionResult | None = None
-
-
 def _load_documents(tmp_path: str, filename: str) -> list[Document]:
     """
     확장자에 따라 파서를 분기하고 LangChain Document 리스트를 반환한다.
@@ -236,86 +195,6 @@ def _load_documents(tmp_path: str, filename: str) -> list[Document]:
         markdown = MarkItDown().convert(tmp_path).text_content
         return [Document(page_content=markdown)]
     return loader.load()
-
-
-def _extract_and_store_pdf_layout_if_enabled(tmp_path: str, filename: str, document_id: int | None) -> PdfLayoutContext:
-    """feature flag가 켜진 PDF에만 layout sidecar를 생성한다."""
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if PDF_LAYOUT_MODE == "off":
-        return PdfLayoutContext(skipped_layout_sidecar("mode_off"))
-    if PDF_LAYOUT_MODE not in OPENDATALOADER_LAYOUT_MODES:
-        return PdfLayoutContext(skipped_layout_sidecar("unsupported_layout_mode"))
-    if ext != "pdf":
-        return PdfLayoutContext(skipped_layout_sidecar("non_pdf_document"))
-    if document_id is None:
-        return PdfLayoutContext(skipped_layout_sidecar("missing_document_id"))
-
-    try:
-        layout_result = extract_opendataloader_layout(Path(tmp_path))
-        sidecar_result = store_layout_sidecar(
-            layout_result,
-            LAYOUT_STORE_DIR,
-            document_id,
-            filename,
-            PDF_LAYOUT_MODE,
-        )
-        return PdfLayoutContext(sidecar=sidecar_result, extraction=layout_result)
-    except Exception as exc:
-        logger.exception(
-            "[layout_sidecar_error] document_id=%s filename=%s mode=%s",
-            document_id,
-            filename,
-            PDF_LAYOUT_MODE,
-        )
-        return PdfLayoutContext(errored_layout_sidecar(type(exc).__name__))
-
-
-def _annotate_layout_sidecar_metadata(docs: list[Document], sidecar_result) -> list[Document]:
-    """저장된 layout sidecar 위치를 청크 metadata에 작은 값으로만 남긴다."""
-    if sidecar_result.status != "stored" or not sidecar_result.store_key:
-        return docs
-
-    annotated_docs: list[Document] = []
-    for doc in docs:
-        metadata = dict(doc.metadata)
-        metadata["layout_mode"] = PDF_LAYOUT_MODE
-        metadata["layout_store_key"] = sidecar_result.store_key
-        metadata["layout_bbox_coverage"] = sidecar_result.bbox_coverage
-        annotated_docs.append(Document(page_content=doc.page_content, metadata=metadata))
-    return annotated_docs
-
-
-def _build_layout_parallel_index_docs(layout_context: PdfLayoutContext, filename: str, pdf_path: str) -> list[Document]:
-    """layout chunking 모드에서 병렬 layout 보조 검색 chunk를 만든다."""
-    if PDF_LAYOUT_MODE != OPENDATALOADER_LAYOUT_CHUNKING_MODE:
-        return []
-    if layout_context.sidecar.status != "stored" or layout_context.extraction is None:
-        return []
-
-    layout_chunks = build_parallel_layout_chunks(layout_context.extraction.blocks, pdf_path=Path(pdf_path))
-    index_docs: list[Document] = []
-    for chunk_index, chunk in enumerate(layout_chunks):
-        metadata = {
-            "source": filename,
-            "chunk_role": "layout_parallel",
-            "block_type": "layout_parallel",
-            "layout_chunk_index": chunk_index,
-            "layout_page": chunk.page,
-            "layout_column_count": chunk.column_count,
-            "layout_confidence_score": chunk.confidence_score,
-            "layout_confidence_level": chunk.confidence_level,
-            "layout_parallel_row_count": chunk.row_count,
-            "layout_column_titles": " | ".join(chunk.column_titles),
-            "layout_mode": PDF_LAYOUT_MODE,
-            "layout_store_key": layout_context.sidecar.store_key,
-            "layout_bbox_coverage": layout_context.sidecar.bbox_coverage,
-        }
-        if isinstance(chunk.page, int):
-            metadata["page"] = chunk.page
-            metadata["page_start"] = chunk.page
-            metadata["page_end"] = chunk.page
-        index_docs.append(Document(page_content=chunk.text, metadata=metadata))
-    return index_docs
 
 
 def _normalize_text(text: str) -> str:
@@ -511,50 +390,6 @@ def _chunk_block_signature(doc: Document) -> str:
     if doc.metadata.get("block_type") == "table":
         return "table"
     return "text"
-
-
-def _extract_heading_lines(text: str, limit: int = 4) -> list[str]:
-    """청크 본문 앞쪽 heading line을 metadata 보강용으로 추출한다."""
-    headings: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("#"):
-            headings.append(stripped.lstrip("#").strip())
-            if len(headings) >= limit:
-                break
-            continue
-        if headings:
-            break
-    return headings
-
-
-def _derive_section_scope(doc: Document) -> str:
-    """청크가 속한 문서 섹션 경로를 metadata와 본문 heading에서 만든다."""
-    header_path = _format_header_path(doc.metadata)
-    heading_lines = _extract_heading_lines(doc.page_content)
-    if header_path and heading_lines:
-        path_parts = [part.strip() for part in header_path.split(">") if part.strip()]
-        for heading in heading_lines:
-            if heading not in path_parts:
-                path_parts.append(heading)
-        return " > ".join(path_parts)
-    if header_path:
-        return header_path
-    return " > ".join(heading_lines)
-
-
-def _annotate_section_metadata(docs: list[Document]) -> list[Document]:
-    """청크마다 문서의 실제 heading 경로를 section_scope metadata로 보존한다."""
-    annotated_docs: list[Document] = []
-    for doc in docs:
-        metadata = dict(doc.metadata)
-        section_scope = _derive_section_scope(doc)
-        if section_scope:
-            metadata["section_scope"] = section_scope[:240]
-        annotated_docs.append(Document(page_content=doc.page_content, metadata=metadata))
-    return annotated_docs
 
 
 def _can_merge_text_prefix_into_table(buffer: list[Document], doc: Document, next_length: int, short_threshold: int) -> bool:
@@ -798,17 +633,10 @@ def _split_markdown_table_blocks(text: str) -> list[tuple[str, str]]:
         current_lines = []
 
     for line in text.splitlines():
-        if not line.strip():
-            if current_type == "table":
-                flush()
-            elif current_type == "text":
-                current_lines.append(line)
-            continue
-
         line_type = "table" if _is_markdown_table_line(line) else "text"
         if current_type is None:
             current_type = line_type
-        if line_type != current_type:
+        if line_type != current_type and line.strip():
             flush()
             current_type = line_type
         current_lines.append(line)
@@ -905,100 +733,6 @@ def _extract_table_caption(text: str, metadata: dict) -> str:
     return header_path or "문서 표"
 
 
-def _clean_table_scope_part(value: str) -> str:
-    """표 주변 제목 후보를 scope 조각으로 쓰기 좋게 정리한다."""
-    cleaned = value.strip()
-    cleaned = cleaned.lstrip("#").strip()
-    cleaned = re.sub(r"^[-*ㆍ·]\s*", "", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return cleaned.strip(" >")
-
-
-def _table_scope_heading_level(line: str) -> int | None:
-    """표 주변 text line이 문서 구조 제목이면 outline level을 반환한다."""
-    stripped = line.strip()
-    if not stripped or _is_markdown_table_line(stripped):
-        return None
-
-    hash_match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
-    if hash_match:
-        return min(len(hash_match.group(1)), 6)
-
-    cleaned = _clean_table_scope_part(stripped)
-    if not cleaned or len(cleaned) > 100:
-        return None
-    if re.search(r"https?://|www\.", cleaned, flags=re.IGNORECASE):
-        return None
-    if re.search(r"[.!?。]$", cleaned):
-        return None
-
-    if re.match(r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫIVXLCDM]+\.\s*\S+", cleaned):
-        return 1
-    if re.match(r"^\d+(?:\.\d+)*\.\s*\S+", cleaned):
-        return 2
-    if re.match(r"^[가-힣]\.\s*\S+", cleaned):
-        return 3
-    if re.match(r"^[①-⑳]\s*\S+", cleaned):
-        return 4
-    if re.match(r"^(표|Table)\s*\d", cleaned, flags=re.IGNORECASE):
-        return 5
-    return None
-
-
-def _update_table_scope_outline(outline: dict[int, str], text: str) -> None:
-    """표 앞 text block에서 구조 제목을 읽어 현재 outline을 갱신한다."""
-    for line in text.splitlines():
-        level = _table_scope_heading_level(line)
-        if level is None:
-            continue
-
-        part = _clean_table_scope_part(line)
-        if not part:
-            continue
-        outline[level] = part
-        for stale_level in [stored_level for stored_level in outline if stored_level > level]:
-            outline.pop(stale_level, None)
-
-
-def _extract_local_table_caption(context_text: str, metadata: dict) -> str:
-    """한 table block 바로 앞의 제목 후보를 뽑는다."""
-    structural_candidates: list[str] = []
-    for line in context_text.splitlines():
-        if _table_scope_heading_level(line) is not None:
-            cleaned = _clean_table_scope_part(line)
-            if cleaned:
-                structural_candidates.append(cleaned)
-
-    if structural_candidates:
-        return structural_candidates[-1]
-    return _extract_table_caption(context_text, metadata)
-
-
-def _compose_table_scope(metadata: dict, outline: dict[int, str], local_caption: str) -> str:
-    """metadata 섹션 경로, 앞선 구조 제목, 바로 앞 caption을 합쳐 table별 scope를 만든다."""
-    parts: list[str] = []
-    header_path = _format_header_path(metadata)
-    if header_path:
-        parts.extend(_clean_table_scope_part(part) for part in header_path.split(" > "))
-    parts.extend(outline[level] for level in sorted(outline))
-    if local_caption:
-        parts.append(local_caption)
-
-    deduped: list[str] = []
-    seen_compact: set[str] = set()
-    for part in parts:
-        cleaned = _clean_table_scope_part(part)
-        compact = _compact_search_text(cleaned)
-        if not cleaned or not compact or compact in seen_compact:
-            continue
-        seen_compact.add(compact)
-        deduped.append(cleaned)
-
-    if deduped:
-        return " > ".join(deduped[-6:])
-    return header_path or "문서 표"
-
-
 def _parse_markdown_table(block_text: str) -> tuple[list[list[str]], list[list[str]]]:
     """Markdown table block에서 header row와 body row를 분리한다."""
     lines = [line.strip() for line in block_text.splitlines() if _is_markdown_table_line(line)]
@@ -1026,10 +760,6 @@ def _is_probable_subheader_row(row: list[str]) -> bool:
     if len(non_empty_cells) < 2:
         return False
     if any(re.search(r"\d", cell) for cell in non_empty_cells):
-        return False
-    if any(re.match(r"^[-*ㆍ·]\s+", cell.strip()) for cell in non_empty_cells):
-        return False
-    if any(len(cell) > 24 for cell in non_empty_cells):
         return False
     return True
 
@@ -1155,84 +885,6 @@ def _build_row_legend_pairs(row: list[str], legends: dict[str, str]) -> list[str
     return pairs
 
 
-def _split_table_cell_items(value: str) -> list[str]:
-    """표 cell 내부의 bullet 항목을 개별 item으로 분리한다."""
-    cleaned = _clean_table_cell(value)
-    if not cleaned:
-        return []
-
-    items = [
-        item.strip(" ;")
-        for item in re.split(r"(?:^|\s+)[-*ㆍ·]\s+", cleaned)
-        if item.strip(" ;")
-    ]
-    if len(items) <= 1:
-        return [cleaned]
-    return items
-
-
-def _parse_labeled_table_item(item: str) -> tuple[str, str] | None:
-    """'상의: 흰색 티셔츠'처럼 cell item 안에 들어 있는 label/value를 분리한다."""
-    match = re.match(r"^([^:：]{1,30})\s*[:：]\s*(.+)$", item.strip())
-    if not match:
-        return None
-
-    label = _clean_table_cell(match.group(1)).strip(" -")
-    value = _clean_table_cell(match.group(2)).strip(" -")
-    if not label or not value:
-        return None
-    if re.search(r"[.!?。]$", label):
-        return None
-    return label, value
-
-
-def _build_row_descriptor_text(row: list[str], column_labels: list[str], max_columns: int = 2) -> str:
-    """cell item fact에 붙일 앞쪽 행 식별자 설명을 만든다."""
-    descriptors: list[str] = []
-    for index, value in enumerate(row[:max_columns]):
-        if _is_empty_table_cell(value):
-            continue
-        label = column_labels[index] if index < len(column_labels) else f"열 {index + 1}"
-        if label.startswith("열 "):
-            continue
-        descriptors.append(f"{label}={value}")
-    return ", ".join(descriptors)
-
-
-def _build_cell_item_facts(caption: str, row: list[str], column_labels: list[str]) -> list[str]:
-    """여러 bullet을 담은 표 cell을 작은 검색 fact들로 분해한다."""
-    subject, _ = _select_row_subject(row, column_labels)
-    subject = _clean_table_subject(subject)
-    descriptor_text = _build_row_descriptor_text(row, column_labels)
-    facts: list[str] = []
-
-    for index, value in enumerate(row):
-        if _is_empty_table_cell(value):
-            continue
-        label = column_labels[index] if index < len(column_labels) else f"열 {index + 1}"
-        if label.startswith("열 "):
-            continue
-
-        cleaned_value = _clean_table_cell(value)
-        has_bullet_marker = bool(re.search(r"(?:^|\s+)[-*ㆍ·]\s+", cleaned_value))
-        items = _split_table_cell_items(value)
-        labeled_items = [_parse_labeled_table_item(item) for item in items]
-        if len(items) <= 1 and not (has_bullet_marker and any(labeled_items)):
-            continue
-
-        for item, labeled_item in zip(items, labeled_items, strict=False):
-            if labeled_item:
-                item_label, item_value = labeled_item
-                fact = f"{caption}: {subject} {item_label} 항목은 {item_value}이다."
-            else:
-                fact = f"{caption}: {subject}의 {label} 항목은 {item}이다."
-            if descriptor_text:
-                fact = f"{fact} 행 정보: {descriptor_text}."
-            facts.append(fact)
-
-    return facts
-
-
 def _build_row_summary_fact(caption: str, row: list[str], column_labels: list[str], legends: dict[str, str] | None = None) -> str:
     """표의 한 행을 key=value 형태의 검색 가능한 문장으로 만든다."""
     pairs: list[str] = _build_row_legend_pairs(row, legends or {})
@@ -1262,10 +914,9 @@ def _truncate_table_fact(fact: str) -> str:
 def _extract_table_facts(text: str, metadata: dict) -> list[str]:
     """Markdown 표에서 원본 청크와 별도로 색인할 구조화 fact를 생성한다."""
     legends = _extract_table_legends(text)
+    caption = _extract_table_caption(text, metadata)
     facts: list[str] = []
     seen: set[str] = set()
-    text_context_blocks: list[str] = []
-    table_scope_outline: dict[int, str] = {}
 
     def append_fact(fact: str) -> None:
         if len(facts) >= TABLE_FACT_MAX_PER_CHUNK:
@@ -1277,16 +928,8 @@ def _extract_table_facts(text: str, metadata: dict) -> list[str]:
         facts.append(normalized)
 
     for block_type, block_text in _split_markdown_table_blocks(text):
-        if block_type == "text":
-            text_context_blocks.append(block_text)
-            _update_table_scope_outline(table_scope_outline, block_text)
-            continue
         if block_type != "table":
             continue
-
-        local_context = "\n\n".join(text_context_blocks[-3:])
-        local_caption = _extract_local_table_caption(local_context, metadata)
-        caption = _compose_table_scope(metadata, table_scope_outline, local_caption)
 
         header_rows, body_rows = _parse_markdown_table(block_text)
         if not header_rows or not body_rows:
@@ -1305,20 +948,16 @@ def _extract_table_facts(text: str, metadata: dict) -> list[str]:
 
             filled_row = list(row)
             for index in range(min(2, len(filled_row))):
-                if not _is_empty_table_cell(filled_row[index]):
-                    previous_values[index] = filled_row[index]
-                    for trailing_index in range(index + 1, min(2, len(filled_row))):
-                        previous_values.pop(trailing_index, None)
-                elif previous_values.get(index):
+                if _is_empty_table_cell(filled_row[index]) and previous_values.get(index):
                     filled_row[index] = previous_values[index]
+                elif not _is_empty_table_cell(filled_row[index]):
+                    previous_values[index] = filled_row[index]
 
             row_summary = _build_row_summary_fact(caption, filled_row, column_labels, legends)
             if row_summary:
                 table_facts.append(row_summary)
             else:
                 table_facts.extend(_build_symbol_facts(caption, filled_row, column_labels, legends))
-
-            table_facts.extend(_build_cell_item_facts(caption, filled_row, column_labels))
 
             if generate_matrix_facts:
                 table_facts.extend(_build_matrix_facts(caption, filled_row, column_labels))
@@ -1877,7 +1516,6 @@ def _build_index_documents(
     filename: str,
     document_id: int,
     page_lookup: list[dict],
-    extra_index_docs: list[Document] | None = None,
 ) -> tuple[list[Document], float, int]:
     """원본 청크와 검색용 table fact 문서를 함께 만든다."""
     index_docs: list[Document] = []
@@ -1909,12 +1547,6 @@ def _build_index_documents(
             index_docs.append(Document(page_content=fact, metadata=fact_metadata))
             table_fact_count += 1
 
-    for extra_doc in extra_index_docs or []:
-        metadata = dict(extra_doc.metadata)
-        metadata["document_id"] = str(document_id)
-        metadata.setdefault("source", filename)
-        index_docs.append(Document(page_content=extra_doc.page_content, metadata=metadata))
-
     return index_docs, page_match_elapsed, table_fact_count
 
 
@@ -1924,20 +1556,11 @@ def _build_index_document_id(document_id: int, metadata: dict, fallback_index: i
         parent_index = metadata.get("parent_chunk_index", fallback_index)
         fact_index = metadata.get("fact_index", 0)
         return f"{document_id}_{parent_index}_fact_{fact_index}"
-    if metadata.get("chunk_role") == "layout_parallel":
-        layout_chunk_index = metadata.get("layout_chunk_index", fallback_index)
-        return f"{document_id}_layout_{layout_chunk_index}"
     chunk_index = metadata.get("chunk_index", fallback_index)
     return f"{document_id}_{chunk_index}"
 
 
-def _store_document_chunks(
-    final_docs: list[Document],
-    filename: str,
-    document_id: int,
-    page_lookup: list[dict],
-    extra_index_docs: list[Document] | None = None,
-) -> tuple[float, float, float, int, int]:
+def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float, int, int]:
     """
     문서 청크를 batch embedding 후 ChromaDB에 batch 저장한다.
     청크별 HTTP 호출을 피하기 위해 EMBEDDING_BATCH_SIZE 단위로 묶어 처리한다.
@@ -1947,7 +1570,6 @@ def _store_document_chunks(
         filename,
         document_id,
         page_lookup,
-        extra_index_docs,
     )
     embedding_elapsed = 0.0
     chroma_elapsed = 0.0
@@ -2033,23 +1655,6 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         parse_elapsed = time.perf_counter() - parse_start
         _set_document_progress(document_id, 18, "parse", "문서 파싱을 완료했습니다.")
 
-        layout_start = time.perf_counter()
-        layout_context = _extract_and_store_pdf_layout_if_enabled(tmp_path, filename, document_id)
-        layout_sidecar = layout_context.sidecar
-        layout_elapsed = time.perf_counter() - layout_start
-        logger.info(
-            "[layout_sidecar] document_id=%s filename=%s mode=%s status=%s store_key=%s blocks=%s bbox_coverage=%.4f fallback_reason=%s elapsed=%.2fs",
-            document_id,
-            filename,
-            PDF_LAYOUT_MODE,
-            layout_sidecar.status,
-            layout_sidecar.store_key or "none",
-            layout_sidecar.block_count,
-            layout_sidecar.bbox_coverage,
-            layout_sidecar.fallback_reason or "none",
-            layout_elapsed,
-        )
-
         page_lookup_start = time.perf_counter()
         page_lookup = _build_page_lookup(raw_docs)
         page_lookup_elapsed = time.perf_counter() - page_lookup_start
@@ -2061,42 +1666,14 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         normalize_elapsed = time.perf_counter() - normalize_start
         _set_document_progress(document_id, 25, "normalize", "문서 텍스트를 정리했습니다.")
 
-        cleanup_start = time.perf_counter()
-        cleaned_docs, cleanup_stats = clean_documents_for_chunking(normalized_docs)
-        cleanup_elapsed = time.perf_counter() - cleanup_start
-        logger.info(
-            "[document_cleanup] document_id=%s filename=%s input_docs=%s output_docs=%s removed_empty_table_blocks=%s removed_boilerplate_lines=%s removed_empty_documents=%s elapsed=%.2fs",
-            document_id,
-            filename,
-            cleanup_stats.input_documents,
-            cleanup_stats.output_documents,
-            cleanup_stats.removed_empty_table_blocks,
-            cleanup_stats.removed_boilerplate_lines,
-            cleanup_stats.removed_empty_documents,
-            cleanup_elapsed,
-        )
-
         # Two-Pass 청킹 + 연속 중복 line 정리 + 수동 overlap 후처리
         split_start = time.perf_counter()
-        split_docs = _split_loaded_documents(cleaned_docs)
+        split_docs = _split_loaded_documents(normalized_docs)
         split_elapsed = time.perf_counter() - split_start
         _log_chunk_stats(document_id, filename, "split", split_docs)
 
-        section_start = time.perf_counter()
-        section_docs = _annotate_section_metadata(split_docs)
-        section_elapsed = time.perf_counter() - section_start
-        scoped_chunk_count = sum(1 for doc in section_docs if doc.metadata.get("section_scope"))
-        logger.info(
-            "[section_scope] document_id=%s filename=%s scoped_chunks=%s total_chunks=%s elapsed=%.2fs",
-            document_id,
-            filename,
-            scoped_chunk_count,
-            len(section_docs),
-            section_elapsed,
-        )
-
         dedupe_start = time.perf_counter()
-        deduped_docs = _dedupe_chunk_documents(section_docs)
+        deduped_docs = _dedupe_chunk_documents(split_docs)
         dedupe_elapsed = time.perf_counter() - dedupe_start
         _log_chunk_stats(document_id, filename, "deduped", deduped_docs)
         _set_document_progress(document_id, 28, "chunking", "문서를 청크로 나누고 있습니다.")
@@ -2108,16 +1685,6 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
 
         overlap_start = time.perf_counter()
         final_docs = _apply_overlap(merged_docs)
-        final_docs = _annotate_layout_sidecar_metadata(final_docs, layout_sidecar)
-        layout_index_docs = _build_layout_parallel_index_docs(layout_context, filename, tmp_path)
-        if layout_index_docs:
-            logger.info(
-                "[layout_parallel_chunks] document_id=%s filename=%s chunks=%s mode=%s",
-                document_id,
-                filename,
-                len(layout_index_docs),
-                PDF_LAYOUT_MODE,
-            )
         overlap_elapsed = time.perf_counter() - overlap_start
         _log_chunk_stats(document_id, filename, "final", final_docs)
         _set_document_progress(document_id, 30, "chunking", f"청킹을 완료했습니다. ({len(final_docs)} chunks)")
@@ -2127,39 +1694,31 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             final_docs,
             filename,
             document_id,
-            page_lookup,
-            layout_index_docs,
+            page_lookup
         )
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
-            "[upload] document_id=%s filename=%s raw_docs=%s cleaned_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s layout_parallel_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s layout_mode=%s layout_status=%s parse=%.2fs layout=%.2fs page_lookup=%.2fs normalize=%.2fs cleanup=%.2fs split=%.2fs section=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
             len(raw_docs),
-            len(cleaned_docs),
             len(split_docs),
             len(deduped_docs),
             len(merged_docs),
             len(final_docs),
             index_entries,
             table_fact_entries,
-            len(layout_index_docs),
             CHUNK_SIZE,
             CHUNK_OVERLAP,
             CHUNK_MERGE_MIN_SIZE,
             TABLE_FACT_MAX_PER_CHUNK,
             EMBED_TABLE_RAW_CHUNKS,
             EMBEDDING_BATCH_SIZE,
-            PDF_LAYOUT_MODE,
-            layout_sidecar.status,
             parse_elapsed,
-            layout_elapsed,
             page_lookup_elapsed,
             normalize_elapsed,
-            cleanup_elapsed,
             split_elapsed,
-            section_elapsed,
             dedupe_elapsed,
             merge_elapsed,
             overlap_elapsed,
@@ -2255,12 +1814,11 @@ MANDATORY_RAG_PROMPT = (
     "4. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다.\n"
     "5. 표에서 숫자, 날짜, 인원, 점수, 기간을 답할 때는 질문의 행 이름과 열 이름에 직접 대응하는 값만 사용한다.\n"
     "6. 여러 표가 검색되면 질문의 단어와 가장 많이 겹치는 표 제목, 행 이름, 열 이름을 가진 근거를 우선한다.\n"
-    "7. 검색 근거에 '레이아웃 병렬 청크'와 '열 N 제목'이 있으면 질문의 대상과 같은 열 제목 아래 값만 사용한다.\n"
-    "8. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
-    "9. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
-    "10. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
-    "11. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다.\n"
-    "12. '제공된 문서에서는 확인할 수 없습니다.'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."
+    "7. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
+    "8. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
+    "9. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
+    "10. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다.\n"
+    "11. '제공된 문서에서는 확인할 수 없습니다.'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."
 )
 
 
@@ -2284,9 +1842,8 @@ QUERY_TERM_SYNONYMS = {
 QUERY_GENERIC_TERMS = {
     "방법", "절차", "신청", "주의사항", "유의사항", "모집", "인원", "정원",
     "모집인원", "모집정원", "정보", "알려줘", "어디", "어떤", "뭐야", "무엇",
-    "주요", "관련",
 }
-QUERY_COMPOUND_FUNCTION_TERMS = {"알려줘", "어디", "어떤", "뭐야", "무엇", "무슨", "언제", "어떻게", "주요", "관련"}
+QUERY_COMPOUND_FUNCTION_TERMS = {"알려줘", "어디", "어떤", "뭐야", "무엇", "무슨", "언제", "어떻게"}
 
 QUERY_WEAK_SUBJECT_TERMS = {
     "학생", "재학생", "학교", "대학", "우리", "인하공업전문대학", "인하공전",
@@ -2315,7 +1872,7 @@ INTENT_QUERY_TERMS = {
     "location": {"어디", "위치", "장소", "주소", "소재지", "몇층", "층", "호관", "찾아오"},
     "time": {"시간", "이용시간", "운영시간", "언제", "몇시", "기간", "평일", "주말", "공휴일", "방학"},
     "cost": {"비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료"},
-    "attire": {"복장", "옷", "옷차림", "입어", "입어야", "착용", "상의", "하의", "신발", "티셔츠", "스타킹", "단화"},
+    "attire": {"복장", "옷", "상의", "하의", "신발", "티셔츠", "스타킹", "단화"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "준비물"},
     "eligibility": {"자격", "지원자격", "대상", "조건", "요건"},
     "count": {"인원", "정원", "모집인원", "모집정원", "몇명", "명"},
@@ -2328,7 +1885,7 @@ INTENT_EVIDENCE_TERMS = {
     "location": {"위치", "장소", "주소", "소재지", "호관", "층", "도로", "길", "정문", "후문", "옆", "앞", "뒤", "내", "근처", "캠퍼스"},
     "time": {"시간", "이용", "이용시간", "운영시간", "기간", "평일", "주말", "공휴일", "방학", "중식", "휴무", "운영"},
     "cost": {"비용", "금액", "요금", "가격", "납부", "원", "무료", "환불"},
-    "attire": {"복장", "옷", "옷차림", "입어", "입어야", "착용", "수험생", "상의", "하의", "신발", "티셔츠", "스타킹", "단화", "바지", "스커트"},
+    "attire": {"복장", "수험생", "상의", "하의", "신발", "티셔츠", "스타킹", "단화", "바지", "스커트"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "발급", "원본", "사본"},
     "eligibility": {"자격", "대상", "조건", "요건", "해당자", "지원"},
     "count": {"인원", "정원", "모집", "모집인원", "모집정원", "명", "합계", "총"},
@@ -3010,8 +2567,6 @@ def _looks_like_attire_value(text: str) -> bool:
 
 def _table_fact_has_attire_answer(fact: str) -> bool:
     """table_fact가 복장 행 또는 복장 값을 담고 있는지 판단한다."""
-    if "복장" in fact and _looks_like_attire_value(fact):
-        return True
     row_subject = _extract_table_fact_row_subject(fact).lower()
     if "복장" in row_subject and _looks_like_attire_value(fact):
         return True
@@ -3026,12 +2581,6 @@ def _table_fact_has_attire_answer(fact: str) -> bool:
 
 def _extract_attire_value_from_table_fact(fact: str) -> str:
     """복장 table_fact에서 답변에 사용할 착용 항목 값을 추출한다."""
-    labeled_item_match = re.search(r"(상의|하의|신발)\s*항목은\s*(.+?)(?:이다\.?|$)", fact)
-    if labeled_item_match:
-        label = labeled_item_match.group(1).strip()
-        value = _clean_table_fact_answer_value(labeled_item_match.group(2))
-        return f"{label}: {value}"
-
     candidates: list[str] = []
     for key, value in _extract_table_fact_pairs(fact):
         if "구분" in key and "복장" in value and not _looks_like_attire_value(value):
@@ -3051,16 +2600,7 @@ def _extract_attire_value_from_table_fact(fact: str) -> str:
 def _table_bridge_attribute_terms(analysis: QueryAnalysis) -> set[str]:
     """표 관계 resolver에서 속성 행/열을 찾을 때 사용할 intent 표현을 만든다."""
     if not analysis.intent:
-        terms = set()
-        terms.update(
-            term for term in analysis.context_terms
-            if term in QUERY_TABLE_INTENT_TERMS and term not in QUERY_GENERIC_TERMS
-        )
-        terms.update(
-            term for term in analysis.primary_terms
-            if term in QUERY_TABLE_INTENT_TERMS and term not in QUERY_GENERIC_TERMS
-        )
-        return {term for term in terms if len(term) >= 2 and term not in QUERY_COMPOUND_FUNCTION_TERMS}
+        return set()
 
     terms = set(INTENT_QUERY_TERMS.get(analysis.intent, set()))
     terms.update(INTENT_EVIDENCE_TERMS.get(analysis.intent, set()))
@@ -3073,88 +2613,10 @@ def _table_bridge_attribute_terms(analysis: QueryAnalysis) -> set[str]:
     return {term for term in terms if len(term) >= 2 and term not in QUERY_COMPOUND_FUNCTION_TERMS}
 
 
-def _normalize_table_scope_query_term(term: str) -> str:
-    """조사·요청 어미가 붙은 질문 표현을 표 scope 매칭용 단어로 정규화한다."""
-    compact = _compact_search_text(term)
-    if not compact:
-        return ""
-    if re.search(r"(알려|설명|궁금|무엇|무슨|어떤|어디|언제|어떻게)", compact):
-        return ""
-
-    suffixes = (
-        "에따른", "에대한", "에관한", "관련된", "관련한", "따른", "대한", "관한",
-        "할때", "할", "때",
-    )
-    if compact in suffixes:
-        return ""
-    changed = True
-    while changed:
-        changed = False
-        for suffix in suffixes:
-            if compact.endswith(suffix) and len(compact) > len(suffix) + 1:
-                compact = compact[:-len(suffix)]
-                changed = True
-                break
-    return compact
-
-
-def _table_bridge_scope_terms(analysis: QueryAnalysis) -> set[str]:
-    """속성명이 아니라 어떤 표를 말하는지 구분하는 질문 표현을 고른다."""
-    excluded_terms = set(QUERY_GENERIC_TERMS)
-    excluded_terms.update(QUERY_TABLE_INTENT_TERMS)
-    excluded_terms.update(QUERY_COMPOUND_FUNCTION_TERMS)
-    excluded_terms.update(QUERY_WEAK_SUBJECT_TERMS)
-    attribute_terms = _table_bridge_attribute_terms(analysis)
-    excluded_terms.update(attribute_terms)
-    if analysis.intent:
-        excluded_terms.update(INTENT_QUERY_TERMS.get(analysis.intent, set()))
-        excluded_terms.update(INTENT_EVIDENCE_TERMS.get(analysis.intent, set()))
-
-    terms: set[str] = set()
-    for term in analysis.primary_terms | analysis.subject_terms:
-        compact = _normalize_table_scope_query_term(term)
-        if len(compact) < 2 or term in excluded_terms:
-            continue
-        if any(attribute in compact or compact in attribute for attribute in attribute_terms):
-            continue
-        if compact in excluded_terms:
-            continue
-        terms.add(compact)
-    return terms
-
-
-def _score_table_scope_match(text: str, scope_terms: set[str]) -> int:
-    """table_fact가 질문의 표 구분 표현을 얼마나 포함하는지 점수화한다."""
-    score = 0
-    for term in scope_terms:
-        if _term_in_text(term, text):
-            score += max(1, len(_compact_search_text(term)))
-    return score
-
-
-def _select_discriminating_table_scope_terms(facts: list[str], analysis: QueryAnalysis) -> set[str]:
-    """여러 table_fact 중 질문 대상 표만 가르는 scope term을 선택한다."""
-    scope_terms = _table_bridge_scope_terms(analysis)
-    if not scope_terms or not facts:
-        return set()
-
-    matched_counts = {
-        term: sum(1 for fact in facts if _term_in_text(term, fact))
-        for term in scope_terms
-    }
-    matched_terms = {term for term, count in matched_counts.items() if count > 0}
-    if not matched_terms:
-        return scope_terms
-
-    discriminating_terms = {
-        term for term in matched_terms
-        if matched_counts[term] < len(facts)
-    }
-    return _prefer_specific_subject_terms(discriminating_terms or matched_terms)
-
-
 def _table_fact_matches_query_attribute(fact: str, analysis: QueryAnalysis) -> bool:
     """table_fact가 질문이 묻는 속성 행/열/값을 포함하는지 판단한다."""
+    if not analysis.intent:
+        return False
     if analysis.intent == "attire":
         return _table_fact_has_attire_answer(fact)
 
@@ -3186,8 +2648,6 @@ def _is_table_label_pair(key: str, value: str, analysis: QueryAnalysis) -> bool:
     if normalized_value in {"수시", "정시", "수시1차", "수시2차"}:
         return True
     if analysis.intent and normalized_value in INTENT_QUERY_TERMS.get(analysis.intent, set()):
-        return True
-    if normalized_value in _table_bridge_attribute_terms(analysis):
         return True
     return False
 
@@ -3222,16 +2682,7 @@ def _extract_attribute_value_from_table_fact(fact: str, analysis: QueryAnalysis)
         key_matches_attribute = any(_term_in_text(term, key) for term in attribute_terms)
         value_has_intent = _line_has_intent_evidence(value, analysis)
         if row_is_attribute or key_matches_attribute or value_has_intent:
-            cleaned_value = _clean_table_fact_answer_value(value)
-            if row_is_attribute and (
-                _term_in_text(cleaned_value, row_subject)
-                or any(_term_in_text(term, cleaned_value) for term in attribute_terms)
-            ):
-                continue
-            if row_is_attribute and not key_matches_attribute:
-                candidates.append(f"{key}: {cleaned_value}")
-            else:
-                candidates.append(cleaned_value)
+            candidates.append(_clean_table_fact_answer_value(value))
 
     if candidates:
         return "; ".join(candidate for candidate in candidates if candidate)
@@ -3240,13 +2691,13 @@ def _extract_attribute_value_from_table_fact(fact: str, analysis: QueryAnalysis)
 
 def _infer_table_bridge_attribute_label(attribute_fact: str, analysis: QueryAnalysis) -> str:
     """질문과 속성 fact에서 evidence label에 넣을 속성명을 고른다."""
+    if not analysis.intent:
+        return "관련 정보"
+
     if analysis.intent == "attire":
         return "복장"
 
     attribute_terms = _table_bridge_attribute_terms(analysis)
-    if not attribute_terms:
-        return INTENT_DEFAULT_LABELS.get(analysis.intent or "", "관련 정보")
-
     row_subject = _extract_table_fact_row_subject(attribute_fact)
     for term in sorted(attribute_terms, key=len, reverse=True):
         if _term_in_text(term, row_subject):
@@ -3266,36 +2717,13 @@ def _infer_table_bridge_attribute_label(attribute_fact: str, analysis: QueryAnal
 def _build_table_bridge_label(subject_label: str, attribute_label: str, analysis: QueryAnalysis) -> str:
     """subject와 속성명을 합쳐 LLM에 줄 직접 근거 label을 만든다."""
     parts = [subject_label.strip()] if subject_label.strip() else []
-    if not parts:
-        for term in TABLE_BRIDGE_CONTEXT_LABEL_TERMS:
-            if term in analysis.context_terms and term not in attribute_label:
-                parts.append(term)
-                break
-    if attribute_label.strip() and not any(_term_in_text(attribute_label, part) for part in parts):
+    for term in TABLE_BRIDGE_CONTEXT_LABEL_TERMS:
+        if term in analysis.context_terms and not any(term in part for part in parts + [attribute_label]):
+            parts.append(term)
+            break
+    if attribute_label.strip():
         parts.append(attribute_label.strip())
     return " ".join(parts).strip() or INTENT_DEFAULT_LABELS.get(analysis.intent or "", "관련 정보")
-
-
-def _extract_scope_label_from_table_facts(facts: list[str], scope_terms: set[str]) -> str:
-    """scope term이 들어 있는 table caption 조각을 evidence label로 선택한다."""
-    if not scope_terms:
-        return ""
-
-    candidates: list[tuple[int, int, str]] = []
-    for fact in facts:
-        caption = fact.split(":", 1)[0].strip()
-        for part in caption.split(" > "):
-            cleaned = _clean_table_scope_part(part)
-            if not cleaned:
-                continue
-            score = _score_table_scope_match(cleaned, scope_terms)
-            if score > 0:
-                candidates.append((score, len(_compact_search_text(cleaned)), cleaned))
-
-    if not candidates:
-        return ""
-    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return candidates[0][2]
 
 
 def _extract_subject_label_from_table_facts(facts: list[str], analysis: QueryAnalysis) -> str:
@@ -3308,7 +2736,7 @@ def _extract_subject_label_from_table_facts(facts: list[str], analysis: QueryAna
     candidates: list[tuple[int, int, str]] = []
     for fact in subject_facts:
         for token in re.findall(r"[0-9A-Za-z가-힣]+", fact):
-            normalized = _normalize_query_token(re.sub(r"(이다|입니다)$", "", token.strip()))
+            normalized = re.sub(r"(이다|입니다)$", "", token.strip())
             if len(normalized) < 2:
                 continue
             matched_terms = [term for term in query_terms if _term_in_text(term, normalized)]
@@ -3327,154 +2755,13 @@ def _extract_subject_label_from_table_facts(facts: list[str], analysis: QueryAna
 
 def _legend_description_matches_query(description: str, analysis: QueryAnalysis) -> bool:
     """범례 설명이 질문의 주제와 직접 맞는지 판단한다."""
-    return _score_legend_description_match(description, analysis) > 0
-
-
-def _score_legend_description_match(description: str, analysis: QueryAnalysis) -> int:
-    """범례 설명과 질문의 겹침 정도를 계산한다."""
     query_terms = {
         term for term in (analysis.primary_terms | analysis.subject_terms | analysis.context_terms)
         if len(term) >= 2 and term not in QUERY_GENERIC_TERMS and term not in QUERY_COMPOUND_FUNCTION_TERMS
     }
     if not query_terms:
-        return 0
-
-    score = 0
-    for term in query_terms:
-        if not _term_in_text(term, description):
-            continue
-        if term in QUERY_LIST_COLLECTION_TERMS or term in QUERY_TABLE_INTENT_TERMS:
-            score += 1
-        else:
-            score += 3
-    return score
-
-
-def _may_be_table_legend_list_query(question: str, analysis: QueryAnalysis) -> bool:
-    """표 범례가 붙은 행 목록을 물을 가능성이 있는 질문인지 보수적으로 판단한다."""
-    normalized_question = _compact_search_text(question)
-    if analysis.intent == "list":
-        return True
-    if "표시" in normalized_question:
-        return True
-    if not any(term in normalized_question for term in QUERY_LIST_COLLECTION_TERMS):
         return False
-    return any(term in normalized_question for term in ("개설", "해당", "대상", "목록", "종류", "어디", "무엇", "어떤", "무슨"))
-
-
-def _safe_sort_number(value: Any) -> int:
-    """metadata 정렬용 숫자를 안전하게 int로 변환한다."""
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _lookup_table_legend_aggregate_candidates(question: str, analysis: QueryAnalysis, limit: int = 3) -> list[dict]:
-    """질문과 맞는 표 범례가 붙은 모든 행 subject를 집계한 후보를 만든다."""
-    if not _may_be_table_legend_list_query(question, analysis):
-        return []
-
-    try:
-        results = collection.get(
-            where={"chunk_role": "table_fact"},
-            include=["documents", "metadatas"],
-        )
-    except Exception:
-        logger.exception("[query_table_legend_aggregate] failed")
-        return []
-
-    grouped: dict[tuple[str, str, str], dict] = {}
-    for chunk_id, document, metadata in zip(
-        results.get("ids", []),
-        results.get("documents", []),
-        results.get("metadatas", []),
-    ):
-        fact = str(document)
-        meta = metadata or {}
-        subject = _extract_table_fact_row_subject(fact)
-        if not subject:
-            continue
-
-        for key, value in _extract_table_fact_pairs(fact):
-            if "표시" not in key:
-                continue
-            match_score = _score_legend_description_match(value, analysis)
-            if match_score < 3:
-                continue
-
-            group_key = (
-                str(meta.get("document_id", "")),
-                str(meta.get("source", "")),
-                _clean_table_fact_answer_value(value),
-            )
-            group = grouped.setdefault(
-                group_key,
-                {
-                    "match_score": match_score,
-                    "document_id": meta.get("document_id", ""),
-                    "source": meta.get("source", ""),
-                    "description": _clean_table_fact_answer_value(value),
-                    "subjects": [],
-                    "pages": [],
-                    "rows": [],
-                },
-            )
-            group["match_score"] = max(group["match_score"], match_score)
-            if subject not in group["subjects"]:
-                group["subjects"].append(subject)
-            group["pages"].append(meta.get("page") or meta.get("page_start"))
-            group["rows"].append((
-                meta.get("parent_chunk_index", meta.get("chunk_index", 0)),
-                meta.get("fact_index", 0),
-                str(chunk_id),
-                subject,
-            ))
-
-    candidates = []
-    for index, group in enumerate(grouped.values()):
-        subjects = []
-        for _, _, _, subject in sorted(
-            group["rows"],
-            key=lambda row: (_safe_sort_number(row[0]), _safe_sort_number(row[1]), row[2]),
-        ):
-            if subject not in subjects:
-                subjects.append(subject)
-        if not subjects:
-            continue
-
-        pages = [page for page in group["pages"] if page is not None]
-        evidence_fact = f"- {group['description']}: {', '.join(subjects)}"
-        doc = f"표 범례 목록 근거\n{evidence_fact}"
-        meta = {
-            "chunk_role": "table_legend_aggregate",
-            "document_id": group["document_id"],
-            "source": group["source"],
-            "page_start": min(pages) if pages else None,
-            "page_end": max(pages) if pages else None,
-            "query_evidence_facts": [evidence_fact],
-            "legend_description": group["description"],
-            "legend_subject_count": len(subjects),
-        }
-        candidates.append({
-            "rank": index + 1,
-            "legend_score": group["match_score"],
-            "chunk_id": f"legend_aggregate_{index}",
-            "document": doc,
-            "metadata": meta,
-        })
-
-    candidates.sort(key=lambda candidate: (-candidate["legend_score"], -candidate["metadata"]["legend_subject_count"]))
-    selected = candidates[:limit]
-    logger.info(
-        "[query_table_legend_aggregate] candidates=%s selected=%s",
-        len(candidates),
-        len(selected),
-    )
-    return [
-        {**candidate, "rank": index + 1}
-        for index, candidate in enumerate(selected)
-    ]
+    return any(_term_in_text(term, description) for term in query_terms)
 
 
 def _derive_table_legend_list_evidence_facts(facts: list[str], analysis: QueryAnalysis) -> list[str]:
@@ -3506,8 +2793,7 @@ def _derive_table_legend_list_evidence_facts(facts: list[str], analysis: QueryAn
 
 def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis) -> list[str]:
     """같은 표 안의 subject 행과 속성 행을 조합해 질문에 직접 답하는 fact를 만든다."""
-    attribute_terms = _table_bridge_attribute_terms(analysis)
-    if not facts or (analysis.intent not in TABLE_BRIDGE_EVIDENCE_INTENTS and not attribute_terms):
+    if analysis.intent not in TABLE_BRIDGE_EVIDENCE_INTENTS or not facts:
         return []
 
     legend_list_evidence = _derive_table_legend_list_evidence_facts(facts, analysis)
@@ -3518,7 +2804,7 @@ def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis
     if not subject_related:
         return []
 
-    attribute_facts: list[str] = []
+    attribute_facts = []
     for fact in facts:
         if not _table_fact_matches_query_attribute(fact, analysis):
             continue
@@ -3528,21 +2814,7 @@ def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis
     if not attribute_facts:
         return []
 
-    scope_terms = _select_discriminating_table_scope_terms(attribute_facts, analysis)
-    if scope_terms:
-        scoped_attribute_facts = [
-            fact for fact in attribute_facts
-            if _score_table_scope_match(fact, scope_terms) > 0
-        ]
-        if scoped_attribute_facts:
-            max_scope_score = max(_score_table_scope_match(fact, scope_terms) for fact in scoped_attribute_facts)
-            attribute_facts = [
-                fact for fact in scoped_attribute_facts
-                if _score_table_scope_match(fact, scope_terms) == max_scope_score
-            ]
-
-    scope_label = _extract_scope_label_from_table_facts(attribute_facts, scope_terms)
-    subject_label = scope_label or _extract_subject_label_from_table_facts(facts, analysis)
+    subject_label = _extract_subject_label_from_table_facts(facts, analysis)
     evidence_facts: list[str] = []
     seen_values: set[str] = set()
 
@@ -3559,13 +2831,7 @@ def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis
 
 def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[dict], analysis: QueryAnalysis | None = None) -> list[dict]:
     """검색된 raw 청크 안의 표에서 질문과 맞는 fact를 런타임 metadata에 붙인다."""
-    should_extract_bridge_evidence = (
-        analysis is not None
-        and (
-            analysis.intent in TABLE_BRIDGE_EVIDENCE_INTENTS
-            or (analysis.intent is None and _is_table_value_question(question))
-        )
-    )
+    should_extract_bridge_evidence = analysis is not None and analysis.intent in TABLE_BRIDGE_EVIDENCE_INTENTS
     if not _is_table_value_question(question) and not should_extract_bridge_evidence:
         return metadatas
 
@@ -3733,123 +2999,32 @@ def _focus_candidates_with_query_evidence(
     analysis: QueryAnalysis,
 ) -> tuple[list[str], list[dict], list[str]]:
     """구조화 근거가 확인된 후보가 있으면 최종 context를 그 후보들로 좁힌다."""
-    if not docs:
+    if not docs or analysis.intent not in EVIDENCE_FOCUSED_INTENTS:
         return docs, metadatas, ids
 
-    evidence_items: list[tuple[str, dict, str, list[str]]] = []
+    evidence_items: list[tuple[str, dict, str]] = []
     fallback_items: list[tuple[str, dict, str]] = []
     for doc, meta, chunk_id in zip(docs, metadatas, ids):
-        evidence_facts = _extract_query_evidence_fact_lines(doc, analysis, max_facts=5, meta=meta or {})
-        if evidence_facts:
-            evidence_items.append((doc, meta or {}, chunk_id, evidence_facts))
+        if _extract_query_evidence_fact_lines(doc, analysis, max_facts=1, meta=meta or {}):
+            evidence_items.append((doc, meta or {}, chunk_id))
         else:
             fallback_items.append((doc, meta or {}, chunk_id))
 
     if not evidence_items:
         return docs, metadatas, ids
 
-    if analysis.intent and analysis.intent not in EVIDENCE_FOCUSED_INTENTS:
-        return docs, metadatas, ids
-
-    focus_evidence_items = [
-        item for item in evidence_items
-        if _is_structured_query_evidence_item(item[1])
-    ] or evidence_items
-    subject_terms = _specific_query_subject_terms(
-        analysis,
-        ["\n".join(evidence_facts) for _, _, _, evidence_facts in focus_evidence_items],
-    )
-    subject_evidence_items = [
-        (doc, meta, chunk_id)
-        for doc, meta, chunk_id, evidence_facts in focus_evidence_items
-        if _evidence_facts_match_specific_subject(evidence_facts, subject_terms)
-    ]
-
     logger.info(
-        "[query_evidence_focus] intent=%s evidence_candidates=%s structured_evidence_candidates=%s subject_evidence_candidates=%s fallback_candidates=%s",
+        "[query_evidence_focus] intent=%s evidence_candidates=%s fallback_candidates=%s",
         analysis.intent,
         len(evidence_items),
-        len(focus_evidence_items),
-        len(subject_evidence_items),
         len(fallback_items),
     )
-    focused_items = subject_evidence_items or [
-        (doc, meta, chunk_id) for doc, meta, chunk_id, _ in focus_evidence_items
-    ]
+    focused_items = evidence_items
     return (
         [doc for doc, _, _ in focused_items],
         [meta for _, meta, _ in focused_items],
         [chunk_id for _, _, chunk_id in focused_items],
     )
-
-
-def _is_structured_query_evidence_item(meta: dict) -> bool:
-    """layout/table처럼 구조에서 직접 추출된 evidence 후보인지 확인한다."""
-    if meta.get("chunk_role") in {"layout_parallel", "table_fact"}:
-        return True
-    return bool(_get_query_evidence_facts_from_meta(meta))
-
-
-def _specific_query_subject_terms(analysis: QueryAnalysis, evidence_texts: list[str]) -> set[str]:
-    """여러 evidence 후보를 구분해 주는 실제 질문 대상 표현을 고른다."""
-    excluded_terms = set(QUERY_GENERIC_TERMS)
-    excluded_terms.update(QUERY_TABLE_INTENT_TERMS)
-    excluded_terms.update(QUERY_COMPOUND_FUNCTION_TERMS)
-    excluded_terms.update({"주요", "관련", "항목"})
-    if analysis.intent:
-        excluded_terms.update(INTENT_QUERY_TERMS.get(analysis.intent, set()))
-        excluded_terms.update(INTENT_EVIDENCE_TERMS.get(analysis.intent, set()))
-
-    candidate_terms = {
-        term for term in (analysis.primary_terms | analysis.subject_terms)
-        if len(term) >= 3 and term not in excluded_terms and term not in QUERY_WEAK_SUBJECT_TERMS
-    }
-    if not candidate_terms or not evidence_texts:
-        return candidate_terms
-
-    matched_counts = {
-        term: sum(1 for evidence_text in evidence_texts if _term_in_text(term, evidence_text))
-        for term in candidate_terms
-    }
-    matched_terms = {term for term, count in matched_counts.items() if count > 0}
-    if not matched_terms:
-        return candidate_terms
-
-    discriminating_terms = {
-        term for term in matched_terms
-        if matched_counts[term] < len(evidence_texts)
-    }
-    return _prefer_specific_subject_terms(discriminating_terms or matched_terms)
-
-
-def _prefer_specific_subject_terms(terms: set[str]) -> set[str]:
-    """더 긴 subject 표현 안에 포함되는 짧은 조각 term은 제외한다."""
-    if len(terms) <= 1:
-        return terms
-
-    compact_terms = {term: _compact_search_text(term) for term in terms}
-    selected: set[str] = set()
-    for term, compact_term in compact_terms.items():
-        if not compact_term:
-            continue
-        has_more_specific_term = any(
-            term != other
-            and len(compact_other) > len(compact_term)
-            and compact_term in compact_other
-            for other, compact_other in compact_terms.items()
-        )
-        if not has_more_specific_term:
-            selected.add(term)
-    return selected or terms
-
-
-def _evidence_facts_match_specific_subject(evidence_facts: list[str], subject_terms: set[str]) -> bool:
-    """구조화 근거가 선별된 subject 표현을 직접 포함하는지 확인한다."""
-    if not subject_terms:
-        return False
-
-    evidence_text = "\n".join(evidence_facts)
-    return any(_term_in_text(term, evidence_text) for term in subject_terms)
 
 
 def _prioritize_query_results(docs: list[str], metadatas: list[dict], ids: list[str], question: str) -> tuple[list[str], list[dict], list[str]]:
@@ -4145,12 +3320,11 @@ def _extract_list_section_evidence_fact_lines(text: str, analysis: QueryAnalysis
 
 def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_facts: int = 5, meta: dict | None = None) -> list[str]:
     """검색된 chunk에서 질문 subject와 intent가 직접 만나는 항목 근거 line들을 추출한다."""
+    if not analysis.intent:
+        return []
+
     seen: set[str] = set()
     facts: list[str] = []
-
-    layout_facts = _extract_layout_parallel_evidence_fact_lines(text, analysis, max_facts)
-    if layout_facts:
-        return layout_facts
 
     for fact in _get_query_evidence_facts_from_meta(meta or {}):
         if fact in seen:
@@ -4159,9 +3333,6 @@ def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_f
         facts.append(fact)
         if len(facts) >= max_facts:
             return facts
-
-    if not analysis.intent:
-        return facts
 
     list_facts = _extract_list_section_evidence_fact_lines(text, analysis, max_facts)
     for fact in list_facts:
@@ -4189,156 +3360,6 @@ def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_f
     return facts
 
 
-def _extract_layout_parallel_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_facts: int = 5) -> list[str]:
-    """layout_parallel chunk에서 질문 대상 column(열)의 속성 값을 추출한다."""
-    if "레이아웃 병렬 청크" not in text or "열 " not in text:
-        return []
-
-    columns = _parse_layout_parallel_columns(text)
-    if not columns:
-        return []
-
-    primary_terms = analysis.primary_terms
-    subject_terms = analysis.subject_terms | analysis.context_terms
-    primary_matched_titles = {
-        column.get("title", "")
-        for column in columns
-        if column.get("title") and any(_term_in_text(term, column.get("title", "")) for term in primary_terms)
-    }
-
-    facts: list[str] = []
-    for column in columns:
-        title = column.get("title", "")
-        if primary_matched_titles:
-            if title not in primary_matched_titles:
-                continue
-        elif title and not any(_term_in_text(term, title) for term in subject_terms):
-            continue
-        elif not title and not _layout_common_title_matches_subject(text, subject_terms):
-            continue
-
-        for label, value in column.get("items", []):
-            if not _layout_label_matches_query(label, analysis):
-                continue
-            subject_label = title or "해당 열"
-            facts.append(f"- {subject_label} {label}: {value}")
-            if len(facts) >= max_facts:
-                return facts
-    return facts
-
-
-def _parse_layout_parallel_columns(text: str) -> list[dict[str, Any]]:
-    columns: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        title_match = re.match(r"^열\s+(\d+)\s+제목\s*:\s*(.+)$", line)
-        plain_match = re.match(r"^열\s+(\d+)\s*:\s*$", line)
-        if title_match or plain_match:
-            if current is not None:
-                columns.append(current)
-            current = {
-                "index": int((title_match or plain_match).group(1)),
-                "title": _clean_table_cell(title_match.group(2)) if title_match else "",
-                "items": [],
-            }
-            continue
-
-        if current is None or not line.startswith("- "):
-            continue
-        item = line[2:].strip()
-        if ":" not in item:
-            continue
-        label, value = item.split(":", 1)
-        label = _clean_table_cell(label)
-        value = _clean_table_cell(value)
-        if label and value:
-            current["items"].append((label, value))
-
-    if current is not None:
-        columns.append(current)
-    return columns
-
-
-def _layout_common_title_matches_subject(text: str, query_terms: set[str]) -> bool:
-    common_text_lines: list[str] = []
-    in_common_section = False
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if line == "공통 상단 텍스트:":
-            in_common_section = True
-            continue
-        if in_common_section and line.startswith("열 "):
-            break
-        if in_common_section and line.startswith("- "):
-            common_text_lines.append(line[2:].strip())
-
-    common_text = " ".join(common_text_lines)
-    return bool(common_text and any(_term_in_text(term, common_text) for term in query_terms))
-
-
-def _layout_label_matches_query(label: str, analysis: QueryAnalysis) -> bool:
-    """문서 label과 질문 속성 phrase가 직접 맞는지 판단한다."""
-    if _label_matches_query_phrase(label, analysis):
-        return True
-    if analysis.intent == "list":
-        return False
-    return _line_has_intent_evidence(f"{label}: ", analysis)
-
-
-def _label_matches_query_phrase(label: str, analysis: QueryAnalysis) -> bool:
-    """질문에 실제로 등장한 phrase와 문서 label을 범용적으로 대조한다."""
-    label_terms = _extract_label_match_terms(label)
-    if not label_terms:
-        return False
-
-    query_terms = _extract_query_label_match_terms(analysis)
-    if not query_terms:
-        return False
-
-    label_compact = _compact_search_text(label)
-    if len(label_compact) >= 2 and label_compact in query_terms:
-        return True
-
-    for label_term in label_terms:
-        if label_term in query_terms:
-            return True
-        if any(query_term.endswith(label_term) for query_term in query_terms if len(query_term) > len(label_term)):
-            return True
-        if any(label_term.endswith(query_term) for query_term in query_terms if len(query_term) >= 2):
-            return True
-    return False
-
-
-def _extract_label_match_terms(label: str) -> set[str]:
-    """layout/table label에서 질문 phrase와 비교할 핵심 term을 만든다."""
-    terms: set[str] = set()
-    for token in re.findall(r"[0-9A-Za-z가-힣]+", label):
-        normalized = _normalize_query_token(token)
-        compact = _compact_search_text(normalized)
-        if len(compact) < 2:
-            continue
-        if compact in QUERY_GENERIC_TERMS or compact in QUERY_COMPOUND_FUNCTION_TERMS:
-            continue
-        terms.add(compact)
-    return terms
-
-
-def _extract_query_label_match_terms(analysis: QueryAnalysis) -> set[str]:
-    """질문에서 label 매칭에 사용할 속성 후보 term을 추린다."""
-    terms: set[str] = set()
-    for term in analysis.primary_terms:
-        compact = _compact_search_text(_normalize_query_token(term))
-        if len(compact) < 2:
-            continue
-        if compact in QUERY_GENERIC_TERMS or compact in QUERY_COMPOUND_FUNCTION_TERMS:
-            continue
-        if compact in QUERY_WEAK_SUBJECT_TERMS:
-            continue
-        terms.add(compact)
-    return terms
-
-
 def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts: int = 5, meta: dict | None = None) -> str:
     """검색된 chunk에서 질문 subject와 intent가 직접 만나는 항목 근거를 추출한다."""
     return "\n".join(_extract_query_evidence_fact_lines(text, analysis, max_facts, meta))
@@ -4350,9 +3371,7 @@ def _score_query_evidence_facts(text: str, analysis: QueryAnalysis, meta: dict |
     facts = _extract_query_evidence_fact_lines(text, analysis, max_facts=5, meta=meta)
     if not facts:
         return 0
-    if (meta or {}).get("chunk_role") == "layout_parallel":
-        base_score = 360
-    elif runtime_facts and analysis.intent == "list":
+    if runtime_facts and analysis.intent == "list":
         base_score = 520
     else:
         base_score = 140 if analysis.intent in STRICT_LOCAL_EVIDENCE_INTENTS else 90
@@ -4368,7 +3387,7 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     if page_label:
         metadata_lines.append(f"위치: {page_label}")
 
-    chunk_label = "" if meta.get("chunk_role") == "table_legend_aggregate" else _format_chunk_label(meta, chunk_id)
+    chunk_label = _format_chunk_label(meta, chunk_id)
     if chunk_label:
         metadata_lines.append(f"청크: {chunk_label}")
 
@@ -4386,8 +3405,6 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
 
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
-    if evidence_facts and meta.get("chunk_role") in {"layout_parallel", "table_legend_aggregate"}:
-        return f"[출처 {index}]\n{metadata}{evidence_fact_block}"
     if relevant_excerpt:
         return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
     return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n전체 내용:\n{doc.strip()}"
@@ -4551,7 +3568,6 @@ def _append_trace_method(entry: dict, method: str) -> None:
 def _candidate_location_summary(chunk_id: str, doc: str, meta: dict, preview_chars: int = 360) -> dict:
     """trace 후보의 문서 위치와 본문 미리보기를 만든다."""
     meta = meta or {}
-    layout_store_key = str(meta.get("layout_store_key", "")).strip()
     return {
         "chunk_id": str(chunk_id),
         "document_id": meta.get("document_id", ""),
@@ -4563,18 +3579,8 @@ def _candidate_location_summary(chunk_id: str, doc: str, meta: dict, preview_cha
         "page_end": meta.get("page_end"),
         "chunk_index": meta.get("chunk_index", _parse_chunk_index(str(chunk_id))),
         "header_path": _format_header_path(meta),
-        "section_scope": meta.get("section_scope"),
-        "layout_mode": meta.get("layout_mode"),
-        "layout_store_key": layout_store_key or None,
-        "layout_store_exists": _layout_store_key_exists(layout_store_key) if layout_store_key else None,
-        "layout_bbox_coverage": meta.get("layout_bbox_coverage"),
         "content_preview": _preview_text(doc, preview_chars),
     }
-
-
-def _layout_store_key_exists(store_key: str) -> bool:
-    """trace에서 layout sidecar 참조가 실제 파일로 존재하는지 확인한다."""
-    return (LAYOUT_STORE_DIR / store_key).exists()
 
 
 def _record_vector_trace(
@@ -4674,22 +3680,6 @@ def _format_table_fact_candidate(candidate: dict) -> dict:
     return formatted
 
 
-def _format_table_legend_aggregate_candidate(candidate: dict) -> dict:
-    """표 범례 집계 후보를 trace 응답 형태로 만든다."""
-    formatted = _candidate_location_summary(
-        str(candidate["chunk_id"]),
-        candidate["document"],
-        candidate["metadata"] or {},
-    )
-    formatted.update({
-        "rank": candidate["rank"],
-        "legend_score": candidate["legend_score"],
-        "legend_subject_count": (candidate["metadata"] or {}).get("legend_subject_count", 0),
-        "query_evidence_facts": _get_query_evidence_facts_from_meta(candidate["metadata"] or {}),
-    })
-    return formatted
-
-
 def _format_rerank_candidate(
     rank: int,
     doc: str,
@@ -4708,13 +3698,7 @@ def _format_rerank_candidate(
     heading_score = _score_heading_match(search_text, analysis)
     evidence_fact_score = _score_query_evidence_facts(doc, analysis, meta)
     runtime_table_fact_score = _best_runtime_table_fact_score(meta, question)
-    rerank_score = (
-        subject_score
-        + intent_score
-        + heading_score
-        + evidence_fact_score
-        + runtime_table_fact_score
-    )
+    rerank_score = subject_score + intent_score + heading_score + evidence_fact_score + runtime_table_fact_score
     query_evidence_facts = _extract_query_evidence_fact_lines(doc, analysis, max_facts=5, meta=meta)
     matched_table_facts = _get_matched_table_facts(meta)
 
@@ -4814,15 +3798,10 @@ def _trace_query_retrieval(
     table_fact_candidates = _lookup_lexical_table_fact_candidates(question)
     for candidate in table_fact_candidates:
         _record_table_fact_trace(trace_by_id, candidate)
-    table_legend_candidates = _lookup_table_legend_aggregate_candidates(question, analysis)
 
     docs = vector_docs
     metadatas = vector_metadatas
     ids = vector_ids
-    if table_legend_candidates:
-        docs = [candidate["document"] for candidate in table_legend_candidates] + docs
-        metadatas = [candidate["metadata"] for candidate in table_legend_candidates] + metadatas
-        ids = [candidate["chunk_id"] for candidate in table_legend_candidates] + ids
     if bm25_candidates:
         docs = [candidate["document"] for candidate in bm25_candidates] + docs
         metadatas = [candidate["metadata"] for candidate in bm25_candidates] + metadatas
@@ -4887,13 +3866,12 @@ def _trace_query_retrieval(
     ]
 
     logger.info(
-        "[rag_trace] top_k=%s retrieval_limit=%s vector=%s bm25=%s table_fact=%s table_legend=%s final=%s context_chars=%s embed=%.2fs chroma=%.2fs total=%.2fs",
+        "[rag_trace] top_k=%s retrieval_limit=%s vector=%s bm25=%s table_fact=%s final=%s context_chars=%s embed=%.2fs chroma=%.2fs total=%.2fs",
         top_k,
         retrieval_limit,
         len(vector_candidates),
         len(bm25_candidates),
         len(table_fact_candidates),
-        len(table_legend_candidates),
         len(final_docs),
         len(context),
         embedding_elapsed,
@@ -4924,10 +3902,6 @@ def _trace_query_retrieval(
             "vector_candidates": vector_candidates,
             "bm25_candidates": [_format_bm25_candidate(candidate) for candidate in bm25_candidates],
             "table_fact_candidates": [_format_table_fact_candidate(candidate) for candidate in table_fact_candidates],
-            "table_legend_candidates": [
-                _format_table_legend_aggregate_candidate(candidate)
-                for candidate in table_legend_candidates
-            ],
             "expanded_candidates": expanded_candidates,
             "after_table_priority_candidates": after_table_priority_candidates,
             "after_evidence_focus_candidates": after_evidence_focus_candidates,
@@ -4977,11 +3951,6 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     raw_result_count = len(docs)
     bm25_docs, bm25_metadatas, bm25_ids = _lookup_bm25_raw_chunks(analysis, limit=top_k)
     lexical_docs, lexical_metadatas, lexical_ids = _lookup_lexical_table_facts(question)
-    table_legend_candidates = _lookup_table_legend_aggregate_candidates(question, analysis)
-    if table_legend_candidates:
-        docs = [candidate["document"] for candidate in table_legend_candidates] + docs
-        metadatas = [candidate["metadata"] for candidate in table_legend_candidates] + metadatas
-        ids = [candidate["chunk_id"] for candidate in table_legend_candidates] + ids
     if bm25_docs:
         docs = bm25_docs + docs
         metadatas = bm25_metadatas + metadatas
@@ -5012,7 +3981,6 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "distances": distance_values,
             "bm25_raw_chunks": len(bm25_docs),
             "lexical_table_facts": len(lexical_docs),
-            "table_legend_aggregates": len(table_legend_candidates),
             "query_intent": analysis.intent,
             "query_subject_terms": sorted(analysis.subject_terms),
         }
@@ -5075,18 +4043,16 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "distance_avg": distance_avg,
         "bm25_raw_chunks": len(bm25_docs),
         "lexical_table_facts": len(lexical_docs),
-        "table_legend_aggregates": len(table_legend_candidates),
         "query_intent": analysis.intent,
         "query_subject_terms": sorted(analysis.subject_terms),
     }
     logger.info(
-        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s table_legend_aggregates=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
+        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
         top_k,
         retrieval_limit,
         raw_result_count,
         len(bm25_docs),
         len(lexical_docs),
-        len(table_legend_candidates),
         len(docs),
         analysis.intent or "none",
         ",".join(sorted(analysis.subject_terms)) or "none",
@@ -5098,13 +4064,12 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         _format_decimal(distance_avg),
     )
     logger.info(
-        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s table_legend_aggregates=%s docs=%s intent=%s subject_terms=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
         top_k,
         retrieval_limit,
         raw_result_count,
         len(bm25_docs),
         len(lexical_docs),
-        len(table_legend_candidates),
         len(docs),
         analysis.intent or "none",
         ",".join(sorted(analysis.subject_terms)) or "none",
@@ -5151,12 +4116,7 @@ async def delete_document(document_id: int):
     # async 핸들러에서 직접 호출하면 이벤트 루프가 점유되어 다른 요청이 대기하므로
     # /query 핸들러와 동일하게 asyncio.to_thread()로 별도 스레드에서 실행한다.
     deleted_count = await asyncio.to_thread(_delete_from_chroma)
-    deleted_layout_sidecars = await asyncio.to_thread(remove_layout_sidecar, LAYOUT_STORE_DIR, document_id)
-    return {
-        "status": "success",
-        "deleted_chunks": deleted_count,
-        "deleted_layout_sidecars": deleted_layout_sidecars,
-    }
+    return {"status": "success", "deleted_chunks": deleted_count}
 
 
 @app.get("/documents/{document_id}/chunks")
