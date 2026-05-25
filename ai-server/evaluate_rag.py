@@ -248,6 +248,21 @@ def _evidence_facts_text(candidates: list[dict]) -> str:
     return "\n".join(facts)
 
 
+def _trace_source_content_text(trace: dict, candidates: list[dict]) -> str:
+    final_context = str(trace.get("final_context") or "")
+    if final_context.strip():
+        return final_context
+
+    content_parts = []
+    for candidate in candidates:
+        for key in ("content", "page_content", "text"):
+            value = candidate.get(key)
+            if value:
+                content_parts.append(str(value))
+                break
+    return "\n".join(content_parts)
+
+
 def _evaluate_trace(case: dict, trace: dict) -> dict:
     expected_evidence_keywords = _keyword_list(case, "expected_evidence_keywords")
     forbidden_evidence_keywords = _keyword_list(case, "forbidden_evidence_keywords")
@@ -280,10 +295,7 @@ def _evaluate_trace(case: dict, trace: dict) -> dict:
         )
         for candidate in final_candidates
     )
-    final_source_content_text = "\n".join(
-        str(candidate.get("content_preview", ""))
-        for candidate in final_candidates
-    )
+    final_source_content_text = _trace_source_content_text(trace, final_candidates)
 
     evidence_missing = _missing_keywords(final_text, expected_evidence_keywords)
     evidence_rank = _first_matching_rank(final_candidates, expected_evidence_keywords)
