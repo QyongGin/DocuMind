@@ -201,12 +201,12 @@ def _page_evidence_missing_keywords(
 ) -> list[str]:
     if not expected_pages or not keywords:
         return []
+    page_candidate_texts = []
     for candidate in candidates:
         if not (_candidate_pages(candidate) & set(expected_pages)):
             continue
-        if not _missing_keywords(_stringify(candidate), keywords):
-            return []
-    return keywords
+        page_candidate_texts.append(_stringify(candidate))
+    return _missing_keywords("\n".join(page_candidate_texts), keywords)
 
 
 def _candidate_role_hits(candidates: list[dict], forbidden_roles: list[str], mode: str) -> list[str]:
@@ -319,7 +319,8 @@ def _evaluate_trace(case: dict, trace: dict) -> dict:
     trace_source_content_contamination_pass = (
         None if not forbidden_source_content_keywords else not forbidden_trace_source_content_hits
     )
-    forbidden_evidence_hits = _matched_keywords(evidence_facts_text, forbidden_evidence_keywords)
+    evidence_contamination_text = "\n".join([evidence_facts_text, final_text])
+    forbidden_evidence_hits = _matched_keywords(evidence_contamination_text, forbidden_evidence_keywords)
     evidence_contamination_pass = None if not forbidden_evidence_keywords else not forbidden_evidence_hits
     page_missing = _missing_pages(final_candidates, expected_pages)
     page_pass = None if not expected_pages else not page_missing
