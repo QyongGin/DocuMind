@@ -1,0 +1,137 @@
+"""Smoke check for the RAG data contract skeleton."""
+
+from __future__ import annotations
+
+import json
+
+from rag_contract_builders import build_parsed_block, build_source_block, header_path_from_metadata
+from rag_contracts import (
+    Candidate,
+    PageSpan,
+    RetrievalChunk,
+    SectionNode,
+    SelectedContext,
+    SelectedContextItem,
+    SourceCitation,
+    TableFact,
+    TextSpan,
+    contract_to_dict,
+)
+
+
+def build_contract_sample() -> dict:
+    """Build a minimal end-to-end contract sample without touching runtime code."""
+    metadata = {
+        "page_start": "1",
+        "page_end": "2",
+        "Header 1": "Document",
+        "Header 2": "Table Section",
+        "block_type": "table",
+        "bbox": [0, 0, 100, 50],
+    }
+    parsed_block = build_parsed_block(
+        document_id="sample",
+        document_format="pdf",
+        text="| Item | Value |\n| Item A | 10 |",
+        block_index=1,
+        metadata=metadata,
+        parser_confidence=0.95,
+    )
+    section = SectionNode(
+        section_id="doc-sample:section-table",
+        document_id="sample",
+        title="Table Section",
+        level=2,
+        path=header_path_from_metadata(metadata),
+        page_span=PageSpan(start=1, end=1),
+        block_ids=(parsed_block.block_id,),
+    )
+    source_block = build_source_block(
+        parsed_block,
+        section_id=section.section_id,
+    )
+    retrieval_chunk = RetrievalChunk(
+        retrieval_chunk_id="doc-sample:retrieval-001",
+        document_id="sample",
+        retrieval_text="Table Section Item A Value 10",
+        source_block_ids=(source_block.source_block_id,),
+        section_ids=(section.section_id,),
+        strategy="section_table",
+        chunk_role="raw",
+    )
+    table_fact = TableFact(
+        fact_id="doc-sample:fact-001",
+        fact_type="row_cell",
+        table_id="doc-sample:table-001",
+        row_subject="Item A",
+        column_path=("Value",),
+        header_path=("Table Section",),
+        value="10",
+        source_block_id=source_block.source_block_id,
+        confidence=0.95,
+    )
+    candidate = Candidate(
+        candidate_id="doc-sample:candidate-001",
+        retrieval_chunk_id=retrieval_chunk.retrieval_chunk_id,
+        scores={"vector": 0.91, "bm25": 12.5},
+        methods=("vector", "bm25", "table_fact"),
+        fact_ids=(table_fact.fact_id,),
+        source_block_ids=(source_block.source_block_id,),
+        diagnostics={"failure_type_guard": "table_relation_loss"},
+    )
+    citation = SourceCitation(
+        citation_id="doc-sample:citation-001",
+        document_id="sample",
+        source="sample.pdf",
+        page_label="PDF page 1",
+        source_block_id=source_block.source_block_id,
+        excerpt="Item A Value 10",
+        span=TextSpan(start=0, end=18),
+        confidence=0.95,
+    )
+    selected_context = SelectedContext(
+        context_id="doc-sample:context-001",
+        items=(
+            SelectedContextItem(
+                candidate_id=candidate.candidate_id,
+                prompt_text="Item A has value 10.",
+                fact_ids=(table_fact.fact_id,),
+                source_block_ids=(source_block.source_block_id,),
+            ),
+        ),
+        prompt_text="Item A has value 10.",
+        supporting_fact_ids=(table_fact.fact_id,),
+        citation_ids=(citation.citation_id,),
+    )
+
+    return {
+        "parsed_block": contract_to_dict(parsed_block),
+        "section": contract_to_dict(section),
+        "source_block": contract_to_dict(source_block),
+        "retrieval_chunk": contract_to_dict(retrieval_chunk),
+        "table_fact": contract_to_dict(table_fact),
+        "candidate": contract_to_dict(candidate),
+        "citation": contract_to_dict(citation),
+        "selected_context": contract_to_dict(selected_context),
+    }
+
+
+def main() -> None:
+    """Verify that the skeleton contracts can produce stable JSON."""
+    sample = build_contract_sample()
+    encoded = json.dumps(sample, ensure_ascii=False, sort_keys=True)
+    decoded = json.loads(encoded)
+
+    assert decoded["parsed_block"]["block_id"] == "doc-sample:block-000001"
+    assert decoded["parsed_block"]["metadata"]["block_type"] == "table"
+    assert decoded["section"]["path"] == ["Document", "Table Section"]
+    assert decoded["source_block"]["raw_text"] == sample["parsed_block"]["text"]
+    assert decoded["source_block"]["page_span"] == {"start": 1, "end": 2}
+    assert decoded["source_block"]["bbox_span"] == [[0.0, 0.0, 100.0, 50.0]]
+    assert decoded["table_fact"]["source_block_id"] == decoded["source_block"]["source_block_id"]
+    assert decoded["selected_context"]["citation_ids"] == [decoded["citation"]["citation_id"]]
+    print("rag_contracts smoke ok")
+
+
+if __name__ == "__main__":
+    main()
