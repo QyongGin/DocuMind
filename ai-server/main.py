@@ -3637,6 +3637,38 @@ def _trace_block_type(doc: str, meta: dict) -> str:
     return "text"
 
 
+def _text_role_trace_preview(
+    *,
+    stored_document_text: str,
+    source_raw_text: str,
+    retrieval_text: str,
+    preview_chars: int,
+) -> dict:
+    """현재 runtime에서 하나의 text가 맡는 역할과 contract 목표 역할을 보여준다."""
+    retrieval_differs_from_source = retrieval_text != source_raw_text
+    stored_matches_source = stored_document_text == source_raw_text
+    return {
+        "runtime_connection": "trace_only",
+        "current_shared_text_roles": [
+            "embedding_input",
+            "chroma_document",
+            "prompt_context",
+            "query_source_preview",
+        ],
+        "stored_document_text_preview": _preview_text(stored_document_text, preview_chars),
+        "source_raw_text_preview": _preview_text(source_raw_text, preview_chars),
+        "retrieval_text_preview": _preview_text(retrieval_text, preview_chars),
+        "stored_document_text_matches_source_raw": stored_matches_source,
+        "retrieval_text_differs_from_source_raw": retrieval_differs_from_source,
+        "requires_separate_source_storage_before_indexing": retrieval_differs_from_source,
+        "target_contract_roles": {
+            "retrieval_text": "embedding_and_search",
+            "source_raw_text": "source_citation_and_audit",
+            "selected_context": "llm_prompt",
+        },
+    }
+
+
 def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: int = 240) -> dict:
     """현재 trace 후보를 ParsedBlock/SourceBlock 진단 preview로 변환한다."""
     meta = meta or {}
@@ -3688,6 +3720,12 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
                     retrieval_chunk.retrieval_text != source_block.raw_text
                 ),
             },
+            "text_roles": _text_role_trace_preview(
+                stored_document_text=doc,
+                source_raw_text=source_block.raw_text,
+                retrieval_text=retrieval_chunk.retrieval_text,
+                preview_chars=preview_chars,
+            ),
         }
     except Exception:
         logger.exception("[rag_contract_preview] failed chunk_id=%s", chunk_id)
