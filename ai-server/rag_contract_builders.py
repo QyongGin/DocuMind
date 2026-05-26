@@ -188,8 +188,28 @@ class _Unsupported:
 
 _UNSUPPORTED = _Unsupported()
 
+_NUMERIC_SECTION_VALUE_UNITS = (
+    "명",
+    "점",
+    "일",
+    "개",
+    "건",
+    "회",
+    "차",
+    "%",
+    "학점",
+    "시간",
+    "쪽",
+    "페이지",
+)
+_NUMERIC_SECTION_UNIT_PATTERN = "|".join(
+    re.escape(unit) for unit in _NUMERIC_SECTION_VALUE_UNITS
+)
+# Korean currency values often combine a magnitude word with "원": 만원, 억원, 조원.
+_KOREAN_CURRENCY_UNIT_PATTERN = r"(?:[십백천만억조경]+)?원"
 _TABLE_VALUE_LIKE_SECTION_PATTERN = re.compile(
-    r"^[\d\s,./~:·ㆍ+-]+(?:명|원|점|일|개|건|회|차|%|학점|시간|쪽|페이지)?$"
+    rf"^[\d\s,./~:·ㆍ+-]+"
+    rf"(?:{_KOREAN_CURRENCY_UNIT_PATTERN}|{_NUMERIC_SECTION_UNIT_PATTERN})?$"
 )
 _SECTION_PATH_COMPONENT_BLOCKING_WARNINGS = {
     "numeric_value_section_component",
