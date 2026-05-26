@@ -7,9 +7,10 @@ write to ChromaDB and they do not change the existing query pipeline.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from hashlib import sha1
 from typing import Any
 
-from rag_contracts import BBox, JsonValue, PageSpan, ParsedBlock, SourceBlock
+from rag_contracts import BBox, JsonValue, PageSpan, ParsedBlock, SectionNode, SourceBlock
 
 
 def build_parsed_block(
@@ -66,6 +67,25 @@ def build_source_block(
     )
 
 
+def build_section_node(parsed_block: ParsedBlock) -> SectionNode | None:
+    """Create a SectionNode from Header 1..6 metadata when a path exists."""
+    path = header_path_from_metadata(parsed_block.metadata)
+    if not path:
+        return None
+
+    parent_path = path[:-1]
+    return SectionNode(
+        section_id=_section_id(parsed_block.document_id, path),
+        document_id=parsed_block.document_id,
+        title=path[-1],
+        level=len(path),
+        parent_id=_section_id(parsed_block.document_id, parent_path) if parent_path else None,
+        path=path,
+        page_span=page_span_from_metadata(parsed_block.metadata),
+        block_ids=(parsed_block.block_id,),
+    )
+
+
 def page_span_from_metadata(metadata: Mapping[str, Any]) -> PageSpan | None:
     """Read page_start/page_end/page metadata into a PageSpan."""
     page_start = _coerce_int(metadata.get("page_start"))
@@ -101,6 +121,11 @@ def sanitize_metadata(metadata: Mapping[str, Any]) -> dict[str, JsonValue]:
 
 def _contract_id(document_id: str | int, kind: str, index: int) -> str:
     return f"doc-{document_id}:{kind}-{index:06d}"
+
+
+def _section_id(document_id: str | int, path: tuple[str, ...]) -> str:
+    path_digest = sha1("\x1f".join(path).encode("utf-8")).hexdigest()[:12]
+    return f"doc-{document_id}:section-{path_digest}"
 
 
 def _bbox_from_metadata(metadata: Mapping[str, Any]) -> BBox | None:
