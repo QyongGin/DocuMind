@@ -11,7 +11,15 @@ from hashlib import sha1
 import re
 from typing import Any, Sequence
 
-from rag_contracts import BBox, JsonValue, PageSpan, ParsedBlock, SectionNode, SourceBlock
+from rag_contracts import (
+    BBox,
+    JsonValue,
+    PageSpan,
+    ParsedBlock,
+    RetrievalChunk,
+    SectionNode,
+    SourceBlock,
+)
 
 
 def build_parsed_block(
@@ -65,6 +73,33 @@ def build_source_block(
         block_ids=(parsed_block.block_id,),
         bbox_span=bbox_span,
         section_id=section_id,
+    )
+
+
+def build_retrieval_chunk(
+    parsed_block: ParsedBlock,
+    source_block: SourceBlock,
+    section_node: SectionNode | None = None,
+    *,
+    retrieval_index: int | None = None,
+) -> RetrievalChunk:
+    """Create a RetrievalChunk preview without changing stored index text."""
+    section_path = section_node.path if section_node else ()
+    trusted_section = bool(section_node and section_path_quality(section_path) == "ok")
+    retrieval_text = _compose_retrieval_text(
+        section_path if trusted_section else (),
+        parsed_block.text,
+    )
+    index = parsed_block.reading_order if retrieval_index is None else retrieval_index
+
+    return RetrievalChunk(
+        retrieval_chunk_id=_contract_id(parsed_block.document_id, "retrieval", index or 0),
+        document_id=parsed_block.document_id,
+        retrieval_text=retrieval_text,
+        source_block_ids=(source_block.source_block_id,),
+        section_ids=(section_node.section_id,) if section_node and trusted_section else (),
+        strategy="section_prefixed_raw" if trusted_section else "raw",
+        chunk_role=str(parsed_block.metadata.get("chunk_role") or "raw"),
     )
 
 
@@ -161,6 +196,20 @@ def _contract_id(document_id: str | int, kind: str, index: int) -> str:
 def _section_id(document_id: str | int, path: tuple[str, ...]) -> str:
     path_digest = sha1("\x1f".join(path).encode("utf-8")).hexdigest()[:12]
     return f"doc-{document_id}:section-{path_digest}"
+
+
+def _compose_retrieval_text(section_path: Sequence[str], raw_text: str) -> str:
+    sections = [
+        str(component).strip()
+        for component in section_path
+        if str(component).strip()
+    ]
+    text_parts = []
+    if sections:
+        text_parts.append(" > ".join(sections))
+    if raw_text.strip():
+        text_parts.append(raw_text.strip())
+    return "\n".join(text_parts)
 
 
 def _bbox_from_metadata(metadata: Mapping[str, Any]) -> BBox | None:

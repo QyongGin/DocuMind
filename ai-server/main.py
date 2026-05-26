@@ -21,6 +21,7 @@ from threading import Lock
 
 from rag_contract_builders import (
     build_parsed_block,
+    build_retrieval_chunk,
     build_section_node,
     build_source_block,
     section_path_component_is_suspect,
@@ -3653,6 +3654,11 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
             parsed_block,
             section_id=section_node.section_id if section_node else None,
         )
+        retrieval_chunk = build_retrieval_chunk(
+            parsed_block,
+            source_block,
+            section_node,
+        )
         page_span = source_block.page_span
         section_path = list(section_node.path) if section_node else []
         return {
@@ -3668,6 +3674,20 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
             "page_end": page_span.end if page_span else None,
             "block_type": parsed_block.block_type,
             "raw_text_preview": _preview_text(source_block.raw_text, preview_chars),
+            "retrieval_chunk": {
+                "retrieval_chunk_id": retrieval_chunk.retrieval_chunk_id,
+                "strategy": retrieval_chunk.strategy,
+                "chunk_role": retrieval_chunk.chunk_role,
+                "source_block_ids": list(retrieval_chunk.source_block_ids),
+                "section_ids": list(retrieval_chunk.section_ids),
+                "retrieval_text_preview": _preview_text(
+                    retrieval_chunk.retrieval_text,
+                    preview_chars,
+                ),
+                "retrieval_text_differs_from_raw": (
+                    retrieval_chunk.retrieval_text != source_block.raw_text
+                ),
+            },
         }
     except Exception:
         logger.exception("[rag_contract_preview] failed chunk_id=%s", chunk_id)
