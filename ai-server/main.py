@@ -1647,78 +1647,93 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
     )
     embedding_elapsed = 0.0
     chroma_elapsed = 0.0
-    source_store_elapsed = _store_source_blocks(source_docs)
-    logger.info(
-        "[source_blocks] document_id=%s entries=%s collection=%s chroma_add=%.2fs",
-        document_id,
-        len(source_docs),
-        SOURCE_BLOCK_COLLECTION_NAME,
-        source_store_elapsed,
-    )
     total_entries = len(index_docs)
     if total_entries == 0:
         return page_match_elapsed, embedding_elapsed, chroma_elapsed, 0, 0
 
-    for start in range(0, len(index_docs), EMBEDDING_BATCH_SIZE):
-        batch_number = start // EMBEDDING_BATCH_SIZE + 1
-        total_batches = math.ceil(len(index_docs) / EMBEDDING_BATCH_SIZE)
-        batch_docs = index_docs[start:start + EMBEDDING_BATCH_SIZE]
-        batch_ids = [
-            _build_index_document_id(document_id, doc.metadata, start + offset)
-            for offset, doc in enumerate(batch_docs)
-        ]
-        batch_texts = [doc.page_content for doc in batch_docs]
-        batch_metadatas = [doc.metadata for doc in batch_docs]
+    try:
+        for start in range(0, len(index_docs), EMBEDDING_BATCH_SIZE):
+            batch_number = start // EMBEDDING_BATCH_SIZE + 1
+            total_batches = math.ceil(len(index_docs) / EMBEDDING_BATCH_SIZE)
+            batch_docs = index_docs[start:start + EMBEDDING_BATCH_SIZE]
+            batch_ids = [
+                _build_index_document_id(document_id, doc.metadata, start + offset)
+                for offset, doc in enumerate(batch_docs)
+            ]
+            batch_texts = [doc.page_content for doc in batch_docs]
+            batch_metadatas = [doc.metadata for doc in batch_docs]
 
-        embedding_start = time.perf_counter()
-        _set_document_progress(
-            document_id,
-            30 + round((start / total_entries) * 60),
-            "embedding",
-            f"임베딩 중입니다. ({start}/{total_entries} index entries)"
-        )
-        logger.info(
-            "[upload_embed] document_id=%s batch=%s/%s entries=%s model=%s num_thread=%s",
-            document_id,
-            batch_number,
-            total_batches,
-            len(batch_docs),
-            OLLAMA_EMBEDDING_MODEL,
-            OLLAMA_NUM_THREAD or "auto"
-        )
-        batch_vectors, embed_metadata = _embed_texts(batch_texts)
-        batch_embedding_elapsed = time.perf_counter() - embedding_start
-        embedding_elapsed += batch_embedding_elapsed
-        ollama_total = _seconds_from_nanos(embed_metadata.get("total_duration"))
-        ollama_load = _seconds_from_nanos(embed_metadata.get("load_duration"))
-        ollama_prompt_eval = _seconds_from_nanos(embed_metadata.get("prompt_eval_duration"))
-        logger.info(
-            "[upload_embed_done] document_id=%s batch=%s/%s wall=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s prompt_eval_count=%s",
-            document_id,
-            batch_number,
-            total_batches,
-            batch_embedding_elapsed,
-            _format_seconds(ollama_total),
-            _format_seconds(ollama_load),
-            _format_seconds(ollama_prompt_eval),
-            embed_metadata.get("prompt_eval_count")
-        )
+            embedding_start = time.perf_counter()
+            _set_document_progress(
+                document_id,
+                30 + round((start / total_entries) * 60),
+                "embedding",
+                f"임베딩 중입니다. ({start}/{total_entries} index entries)"
+            )
+            logger.info(
+                "[upload_embed] document_id=%s batch=%s/%s entries=%s model=%s num_thread=%s",
+                document_id,
+                batch_number,
+                total_batches,
+                len(batch_docs),
+                OLLAMA_EMBEDDING_MODEL,
+                OLLAMA_NUM_THREAD or "auto"
+            )
+            batch_vectors, embed_metadata = _embed_texts(batch_texts)
+            batch_embedding_elapsed = time.perf_counter() - embedding_start
+            embedding_elapsed += batch_embedding_elapsed
+            ollama_total = _seconds_from_nanos(embed_metadata.get("total_duration"))
+            ollama_load = _seconds_from_nanos(embed_metadata.get("load_duration"))
+            ollama_prompt_eval = _seconds_from_nanos(embed_metadata.get("prompt_eval_duration"))
+            logger.info(
+                "[upload_embed_done] document_id=%s batch=%s/%s wall=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s prompt_eval_count=%s",
+                document_id,
+                batch_number,
+                total_batches,
+                batch_embedding_elapsed,
+                _format_seconds(ollama_total),
+                _format_seconds(ollama_load),
+                _format_seconds(ollama_prompt_eval),
+                embed_metadata.get("prompt_eval_count")
+            )
 
-        chroma_start = time.perf_counter()
-        collection.add(
-            ids=batch_ids,
-            embeddings=batch_vectors,
-            documents=batch_texts,
-            metadatas=batch_metadatas
-        )
-        chroma_elapsed += time.perf_counter() - chroma_start
-        completed_entries = min(start + len(batch_docs), total_entries)
-        _set_document_progress(
+            chroma_start = time.perf_counter()
+            collection.add(
+                ids=batch_ids,
+                embeddings=batch_vectors,
+                documents=batch_texts,
+                metadatas=batch_metadatas
+            )
+            chroma_elapsed += time.perf_counter() - chroma_start
+            completed_entries = min(start + len(batch_docs), total_entries)
+            _set_document_progress(
+                document_id,
+                30 + round((completed_entries / total_entries) * 60),
+                "embedding",
+                f"임베딩과 벡터 저장을 진행 중입니다. ({completed_entries}/{total_entries} index entries)"
+            )
+
+        source_store_elapsed = _store_source_blocks(source_docs)
+        logger.info(
+            "[source_blocks] document_id=%s entries=%s collection=%s chroma_add=%.2fs",
             document_id,
-            30 + round((completed_entries / total_entries) * 60),
-            "embedding",
-            f"임베딩과 벡터 저장을 진행 중입니다. ({completed_entries}/{total_entries} index entries)"
+            len(source_docs),
+            SOURCE_BLOCK_COLLECTION_NAME,
+            source_store_elapsed,
         )
+    except Exception:
+        try:
+            deleted_chunks, deleted_source_blocks = _delete_document_chroma_entries(document_id)
+        except Exception:
+            logger.exception("[upload_rollback_failed] document_id=%s", document_id)
+        else:
+            logger.exception(
+                "[upload_rollback] document_id=%s deleted_chunks=%s deleted_source_blocks=%s",
+                document_id,
+                deleted_chunks,
+                deleted_source_blocks,
+            )
+        raise
 
     _invalidate_bm25_sparse_index()
     return page_match_elapsed, embedding_elapsed, chroma_elapsed, total_entries, table_fact_count
@@ -1740,6 +1755,27 @@ def _store_source_blocks(source_docs: list[Document]) -> float:
             metadatas=[doc.metadata for doc in batch_docs],
         )
     return time.perf_counter() - started
+
+
+def _delete_collection_entries_by_document_id(chroma_collection, document_id: int | str) -> int:
+    """document_id에 연결된 ChromaDB entry를 collection 종류와 무관하게 삭제한다."""
+    results = chroma_collection.get(
+        where={"document_id": str(document_id)},
+        include=[],
+    )
+    ids_to_delete = results.get("ids") or []
+    if ids_to_delete:
+        chroma_collection.delete(ids=ids_to_delete)
+    return len(ids_to_delete)
+
+
+def _delete_document_chroma_entries(document_id: int | str) -> tuple[int, int]:
+    """검색 index와 source block store를 같은 document_id 기준으로 함께 삭제한다."""
+    deleted_chunks = _delete_collection_entries_by_document_id(collection, document_id)
+    deleted_source_blocks = _delete_collection_entries_by_document_id(source_block_collection, document_id)
+    if deleted_chunks:
+        _invalidate_bm25_sparse_index()
+    return deleted_chunks, deleted_source_blocks
 
 
 async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -> int:
@@ -4482,27 +4518,13 @@ async def delete_document(document_id: int):
     ChromaDB에서 document_id에 해당하는 청크를 모두 삭제한다.
     Spring Boot 논리 삭제와 쌍으로 호출되어, RAG 검색에서 해당 문서가 제외되도록 한다.
     """
-    def _delete_collection_entries(chroma_collection) -> int:
-        results = chroma_collection.get(
-            where={"document_id": str(document_id)},
-            include=[]  # IDs만 필요하므로 documents/embeddings/metadatas 제외
-        )
-        ids_to_delete = results["ids"]
-        if ids_to_delete:
-            chroma_collection.delete(ids=ids_to_delete)
-        return len(ids_to_delete)
-
-    def _delete_from_chroma() -> tuple[int, int]:
-        deleted_chunks = _delete_collection_entries(collection)
-        deleted_source_blocks = _delete_collection_entries(source_block_collection)
-        if deleted_chunks:
-            _invalidate_bm25_sparse_index()
-        return deleted_chunks, deleted_source_blocks
-
     # collection.get()/delete()는 동기 블로킹 호출이다.
     # async 핸들러에서 직접 호출하면 이벤트 루프가 점유되어 다른 요청이 대기하므로
     # /query 핸들러와 동일하게 asyncio.to_thread()로 별도 스레드에서 실행한다.
-    deleted_chunks, deleted_source_blocks = await asyncio.to_thread(_delete_from_chroma)
+    deleted_chunks, deleted_source_blocks = await asyncio.to_thread(
+        _delete_document_chroma_entries,
+        document_id,
+    )
     return {
         "status": "success",
         "deleted_chunks": deleted_chunks,
