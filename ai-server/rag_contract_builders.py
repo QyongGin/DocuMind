@@ -20,6 +20,7 @@ from rag_contracts import (
     SectionNode,
     SourceCitation,
     SourceBlock,
+    SourceReference,
     TextSpan,
 )
 
@@ -94,6 +95,31 @@ def build_source_citation(
         source_block_id=source_block.source_block_id,
         excerpt=excerpt,
         span=span,
+    )
+
+
+def build_source_reference(
+    source_block: SourceBlock,
+    *,
+    lookup_id: str,
+    source_collection: str = "documents",
+    lookup_strategy: str = "current_chunk_id",
+    runtime_connection: str = "trace_only",
+    available_in_current_runtime: bool = True,
+    metadata_keys: Sequence[str] = (),
+    notes: Sequence[str] = (),
+) -> SourceReference:
+    """Create a lookup reference from a retrieval candidate to source raw text."""
+    return SourceReference(
+        source_block_id=source_block.source_block_id,
+        document_id=source_block.document_id,
+        source_collection=source_collection,
+        lookup_id=lookup_id,
+        lookup_strategy=lookup_strategy,
+        runtime_connection=runtime_connection,
+        available_in_current_runtime=available_in_current_runtime,
+        metadata_keys=tuple(metadata_keys),
+        notes=tuple(notes),
     )
 
 

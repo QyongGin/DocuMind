@@ -76,6 +76,21 @@ class SourceBlock:
 
 
 @dataclass(frozen=True)
+class SourceReference:
+    """A lookup pointer from retrieval candidates back to source raw text."""
+
+    source_block_id: str
+    document_id: str
+    source_collection: str
+    lookup_id: str
+    lookup_strategy: str
+    runtime_connection: str = "trace_only"
+    available_in_current_runtime: bool = True
+    metadata_keys: tuple[str, ...] = ()
+    notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class RetrievalChunk:
     """A text unit optimized for embedding and BM25 retrieval."""
 

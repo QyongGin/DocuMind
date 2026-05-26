@@ -9,6 +9,7 @@ from rag_contract_builders import (
     build_retrieval_chunk,
     build_section_node,
     build_source_citation,
+    build_source_reference,
     build_source_block,
     section_path_component_is_suspect,
     section_path_quality,
@@ -77,6 +78,11 @@ def build_contract_sample() -> dict:
         source="sample.pdf",
         excerpt_chars=18,
     )
+    source_reference = build_source_reference(
+        source_block,
+        lookup_id="sample_1",
+        metadata_keys=("source_block_id", "source_lookup_id"),
+    )
     selected_context = SelectedContext(
         context_id="doc-sample:context-001",
         items=(
@@ -100,6 +106,7 @@ def build_contract_sample() -> dict:
         "table_fact": contract_to_dict(table_fact),
         "candidate": contract_to_dict(candidate),
         "citation": contract_to_dict(citation),
+        "source_reference": contract_to_dict(source_reference),
         "selected_context": contract_to_dict(selected_context),
     }
 
@@ -134,6 +141,14 @@ def main() -> None:
     assert decoded["citation"]["page_label"] == "pages 1-2"
     assert decoded["citation"]["excerpt"] == "| Item | Value |\n|..."
     assert decoded["citation"]["span"] == {"start": 0, "end": 18}
+    assert decoded["source_reference"]["source_block_id"] == decoded["source_block"]["source_block_id"]
+    assert decoded["source_reference"]["source_collection"] == "documents"
+    assert decoded["source_reference"]["lookup_id"] == "sample_1"
+    assert decoded["source_reference"]["runtime_connection"] == "trace_only"
+    assert decoded["source_reference"]["metadata_keys"] == [
+        "source_block_id",
+        "source_lookup_id",
+    ]
     assert decoded["retrieval_chunk"]["strategy"] == "section_prefixed_raw"
     assert decoded["retrieval_chunk"]["retrieval_text"].startswith(
         "Document > Table Section\n"

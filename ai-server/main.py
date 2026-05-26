@@ -25,6 +25,7 @@ from rag_contract_builders import (
     build_section_node,
     build_source_block,
     build_source_citation,
+    build_source_reference,
     section_path_component_is_suspect,
     section_path_quality,
     section_path_warnings,
@@ -3671,6 +3672,50 @@ def _text_role_trace_preview(
     }
 
 
+def _source_reference_trace_preview(chunk_id: str, meta: dict, source_block, retrieval_chunk) -> dict:
+    """Show how a retrieval candidate can look up raw source text later."""
+    chunk_role = str(meta.get("chunk_role") or "raw")
+    parent_chunk_id = str(meta.get("parent_chunk_id") or "").strip()
+    if chunk_role == "table_fact" and parent_chunk_id:
+        lookup_id = parent_chunk_id
+        lookup_strategy = "table_fact_parent_chunk_id"
+        metadata_keys = ("parent_chunk_id", "source_block_id", "source_lookup_id")
+    else:
+        lookup_id = str(chunk_id)
+        lookup_strategy = "current_chunk_id"
+        metadata_keys = ("source_block_id", "source_lookup_id")
+
+    source_reference = build_source_reference(
+        source_block,
+        lookup_id=lookup_id,
+        source_collection="documents",
+        lookup_strategy=lookup_strategy,
+        metadata_keys=metadata_keys,
+        notes=(
+            "current documents collection still stores shared runtime text",
+            "future retrieval index should keep this pointer before changing stored document text",
+        ),
+    )
+
+    return {
+        "runtime_connection": source_reference.runtime_connection,
+        "source_block_id": source_reference.source_block_id,
+        "source_collection": source_reference.source_collection,
+        "lookup_id": source_reference.lookup_id,
+        "lookup_strategy": source_reference.lookup_strategy,
+        "available_in_current_runtime": source_reference.available_in_current_runtime,
+        "metadata_keys": list(source_reference.metadata_keys),
+        "retrieval_chunk_source_block_ids": list(retrieval_chunk.source_block_ids),
+        "requires_lookup_before_retrieval_text_indexing": True,
+        "target_flow": [
+            "candidate_retrieval_chunk",
+            "source_reference",
+            "source_block_raw_text",
+            "source_citation",
+        ],
+    }
+
+
 def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: int = 240) -> dict:
     """현재 trace 후보를 ParsedBlock/SourceBlock 진단 preview로 변환한다."""
     meta = meta or {}
@@ -3736,6 +3781,12 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
                 "excerpt_source": "source_block_raw_text",
                 "uses_retrieval_text": False,
             },
+            "source_reference": _source_reference_trace_preview(
+                str(chunk_id),
+                meta,
+                source_block,
+                retrieval_chunk,
+            ),
             "text_roles": _text_role_trace_preview(
                 stored_document_text=doc,
                 source_raw_text=source_block.raw_text,
