@@ -18,7 +18,9 @@ from rag_contracts import (
     ParsedBlock,
     RetrievalChunk,
     SectionNode,
+    SourceCitation,
     SourceBlock,
+    TextSpan,
 )
 
 
@@ -73,6 +75,25 @@ def build_source_block(
         block_ids=(parsed_block.block_id,),
         bbox_span=bbox_span,
         section_id=section_id,
+    )
+
+
+def build_source_citation(
+    source_block: SourceBlock,
+    *,
+    source: str,
+    excerpt_chars: int = 200,
+) -> SourceCitation:
+    """Create a user-visible citation from SourceBlock raw text."""
+    excerpt, span = _source_excerpt(source_block.raw_text, excerpt_chars)
+    return SourceCitation(
+        citation_id=f"{source_block.source_block_id}:citation",
+        document_id=source_block.document_id,
+        source=source,
+        page_label=_page_label_from_span(source_block.page_span),
+        source_block_id=source_block.source_block_id,
+        excerpt=excerpt,
+        span=span,
     )
 
 
@@ -210,6 +231,28 @@ def _compose_retrieval_text(section_path: Sequence[str], raw_text: str) -> str:
     if raw_text.strip():
         text_parts.append(raw_text.strip())
     return "\n".join(text_parts)
+
+
+def _page_label_from_span(page_span: PageSpan | None) -> str:
+    if page_span is None or page_span.start is None:
+        return ""
+    if page_span.end is None or page_span.end == page_span.start:
+        return f"page {page_span.start}"
+    return f"pages {page_span.start}-{page_span.end}"
+
+
+def _source_excerpt(raw_text: str, max_chars: int) -> tuple[str, TextSpan | None]:
+    stripped = str(raw_text or "").strip()
+    if not stripped:
+        return "", None
+
+    limit = max(0, int(max_chars))
+    excerpt_body = stripped[:limit].rstrip() if limit else ""
+    excerpt = excerpt_body if len(stripped) <= limit else f"{excerpt_body}..."
+    start = str(raw_text).find(excerpt_body) if excerpt_body else 0
+    if start < 0:
+        start = 0
+    return excerpt, TextSpan(start=start, end=start + len(excerpt_body))
 
 
 def _bbox_from_metadata(metadata: Mapping[str, Any]) -> BBox | None:

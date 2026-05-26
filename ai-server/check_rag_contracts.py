@@ -8,6 +8,7 @@ from rag_contract_builders import (
     build_parsed_block,
     build_retrieval_chunk,
     build_section_node,
+    build_source_citation,
     build_source_block,
     section_path_component_is_suspect,
     section_path_quality,
@@ -17,9 +18,7 @@ from rag_contracts import (
     Candidate,
     SelectedContext,
     SelectedContextItem,
-    SourceCitation,
     TableFact,
-    TextSpan,
     contract_to_dict,
 )
 
@@ -73,15 +72,10 @@ def build_contract_sample() -> dict:
         source_block_ids=(source_block.source_block_id,),
         diagnostics={"failure_type_guard": "table_relation_loss"},
     )
-    citation = SourceCitation(
-        citation_id="doc-sample:citation-001",
-        document_id="sample",
+    citation = build_source_citation(
+        source_block,
         source="sample.pdf",
-        page_label="PDF page 1",
-        source_block_id=source_block.source_block_id,
-        excerpt="Item A Value 10",
-        span=TextSpan(start=0, end=18),
-        confidence=0.95,
+        excerpt_chars=18,
     )
     selected_context = SelectedContext(
         context_id="doc-sample:context-001",
@@ -136,6 +130,10 @@ def main() -> None:
     assert decoded["source_block"]["section_id"] == decoded["section"]["section_id"]
     assert decoded["source_block"]["page_span"] == {"start": 1, "end": 2}
     assert decoded["source_block"]["bbox_span"] == [[0.0, 0.0, 100.0, 50.0]]
+    assert decoded["citation"]["source_block_id"] == decoded["source_block"]["source_block_id"]
+    assert decoded["citation"]["page_label"] == "pages 1-2"
+    assert decoded["citation"]["excerpt"] == "| Item | Value |\n|..."
+    assert decoded["citation"]["span"] == {"start": 0, "end": 18}
     assert decoded["retrieval_chunk"]["strategy"] == "section_prefixed_raw"
     assert decoded["retrieval_chunk"]["retrieval_text"].startswith(
         "Document > Table Section\n"
