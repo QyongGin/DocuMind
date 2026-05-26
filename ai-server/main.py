@@ -24,6 +24,7 @@ from rag_contract_builders import (
     build_retrieval_chunk,
     build_section_node,
     build_source_block,
+    build_source_citation,
     section_path_component_is_suspect,
     section_path_quality,
     section_path_warnings,
@@ -3664,6 +3665,7 @@ def _text_role_trace_preview(
         "target_contract_roles": {
             "retrieval_text": "embedding_and_search",
             "source_raw_text": "source_citation_and_audit",
+            "source_citation": "user_visible_excerpt",
             "selected_context": "llm_prompt",
         },
     }
@@ -3685,6 +3687,11 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
         source_block = build_source_block(
             parsed_block,
             section_id=section_node.section_id if section_node else None,
+        )
+        source_citation = build_source_citation(
+            source_block,
+            source=str(meta.get("source") or ""),
+            excerpt_chars=preview_chars,
         )
         retrieval_chunk = build_retrieval_chunk(
             parsed_block,
@@ -3719,6 +3726,15 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
                 "retrieval_text_differs_from_raw": (
                     retrieval_chunk.retrieval_text != source_block.raw_text
                 ),
+            },
+            "source_citation": {
+                "citation_id": source_citation.citation_id,
+                "source_block_id": source_citation.source_block_id,
+                "source": source_citation.source,
+                "page_label": source_citation.page_label,
+                "excerpt_preview": _preview_text(source_citation.excerpt, preview_chars),
+                "excerpt_source": "source_block_raw_text",
+                "uses_retrieval_text": False,
             },
             "text_roles": _text_role_trace_preview(
                 stored_document_text=doc,
