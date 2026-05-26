@@ -138,6 +138,12 @@ def section_path_warnings(path: Sequence[str]) -> tuple[str, ...]:
     return tuple(sorted(warnings))
 
 
+def section_path_component_is_suspect(component: object) -> bool:
+    """Return True when one section component should not be trusted as a heading."""
+    warnings = set(section_path_warnings((str(component or "").strip(),)))
+    return bool(warnings & _SECTION_PATH_COMPONENT_BLOCKING_WARNINGS)
+
+
 def sanitize_metadata(metadata: Mapping[str, Any]) -> dict[str, JsonValue]:
     """Keep only JSON-safe metadata values for contract serialization."""
     safe: dict[str, JsonValue] = {}
@@ -185,6 +191,10 @@ _UNSUPPORTED = _Unsupported()
 _TABLE_VALUE_LIKE_SECTION_PATTERN = re.compile(
     r"^[\d\s,./~:·ㆍ+-]+(?:명|원|점|일|개|건|회|차|%|학점|시간|쪽|페이지)?$"
 )
+_SECTION_PATH_COMPONENT_BLOCKING_WARNINGS = {
+    "numeric_value_section_component",
+    "table_markup_section_component",
+}
 
 
 def _to_safe_json_value(value: Any) -> JsonValue | _Unsupported:

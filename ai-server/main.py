@@ -23,6 +23,7 @@ from rag_contract_builders import (
     build_parsed_block,
     build_section_node,
     build_source_block,
+    section_path_component_is_suspect,
     section_path_quality,
     section_path_warnings,
 )
@@ -317,10 +318,23 @@ def _update_active_headers(active_headers: dict[str, str], chunk_metadata: dict)
         value = str(chunk_metadata.get(key, "")).strip()
         if not value:
             continue
+        if section_path_component_is_suspect(value):
+            continue
 
         active_headers[key] = value
         for lower_level in range(level + 1, 7):
             active_headers.pop(f"Header {lower_level}", None)
+
+
+def _clean_chunk_header_metadata(chunk_metadata: dict) -> dict:
+    """표 값처럼 보이는 Markdown header metadata는 청크 제목 경로에서 제외한다."""
+    cleaned = dict(chunk_metadata)
+    for level in range(1, 7):
+        key = f"Header {level}"
+        value = str(cleaned.get(key, "")).strip()
+        if value and section_path_component_is_suspect(value):
+            cleaned.pop(key, None)
+    return cleaned
 
 
 def _split_loaded_documents(docs: list[Document]) -> list[Document]:
@@ -338,10 +352,11 @@ def _split_loaded_documents(docs: list[Document]) -> list[Document]:
     for raw_doc in docs:
         page_chunks = _two_pass_split(raw_doc.page_content)
         for chunk in page_chunks:
-            _update_active_headers(active_headers, chunk.metadata)
+            chunk_metadata = _clean_chunk_header_metadata(chunk.metadata)
+            _update_active_headers(active_headers, chunk_metadata)
             metadata = dict(raw_doc.metadata)
             metadata.update(active_headers)
-            metadata.update(chunk.metadata)
+            metadata.update(chunk_metadata)
             split_docs.append(Document(page_content=chunk.page_content, metadata=metadata))
 
     return split_docs
