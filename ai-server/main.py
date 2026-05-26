@@ -19,6 +19,8 @@ import time
 from dataclasses import dataclass
 from threading import Lock
 
+from rag_contract_builders import build_parsed_block, build_source_block
+
 try:
     from kiwipiepy import Kiwi
 except ImportError:
@@ -3565,6 +3567,81 @@ def _append_trace_method(entry: dict, method: str) -> None:
         methods.append(method)
 
 
+def _document_format_from_source(source: object) -> str:
+    """trace 후보의 source 파일명에서 문서 형식을 보수적으로 추정한다."""
+    filename = str(source or "").strip()
+    if "." not in filename:
+        return "unknown"
+    document_format = filename.rsplit(".", 1)[-1].lower()
+    return document_format or "unknown"
+
+
+def _metadata_int(value: object) -> int | None:
+    """metadata 값이 정수로 해석될 때만 int로 반환한다."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _contract_block_index(chunk_id: str, meta: dict) -> int:
+    """contract preview용 block index를 기존 chunk metadata에서 복원한다."""
+    chunk_index = _metadata_int(meta.get("chunk_index"))
+    parent_chunk_index = _metadata_int(meta.get("parent_chunk_index"))
+    fact_index = _metadata_int(meta.get("fact_index"))
+    base_index = chunk_index
+    if base_index is None:
+        base_index = parent_chunk_index
+    if base_index is None:
+        base_index = _parse_chunk_index(chunk_id)
+    if base_index is None:
+        base_index = 0
+    if meta.get("chunk_role") == "table_fact" and fact_index is not None:
+        return base_index * 1000 + fact_index
+    return base_index
+
+
+def _trace_block_type(doc: str, meta: dict) -> str:
+    """trace 후보를 ParsedBlock preview에서 볼 block type으로 분류한다."""
+    metadata_block_type = str(meta.get("block_type") or "").strip()
+    if metadata_block_type:
+        return metadata_block_type
+    if meta.get("chunk_role") == "table_fact":
+        return "table_fact"
+    if _contains_table_block_near_start(doc, max_lines=20):
+        return "table"
+    return "text"
+
+
+def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: int = 240) -> dict:
+    """현재 trace 후보를 ParsedBlock/SourceBlock 진단 preview로 변환한다."""
+    meta = meta or {}
+    try:
+        parsed_block = build_parsed_block(
+            document_id=meta.get("document_id", ""),
+            document_format=_document_format_from_source(meta.get("source")),
+            text=doc,
+            block_index=_contract_block_index(str(chunk_id), meta),
+            metadata=meta,
+            block_type=_trace_block_type(doc, meta),
+        )
+        source_block = build_source_block(parsed_block)
+        page_span = source_block.page_span
+        return {
+            "parsed_block_id": parsed_block.block_id,
+            "source_block_id": source_block.source_block_id,
+            "page_start": page_span.start if page_span else None,
+            "page_end": page_span.end if page_span else None,
+            "block_type": parsed_block.block_type,
+            "raw_text_preview": _preview_text(source_block.raw_text, preview_chars),
+        }
+    except Exception:
+        logger.exception("[rag_contract_preview] failed chunk_id=%s", chunk_id)
+        return {"error": "contract_preview_failed"}
+
+
 def _candidate_location_summary(chunk_id: str, doc: str, meta: dict, preview_chars: int = 360) -> dict:
     """trace 후보의 문서 위치와 본문 미리보기를 만든다."""
     meta = meta or {}
@@ -3580,6 +3657,7 @@ def _candidate_location_summary(chunk_id: str, doc: str, meta: dict, preview_cha
         "chunk_index": meta.get("chunk_index", _parse_chunk_index(str(chunk_id))),
         "header_path": _format_header_path(meta),
         "content_preview": _preview_text(doc, preview_chars),
+        "contract_preview": _contract_trace_preview(str(chunk_id), doc, meta),
     }
 
 
