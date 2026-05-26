@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from threading import Lock
 
-from rag_contract_builders import build_parsed_block, build_source_block
+from rag_contract_builders import build_parsed_block, build_section_node, build_source_block
 
 try:
     from kiwipiepy import Kiwi
@@ -3627,11 +3627,19 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
             metadata=meta,
             block_type=_trace_block_type(doc, meta),
         )
-        source_block = build_source_block(parsed_block)
+        section_node = build_section_node(parsed_block)
+        source_block = build_source_block(
+            parsed_block,
+            section_id=section_node.section_id if section_node else None,
+        )
         page_span = source_block.page_span
         return {
             "parsed_block_id": parsed_block.block_id,
             "source_block_id": source_block.source_block_id,
+            "section_id": section_node.section_id if section_node else None,
+            "section_title": section_node.title if section_node else None,
+            "section_level": section_node.level if section_node else None,
+            "section_path": list(section_node.path) if section_node else [],
             "page_start": page_span.start if page_span else None,
             "page_end": page_span.end if page_span else None,
             "block_type": parsed_block.block_type,

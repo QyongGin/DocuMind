@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import json
 
-from rag_contract_builders import build_parsed_block, build_source_block, header_path_from_metadata
+from rag_contract_builders import build_parsed_block, build_section_node, build_source_block
 from rag_contracts import (
     Candidate,
-    PageSpan,
     RetrievalChunk,
-    SectionNode,
     SelectedContext,
     SelectedContextItem,
     SourceCitation,
@@ -37,15 +35,8 @@ def build_contract_sample() -> dict:
         metadata=metadata,
         parser_confidence=0.95,
     )
-    section = SectionNode(
-        section_id="doc-sample:section-table",
-        document_id="sample",
-        title="Table Section",
-        level=2,
-        path=header_path_from_metadata(metadata),
-        page_span=PageSpan(start=1, end=1),
-        block_ids=(parsed_block.block_id,),
-    )
+    section = build_section_node(parsed_block)
+    assert section is not None
     source_block = build_source_block(
         parsed_block,
         section_id=section.section_id,
@@ -125,7 +116,11 @@ def main() -> None:
     assert decoded["parsed_block"]["block_id"] == "doc-sample:block-000001"
     assert decoded["parsed_block"]["metadata"]["block_type"] == "table"
     assert decoded["section"]["path"] == ["Document", "Table Section"]
+    assert decoded["section"]["title"] == "Table Section"
+    assert decoded["section"]["level"] == 2
+    assert decoded["section"]["page_span"] == {"start": 1, "end": 2}
     assert decoded["source_block"]["raw_text"] == sample["parsed_block"]["text"]
+    assert decoded["source_block"]["section_id"] == decoded["section"]["section_id"]
     assert decoded["source_block"]["page_span"] == {"start": 1, "end": 2}
     assert decoded["source_block"]["bbox_span"] == [[0.0, 0.0, 100.0, 50.0]]
     assert decoded["table_fact"]["source_block_id"] == decoded["source_block"]["source_block_id"]
