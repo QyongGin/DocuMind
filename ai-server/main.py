@@ -1723,15 +1723,19 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
         )
     except Exception:
         try:
-            deleted_chunks, deleted_source_blocks = _delete_document_chroma_entries(document_id)
+            deleted_chunks, deleted_source_blocks, source_blocks_delete_error = _delete_document_chroma_entries(
+                document_id,
+                tolerate_source_block_errors=True,
+            )
         except Exception:
             logger.exception("[upload_rollback_failed] document_id=%s", document_id)
         else:
             logger.exception(
-                "[upload_rollback] document_id=%s deleted_chunks=%s deleted_source_blocks=%s",
+                "[upload_rollback] document_id=%s deleted_chunks=%s deleted_source_blocks=%s source_blocks_delete_error=%s",
                 document_id,
                 deleted_chunks,
                 deleted_source_blocks,
+                source_blocks_delete_error or "none",
             )
         raise
 
@@ -1769,13 +1773,40 @@ def _delete_collection_entries_by_document_id(chroma_collection, document_id: in
     return len(ids_to_delete)
 
 
-def _delete_document_chroma_entries(document_id: int | str) -> tuple[int, int]:
-    """검색 index와 source block store를 같은 document_id 기준으로 함께 삭제한다."""
-    deleted_chunks = _delete_collection_entries_by_document_id(collection, document_id)
-    deleted_source_blocks = _delete_collection_entries_by_document_id(source_block_collection, document_id)
-    if deleted_chunks:
-        _invalidate_bm25_sparse_index()
-    return deleted_chunks, deleted_source_blocks
+def _delete_document_chroma_entries(
+    document_id: int | str,
+    *,
+    tolerate_source_block_errors: bool = False,
+) -> tuple[int, int, str | None]:
+    """
+    검색 index와 source block store를 같은 document_id 기준으로 삭제한다.
+    source_blocks는 보조 출처 저장소이므로 documents 삭제 성공 후 source 정리 실패가
+    FastAPI DELETE 실패로 전파되면 Spring DB 롤백과 RAG index 불일치가 생길 수 있다.
+    """
+    deleted_chunks = 0
+    deleted_source_blocks = 0
+    source_blocks_delete_error: str | None = None
+
+    try:
+        deleted_chunks = _delete_collection_entries_by_document_id(collection, document_id)
+        try:
+            deleted_source_blocks = _delete_collection_entries_by_document_id(source_block_collection, document_id)
+        except Exception as exc:
+            source_blocks_delete_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "[source_blocks_delete_failed] document_id=%s deleted_chunks=%s error=%s",
+                document_id,
+                deleted_chunks,
+                source_blocks_delete_error,
+                exc_info=True,
+            )
+            if not tolerate_source_block_errors:
+                raise
+    finally:
+        if deleted_chunks:
+            _invalidate_bm25_sparse_index()
+
+    return deleted_chunks, deleted_source_blocks, source_blocks_delete_error
 
 
 async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -> int:
@@ -4521,15 +4552,20 @@ async def delete_document(document_id: int):
     # collection.get()/delete()는 동기 블로킹 호출이다.
     # async 핸들러에서 직접 호출하면 이벤트 루프가 점유되어 다른 요청이 대기하므로
     # /query 핸들러와 동일하게 asyncio.to_thread()로 별도 스레드에서 실행한다.
-    deleted_chunks, deleted_source_blocks = await asyncio.to_thread(
+    deleted_chunks, deleted_source_blocks, source_blocks_delete_error = await asyncio.to_thread(
         _delete_document_chroma_entries,
         document_id,
+        tolerate_source_block_errors=True,
     )
-    return {
+    response = {
         "status": "success",
         "deleted_chunks": deleted_chunks,
         "deleted_source_blocks": deleted_source_blocks,
     }
+    if source_blocks_delete_error:
+        response["warning"] = "source_blocks_delete_failed"
+        response["source_blocks_delete_error"] = source_blocks_delete_error
+    return response
 
 
 @app.get("/documents/{document_id}/chunks")
