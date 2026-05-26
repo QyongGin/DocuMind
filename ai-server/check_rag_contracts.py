@@ -81,7 +81,7 @@ def build_contract_sample() -> dict:
     source_reference = build_source_reference(
         source_block,
         lookup_id="sample_1",
-        metadata_keys=("source_block_id", "source_lookup_id"),
+        future_metadata_keys=("source_block_id", "source_lookup_id"),
     )
     selected_context = SelectedContext(
         context_id="doc-sample:context-001",
@@ -145,7 +145,8 @@ def main() -> None:
     assert decoded["source_reference"]["source_collection"] == "documents"
     assert decoded["source_reference"]["lookup_id"] == "sample_1"
     assert decoded["source_reference"]["runtime_connection"] == "trace_only"
-    assert decoded["source_reference"]["metadata_keys"] == [
+    assert decoded["source_reference"]["metadata_keys"] == []
+    assert decoded["source_reference"]["future_metadata_keys"] == [
         "source_block_id",
         "source_lookup_id",
     ]

@@ -3679,11 +3679,13 @@ def _source_reference_trace_preview(chunk_id: str, meta: dict, source_block, ret
     if chunk_role == "table_fact" and parent_chunk_id:
         lookup_id = parent_chunk_id
         lookup_strategy = "table_fact_parent_chunk_id"
-        metadata_keys = ("parent_chunk_id", "source_block_id", "source_lookup_id")
+        lookup_id_origin = "metadata.parent_chunk_id"
+        metadata_keys = ("parent_chunk_id",)
     else:
         lookup_id = str(chunk_id)
         lookup_strategy = "current_chunk_id"
-        metadata_keys = ("source_block_id", "source_lookup_id")
+        lookup_id_origin = "result_chunk_id"
+        metadata_keys = ()
 
     source_reference = build_source_reference(
         source_block,
@@ -3691,6 +3693,7 @@ def _source_reference_trace_preview(chunk_id: str, meta: dict, source_block, ret
         source_collection="documents",
         lookup_strategy=lookup_strategy,
         metadata_keys=metadata_keys,
+        future_metadata_keys=("source_block_id", "source_lookup_id"),
         notes=(
             "current documents collection still stores shared runtime text",
             "future retrieval index should keep this pointer before changing stored document text",
@@ -3703,8 +3706,10 @@ def _source_reference_trace_preview(chunk_id: str, meta: dict, source_block, ret
         "source_collection": source_reference.source_collection,
         "lookup_id": source_reference.lookup_id,
         "lookup_strategy": source_reference.lookup_strategy,
+        "lookup_id_origin": lookup_id_origin,
         "available_in_current_runtime": source_reference.available_in_current_runtime,
         "metadata_keys": list(source_reference.metadata_keys),
+        "future_metadata_keys": list(source_reference.future_metadata_keys),
         "retrieval_chunk_source_block_ids": list(retrieval_chunk.source_block_ids),
         "requires_lookup_before_retrieval_text_indexing": True,
         "target_flow": [

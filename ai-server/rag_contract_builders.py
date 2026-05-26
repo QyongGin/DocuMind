@@ -107,6 +107,7 @@ def build_source_reference(
     runtime_connection: str = "trace_only",
     available_in_current_runtime: bool = True,
     metadata_keys: Sequence[str] = (),
+    future_metadata_keys: Sequence[str] = (),
     notes: Sequence[str] = (),
 ) -> SourceReference:
     """Create a lookup reference from a retrieval candidate to source raw text."""
@@ -119,6 +120,7 @@ def build_source_reference(
         runtime_connection=runtime_connection,
         available_in_current_runtime=available_in_current_runtime,
         metadata_keys=tuple(metadata_keys),
+        future_metadata_keys=tuple(future_metadata_keys),
         notes=tuple(notes),
     )
 

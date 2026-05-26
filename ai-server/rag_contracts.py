@@ -87,6 +87,7 @@ class SourceReference:
     runtime_connection: str = "trace_only"
     available_in_current_runtime: bool = True
     metadata_keys: tuple[str, ...] = ()
+    future_metadata_keys: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
 
 
