@@ -130,8 +130,12 @@ def main() -> None:
     assert section_path_quality(("569명",)) == "suspect"
     assert section_path_component_is_suspect("569명") is True
     assert section_path_component_is_suspect("30,000원") is True
+    assert section_path_component_is_suspect("423만원") is True
+    assert section_path_component_is_suspect("1조원") is True
     assert section_path_component_is_suspect("2. 정원외 전형 모집인원") is False
+    assert section_path_component_is_suspect("2026학년도 입학전형") is False
     assert "numeric_value_section_component" in section_path_warnings(("569명",))
+    assert "numeric_value_section_component" in section_path_warnings(("423만원",))
     assert decoded["source_block"]["raw_text"] == sample["parsed_block"]["text"]
     assert decoded["source_block"]["section_id"] == decoded["section"]["section_id"]
     assert decoded["source_block"]["page_span"] == {"start": 1, "end": 2}
