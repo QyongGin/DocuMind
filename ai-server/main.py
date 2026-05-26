@@ -3608,17 +3608,42 @@ def _load_source_block_text(source_lookup_id: str) -> tuple[str | None, dict | N
     if not source_lookup_id:
         return None, None
 
-    try:
-        result = source_block_collection.get(ids=[source_lookup_id], include=["documents", "metadatas"])
-    except Exception:
-        logger.exception("[query_source] failed_to_load_source_block source_lookup_id=%s", source_lookup_id)
-        return None, None
+    loaded = _load_source_block_texts([source_lookup_id])
+    return loaded.get(source_lookup_id, (None, None))
 
+
+def _load_source_block_texts(source_lookup_ids: list[str]) -> dict[str, tuple[str, dict]]:
+    """source_blocks collection에서 사용자 출처용 원문 text를 batch 조회한다."""
+    unique_lookup_ids: list[str] = []
+    seen: set[str] = set()
+    for lookup_id in source_lookup_ids:
+        normalized_lookup_id = str(lookup_id or "").strip()
+        if normalized_lookup_id and normalized_lookup_id not in seen:
+            seen.add(normalized_lookup_id)
+            unique_lookup_ids.append(normalized_lookup_id)
+
+    if not unique_lookup_ids:
+        return {}
+
+    try:
+        result = source_block_collection.get(ids=unique_lookup_ids, include=["documents", "metadatas"])
+    except Exception:
+        logger.exception("[query_source] failed_to_load_source_blocks count=%s", len(unique_lookup_ids))
+        return {}
+
+    result_ids = result.get("ids") or []
     documents = result.get("documents") or []
     metadatas = result.get("metadatas") or []
-    if not documents:
-        return None, None
-    return str(documents[0] or ""), (metadatas[0] if metadatas else {})
+    if not result_ids and documents:
+        result_ids = unique_lookup_ids[:len(documents)]
+
+    loaded: dict[str, tuple[str, dict]] = {}
+    for index, lookup_id in enumerate(result_ids):
+        if index >= len(documents):
+            continue
+        metadata = metadatas[index] if index < len(metadatas) and metadatas[index] else {}
+        loaded[str(lookup_id)] = (str(documents[index] or ""), metadata)
+    return loaded
 
 
 def _fallback_source_preview_text(doc: str, meta: dict) -> str:
@@ -3637,11 +3662,19 @@ def _fallback_source_preview_text(doc: str, meta: dict) -> str:
     return str(doc)
 
 
-def _source_preview_content(doc: str, meta: dict, preview_chars: int = 200) -> str:
+def _source_preview_content(
+    doc: str,
+    meta: dict,
+    preview_chars: int = 200,
+    source_block_cache: dict[str, tuple[str, dict]] | None = None,
+) -> str:
     """사용자에게 보여줄 source preview를 검색용 doc이 아니라 SourceBlock 원문 기준으로 만든다."""
     source_lookup_id = str(meta.get("source_lookup_id") or "").strip()
     if source_lookup_id:
-        source_text, _ = _load_source_block_text(source_lookup_id)
+        if source_block_cache is None:
+            source_text, _ = _load_source_block_text(source_lookup_id)
+        else:
+            source_text, _ = source_block_cache.get(source_lookup_id, (None, None))
         if source_text:
             return source_text[:preview_chars]
 
@@ -4531,6 +4564,11 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 헤더 메타데이터 포함
     sources = []
     source_chars = [len(doc) for doc in docs]
+    source_lookup_ids = [
+        str((meta or {}).get("source_lookup_id") or "").strip()
+        for meta in metadatas
+    ]
+    source_block_cache = _load_source_block_texts(source_lookup_ids)
     for doc, meta, chunk_id in zip(docs, metadatas, ids):
         meta = meta or {}
         source: dict = {
@@ -4541,7 +4579,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "page_end": meta.get("page_end"),
             "chunk_index": meta.get("chunk_index", _parse_chunk_index(chunk_id)),
             # 청크 전체를 반환하면 응답이 너무 커지므로 200자 미리보기만 포함
-            "content": _source_preview_content(doc, meta)
+            "content": _source_preview_content(doc, meta, source_block_cache=source_block_cache)
         }
         # MarkdownHeaderTextSplitter가 부여한 헤더 메타데이터(Header 1, Header 2 등)를 함께 반환
         for k, v in meta.items():
