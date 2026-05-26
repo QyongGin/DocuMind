@@ -128,8 +128,10 @@ else:
 
 DOCUMENT_COLLECTION_NAME = "documents"
 SOURCE_BLOCK_COLLECTION_NAME = "source_blocks"
+RETRIEVAL_CHUNK_COLLECTION_NAME = "retrieval_chunks"
 collection = client.get_or_create_collection(DOCUMENT_COLLECTION_NAME)
 source_block_collection = client.get_or_create_collection(SOURCE_BLOCK_COLLECTION_NAME)
+retrieval_chunk_collection = client.get_or_create_collection(RETRIEVAL_CHUNK_COLLECTION_NAME)
 
 _progress_lock = Lock()
 _kiwi_lock = Lock()
@@ -1545,10 +1547,11 @@ def _build_index_documents(
     filename: str,
     document_id: int,
     page_lookup: list[dict],
-) -> tuple[list[Document], list[Document], float, int]:
-    """원본 청크, 검색용 table fact, 출처용 source block 문서를 함께 만든다."""
+) -> tuple[list[Document], list[Document], list[Document], float, int]:
+    """원본 청크, 검색용 table fact, source block, retrieval chunk 문서를 함께 만든다."""
     index_docs: list[Document] = []
     source_docs: list[Document] = []
+    retrieval_docs: list[Document] = []
     page_match_elapsed = 0.0
     table_fact_count = 0
 
@@ -1561,6 +1564,13 @@ def _build_index_documents(
         source_docs.append(source_doc)
         raw_metadata["source_block_id"] = source_doc.metadata["source_block_id"]
         raw_metadata["source_lookup_id"] = source_doc.metadata["source_lookup_id"]
+        retrieval_docs.append(_build_retrieval_chunk_document(
+            doc,
+            filename,
+            document_id,
+            chunk_index,
+            raw_metadata,
+        ))
 
         parent_chunk_id = f"{document_id}_{chunk_index}"
         table_facts = _extract_table_facts(doc.page_content, raw_metadata)
@@ -1581,7 +1591,7 @@ def _build_index_documents(
             index_docs.append(Document(page_content=fact, metadata=fact_metadata))
             table_fact_count += 1
 
-    return index_docs, source_docs, page_match_elapsed, table_fact_count
+    return index_docs, source_docs, retrieval_docs, page_match_elapsed, table_fact_count
 
 
 def _document_format_from_filename(filename: str) -> str:
@@ -1593,6 +1603,11 @@ def _document_format_from_filename(filename: str) -> str:
 def _source_block_lookup_id(document_id: int | str, chunk_index: int) -> str:
     """Chroma source_blocks collection에서 사용할 안정적인 source id를 만든다."""
     return f"{document_id}_{chunk_index}_source"
+
+
+def _retrieval_chunk_lookup_id(document_id: int | str, chunk_index: int) -> str:
+    """Chroma retrieval_chunks collection에서 사용할 안정적인 retrieval id를 만든다."""
+    return f"{document_id}_{chunk_index}_retrieval"
 
 
 def _build_source_block_document(
@@ -1624,6 +1639,58 @@ def _build_source_block_document(
     return Document(page_content=source_block.raw_text, metadata=source_metadata)
 
 
+def _build_retrieval_chunk_document(
+    doc: Document,
+    filename: str,
+    document_id: int,
+    chunk_index: int,
+    raw_metadata: dict,
+) -> Document:
+    """현재 raw chunk에서 검색 전용 retrieval_chunks collection 문서를 만든다."""
+    parsed_block = build_parsed_block(
+        document_id=document_id,
+        document_format=_document_format_from_filename(filename),
+        text=doc.page_content,
+        block_index=chunk_index,
+        metadata=raw_metadata,
+        block_type=str(raw_metadata.get("block_type") or "text"),
+    )
+    section_node = build_section_node(parsed_block)
+    source_block = build_source_block(
+        parsed_block,
+        source_index=chunk_index,
+        section_id=section_node.section_id if section_node else None,
+    )
+    retrieval_chunk = build_retrieval_chunk(
+        parsed_block,
+        source_block,
+        section_node,
+        retrieval_index=chunk_index,
+    )
+    retrieval_lookup_id = _retrieval_chunk_lookup_id(document_id, chunk_index)
+    retrieval_metadata = dict(raw_metadata)
+    retrieval_metadata.update({
+        "chunk_role": "retrieval_chunk",
+        "source_chunk_role": str(raw_metadata.get("chunk_role") or "raw"),
+        "retrieval_chunk_id": retrieval_chunk.retrieval_chunk_id,
+        "retrieval_lookup_id": retrieval_lookup_id,
+        "retrieval_collection": RETRIEVAL_CHUNK_COLLECTION_NAME,
+        "retrieval_strategy": retrieval_chunk.strategy,
+        "retrieval_source_block_ids": json.dumps(
+            list(retrieval_chunk.source_block_ids),
+            ensure_ascii=False,
+        ),
+        "retrieval_section_ids": json.dumps(
+            list(retrieval_chunk.section_ids),
+            ensure_ascii=False,
+        ),
+        "retrieval_text_differs_from_raw": retrieval_chunk.retrieval_text != doc.page_content,
+        "source_collection": SOURCE_BLOCK_COLLECTION_NAME,
+        "source_parent_chunk_id": f"{document_id}_{chunk_index}",
+    })
+    return Document(page_content=retrieval_chunk.retrieval_text, metadata=retrieval_metadata)
+
+
 def _build_index_document_id(document_id: int, metadata: dict, fallback_index: int) -> str:
     """ChromaDB에 저장할 원본 청크와 파생 fact id를 만든다."""
     if metadata.get("chunk_role") == "table_fact":
@@ -1634,12 +1701,12 @@ def _build_index_document_id(document_id: int, metadata: dict, fallback_index: i
     return f"{document_id}_{chunk_index}"
 
 
-def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float, int, int]:
+def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float, int, int, int]:
     """
     문서 청크를 batch embedding 후 ChromaDB에 batch 저장한다.
     청크별 HTTP 호출을 피하기 위해 EMBEDDING_BATCH_SIZE 단위로 묶어 처리한다.
     """
-    index_docs, source_docs, page_match_elapsed, table_fact_count = _build_index_documents(
+    index_docs, source_docs, retrieval_docs, page_match_elapsed, table_fact_count = _build_index_documents(
         final_docs,
         filename,
         document_id,
@@ -1649,7 +1716,7 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
     chroma_elapsed = 0.0
     total_entries = len(index_docs)
     if total_entries == 0:
-        return page_match_elapsed, embedding_elapsed, chroma_elapsed, 0, 0
+        return page_match_elapsed, embedding_elapsed, chroma_elapsed, 0, 0, 0
 
     try:
         for start in range(0, len(index_docs), EMBEDDING_BATCH_SIZE):
@@ -1721,26 +1788,43 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
             SOURCE_BLOCK_COLLECTION_NAME,
             source_store_elapsed,
         )
+        retrieval_embedding_elapsed, retrieval_chroma_elapsed = _store_retrieval_chunks(
+            retrieval_docs,
+            document_id,
+        )
+        embedding_elapsed += retrieval_embedding_elapsed
+        chroma_elapsed += retrieval_chroma_elapsed
+        logger.info(
+            "[retrieval_chunks] document_id=%s entries=%s collection=%s embed=%.2fs chroma_add=%.2fs",
+            document_id,
+            len(retrieval_docs),
+            RETRIEVAL_CHUNK_COLLECTION_NAME,
+            retrieval_embedding_elapsed,
+            retrieval_chroma_elapsed,
+        )
     except Exception:
         try:
-            deleted_chunks, deleted_source_blocks, source_blocks_delete_error = _delete_document_chroma_entries(
+            deleted_chunks, deleted_source_blocks, deleted_retrieval_chunks, source_blocks_delete_error, retrieval_chunks_delete_error = _delete_document_chroma_entries(
                 document_id,
                 tolerate_source_block_errors=True,
+                tolerate_retrieval_chunk_errors=True,
             )
         except Exception:
             logger.exception("[upload_rollback_failed] document_id=%s", document_id)
         else:
             logger.exception(
-                "[upload_rollback] document_id=%s deleted_chunks=%s deleted_source_blocks=%s source_blocks_delete_error=%s",
+                "[upload_rollback] document_id=%s deleted_chunks=%s deleted_source_blocks=%s deleted_retrieval_chunks=%s source_blocks_delete_error=%s retrieval_chunks_delete_error=%s",
                 document_id,
                 deleted_chunks,
                 deleted_source_blocks,
+                deleted_retrieval_chunks,
                 source_blocks_delete_error or "none",
+                retrieval_chunks_delete_error or "none",
             )
         raise
 
     _invalidate_bm25_sparse_index()
-    return page_match_elapsed, embedding_elapsed, chroma_elapsed, total_entries, table_fact_count
+    return page_match_elapsed, embedding_elapsed, chroma_elapsed, total_entries, table_fact_count, len(retrieval_docs)
 
 
 def _store_source_blocks(source_docs: list[Document]) -> float:
@@ -1761,6 +1845,72 @@ def _store_source_blocks(source_docs: list[Document]) -> float:
     return time.perf_counter() - started
 
 
+def _store_retrieval_chunks(retrieval_docs: list[Document], document_id: int) -> tuple[float, float]:
+    """검색 전용 RetrievalChunk text를 별도 collection에 embedding과 함께 저장한다."""
+    if not retrieval_docs:
+        return 0.0, 0.0
+
+    embedding_elapsed = 0.0
+    chroma_elapsed = 0.0
+    total_entries = len(retrieval_docs)
+    for start in range(0, len(retrieval_docs), EMBEDDING_BATCH_SIZE):
+        batch_number = start // EMBEDDING_BATCH_SIZE + 1
+        total_batches = math.ceil(total_entries / EMBEDDING_BATCH_SIZE)
+        batch_docs = retrieval_docs[start:start + EMBEDDING_BATCH_SIZE]
+        batch_ids = [str(doc.metadata["retrieval_lookup_id"]) for doc in batch_docs]
+        batch_texts = [doc.page_content for doc in batch_docs]
+        batch_metadatas = [doc.metadata for doc in batch_docs]
+
+        embedding_start = time.perf_counter()
+        _set_document_progress(
+            document_id,
+            90 + round((start / total_entries) * 4),
+            "retrieval_embedding",
+            f"검색 전용 청크를 저장 중입니다. ({start}/{total_entries} retrieval chunks)"
+        )
+        logger.info(
+            "[retrieval_embed] document_id=%s batch=%s/%s entries=%s model=%s num_thread=%s",
+            document_id,
+            batch_number,
+            total_batches,
+            len(batch_docs),
+            OLLAMA_EMBEDDING_MODEL,
+            OLLAMA_NUM_THREAD or "auto",
+        )
+        batch_vectors, embed_metadata = _embed_texts(batch_texts)
+        batch_embedding_elapsed = time.perf_counter() - embedding_start
+        embedding_elapsed += batch_embedding_elapsed
+        logger.info(
+            "[retrieval_embed_done] document_id=%s batch=%s/%s wall=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s prompt_eval_count=%s",
+            document_id,
+            batch_number,
+            total_batches,
+            batch_embedding_elapsed,
+            _format_seconds(_seconds_from_nanos(embed_metadata.get("total_duration"))),
+            _format_seconds(_seconds_from_nanos(embed_metadata.get("load_duration"))),
+            _format_seconds(_seconds_from_nanos(embed_metadata.get("prompt_eval_duration"))),
+            embed_metadata.get("prompt_eval_count"),
+        )
+
+        chroma_start = time.perf_counter()
+        retrieval_chunk_collection.add(
+            ids=batch_ids,
+            embeddings=batch_vectors,
+            documents=batch_texts,
+            metadatas=batch_metadatas,
+        )
+        chroma_elapsed += time.perf_counter() - chroma_start
+        completed_entries = min(start + len(batch_docs), total_entries)
+        _set_document_progress(
+            document_id,
+            90 + round((completed_entries / total_entries) * 4),
+            "retrieval_embedding",
+            f"검색 전용 청크 저장을 진행 중입니다. ({completed_entries}/{total_entries} retrieval chunks)"
+        )
+
+    return embedding_elapsed, chroma_elapsed
+
+
 def _delete_collection_entries_by_document_id(chroma_collection, document_id: int | str) -> int:
     """document_id에 연결된 ChromaDB entry를 collection 종류와 무관하게 삭제한다."""
     results = chroma_collection.get(
@@ -1777,15 +1927,19 @@ def _delete_document_chroma_entries(
     document_id: int | str,
     *,
     tolerate_source_block_errors: bool = False,
-) -> tuple[int, int, str | None]:
+    tolerate_retrieval_chunk_errors: bool = False,
+) -> tuple[int, int, int, str | None, str | None]:
     """
-    검색 index와 source block store를 같은 document_id 기준으로 삭제한다.
-    source_blocks는 보조 출처 저장소이므로 documents 삭제 성공 후 source 정리 실패가
-    FastAPI DELETE 실패로 전파되면 Spring DB 롤백과 RAG index 불일치가 생길 수 있다.
+    검색 index와 보조 source/retrieval store를 같은 document_id 기준으로 삭제한다.
+    보조 collection 정리 실패가 FastAPI DELETE 실패로 전파되면 Spring DB 롤백과
+    RAG index 부분 삭제 불일치가 생길 수 있어 API 삭제 경로에서는 warning으로 처리한다.
     """
     deleted_chunks = 0
     deleted_source_blocks = 0
+    deleted_retrieval_chunks = 0
     source_blocks_delete_error: str | None = None
+    retrieval_chunks_delete_error: str | None = None
+    non_tolerated_aux_error: Exception | None = None
 
     try:
         deleted_chunks = _delete_collection_entries_by_document_id(collection, document_id)
@@ -1801,12 +1955,33 @@ def _delete_document_chroma_entries(
                 exc_info=True,
             )
             if not tolerate_source_block_errors:
-                raise
+                non_tolerated_aux_error = exc
+        try:
+            deleted_retrieval_chunks = _delete_collection_entries_by_document_id(retrieval_chunk_collection, document_id)
+        except Exception as exc:
+            retrieval_chunks_delete_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "[retrieval_chunks_delete_failed] document_id=%s deleted_chunks=%s error=%s",
+                document_id,
+                deleted_chunks,
+                retrieval_chunks_delete_error,
+                exc_info=True,
+            )
+            if not tolerate_retrieval_chunk_errors and non_tolerated_aux_error is None:
+                non_tolerated_aux_error = exc
+        if non_tolerated_aux_error is not None:
+            raise non_tolerated_aux_error
     finally:
         if deleted_chunks:
             _invalidate_bm25_sparse_index()
 
-    return deleted_chunks, deleted_source_blocks, source_blocks_delete_error
+    return (
+        deleted_chunks,
+        deleted_source_blocks,
+        deleted_retrieval_chunks,
+        source_blocks_delete_error,
+        retrieval_chunks_delete_error,
+    )
 
 
 async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -> int:
@@ -1857,7 +2032,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         _set_document_progress(document_id, 30, "chunking", f"청킹을 완료했습니다. ({len(final_docs)} chunks)")
 
         # 임베딩 + ChromaDB 저장. 청크별 호출 대신 batch 단위로 처리해 HTTP 왕복과 저장 오버헤드를 줄인다.
-        page_match_elapsed, embedding_elapsed, chroma_elapsed, index_entries, table_fact_entries = _store_document_chunks(
+        page_match_elapsed, embedding_elapsed, chroma_elapsed, index_entries, table_fact_entries, retrieval_chunk_entries = _store_document_chunks(
             final_docs,
             filename,
             document_id,
@@ -1866,7 +2041,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
-            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s retrieval_chunk_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
             len(raw_docs),
@@ -1876,6 +2051,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             len(final_docs),
             index_entries,
             table_fact_entries,
+            retrieval_chunk_entries,
             CHUNK_SIZE,
             CHUNK_OVERLAP,
             CHUNK_MERGE_MIN_SIZE,
@@ -3846,6 +4022,25 @@ def _contract_block_index(chunk_id: str, meta: dict) -> int:
     return base_index
 
 
+def _retrieval_source_chunk_index(chunk_id: str, meta: dict) -> int:
+    """retrieval_chunks collection id가 가리키는 부모 raw chunk index를 복원한다."""
+    if meta.get("chunk_role") == "table_fact":
+        parent_chunk_index = _metadata_int(meta.get("parent_chunk_index"))
+        if parent_chunk_index is not None:
+            return parent_chunk_index
+        parent_chunk_id = str(meta.get("parent_chunk_id") or "").strip()
+        parsed_parent_index = _parse_chunk_index(parent_chunk_id)
+        if parsed_parent_index is not None:
+            return parsed_parent_index
+
+    chunk_index = _metadata_int(meta.get("chunk_index"))
+    if chunk_index is not None:
+        return chunk_index
+
+    parsed_index = _parse_chunk_index(str(chunk_id))
+    return parsed_index if parsed_index is not None else 0
+
+
 def _trace_block_type(doc: str, meta: dict) -> str:
     """trace 후보를 ParsedBlock preview에서 볼 block type으로 분류한다."""
     metadata_block_type = str(meta.get("block_type") or "").strip()
@@ -4083,6 +4278,11 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
             "raw_text_preview": _preview_text(source_block.raw_text, preview_chars),
             "retrieval_chunk": {
                 "retrieval_chunk_id": retrieval_chunk.retrieval_chunk_id,
+                "retrieval_collection": RETRIEVAL_CHUNK_COLLECTION_NAME,
+                "retrieval_lookup_id": _retrieval_chunk_lookup_id(
+                    parsed_block.document_id,
+                    _retrieval_source_chunk_index(str(chunk_id), meta),
+                ),
                 "strategy": retrieval_chunk.strategy,
                 "chunk_role": retrieval_chunk.chunk_role,
                 "source_block_ids": list(retrieval_chunk.source_block_ids),
@@ -4667,19 +4867,27 @@ async def delete_document(document_id: int):
     # collection.get()/delete()는 동기 블로킹 호출이다.
     # async 핸들러에서 직접 호출하면 이벤트 루프가 점유되어 다른 요청이 대기하므로
     # /query 핸들러와 동일하게 asyncio.to_thread()로 별도 스레드에서 실행한다.
-    deleted_chunks, deleted_source_blocks, source_blocks_delete_error = await asyncio.to_thread(
+    deleted_chunks, deleted_source_blocks, deleted_retrieval_chunks, source_blocks_delete_error, retrieval_chunks_delete_error = await asyncio.to_thread(
         _delete_document_chroma_entries,
         document_id,
         tolerate_source_block_errors=True,
+        tolerate_retrieval_chunk_errors=True,
     )
     response = {
         "status": "success",
         "deleted_chunks": deleted_chunks,
         "deleted_source_blocks": deleted_source_blocks,
+        "deleted_retrieval_chunks": deleted_retrieval_chunks,
     }
+    warnings = []
     if source_blocks_delete_error:
-        response["warning"] = "source_blocks_delete_failed"
+        warnings.append("source_blocks_delete_failed")
         response["source_blocks_delete_error"] = source_blocks_delete_error
+    if retrieval_chunks_delete_error:
+        warnings.append("retrieval_chunks_delete_failed")
+        response["retrieval_chunks_delete_error"] = retrieval_chunks_delete_error
+    if warnings:
+        response["warning"] = ",".join(warnings)
     return response
 
 
