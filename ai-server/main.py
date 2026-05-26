@@ -3813,6 +3813,25 @@ def _text_role_trace_preview(
     }
 
 
+def _expected_source_raw_text_for_lookup(meta: dict, source_block) -> tuple[str | None, str, str | None]:
+    """SourceReference lookup 결과와 비교할 원문 text 기준을 정한다."""
+    chunk_role = str(meta.get("chunk_role") or "raw")
+    if chunk_role != "table_fact":
+        return source_block.raw_text, "candidate_source_block.raw_text", None
+
+    parent_content = str(meta.get("parent_content") or "").strip()
+    if parent_content:
+        return parent_content, "metadata.parent_content", None
+
+    parent_chunk_id = str(meta.get("parent_chunk_id") or "").strip()
+    if parent_chunk_id:
+        parent_doc, _ = _load_parent_chunk(parent_chunk_id)
+        if parent_doc:
+            return str(parent_doc), "metadata.parent_chunk_id", None
+
+    return None, "table_fact_parent_raw_text", "table_fact_parent_raw_text_unavailable"
+
+
 def _source_reference_trace_preview(chunk_id: str, meta: dict, source_block, retrieval_chunk) -> dict:
     """Show how a retrieval candidate can look up raw source text later."""
     chunk_role = str(meta.get("chunk_role") or "raw")
@@ -3855,7 +3874,7 @@ def _source_reference_trace_preview(chunk_id: str, meta: dict, source_block, ret
     lookup_check = _source_reference_lookup_check(
         source_reference.lookup_id,
         source_reference.source_collection,
-        source_block.raw_text,
+        *_expected_source_raw_text_for_lookup(meta, source_block),
     )
 
     return {
@@ -3880,15 +3899,24 @@ def _source_reference_trace_preview(chunk_id: str, meta: dict, source_block, ret
     }
 
 
-def _source_reference_lookup_check(lookup_id: str, source_collection: str, source_raw_text: str) -> dict:
+def _source_reference_lookup_check(
+    lookup_id: str,
+    source_collection: str,
+    expected_source_raw_text: str | None,
+    comparison_basis: str = "candidate_source_block.raw_text",
+    comparison_skip_reason: str | None = None,
+) -> dict:
     """Read-only trace check for whether a source reference resolves today."""
     result = {
         "runtime_connection": "trace_only",
         "source_collection": source_collection,
         "lookup_id": lookup_id,
+        "comparison_basis": comparison_basis,
         "checked": False,
         "found": False,
     }
+    if comparison_skip_reason:
+        result["comparison_skip_reason"] = comparison_skip_reason
     lookup_collection = _source_reference_collection(source_collection)
     if lookup_collection is None:
         result["skip_reason"] = "unsupported_source_collection"
@@ -3914,7 +3942,11 @@ def _source_reference_lookup_check(lookup_id: str, source_collection: str, sourc
         "loaded_chunk_role": loaded_meta.get("chunk_role"),
         "loaded_document_id": loaded_meta.get("document_id"),
         "loaded_chunk_index": loaded_meta.get("chunk_index"),
-        "loaded_text_matches_source_raw": loaded_text.strip() == source_raw_text.strip(),
+        "loaded_text_matches_source_raw": (
+            loaded_text.strip() == expected_source_raw_text.strip()
+            if expected_source_raw_text is not None
+            else None
+        ),
         "loaded_text_preview": _preview_text(loaded_text, 160),
     })
     return result
