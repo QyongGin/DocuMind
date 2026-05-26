@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from hashlib import sha1
-from typing import Any
+import re
+from typing import Any, Sequence
 
 from rag_contracts import BBox, JsonValue, PageSpan, ParsedBlock, SectionNode, SourceBlock
 
@@ -109,6 +110,34 @@ def header_path_from_metadata(metadata: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(path)
 
 
+def section_path_quality(path: Sequence[str]) -> str:
+    """Return whether a section path looks usable for trace diagnostics."""
+    warnings = section_path_warnings(path)
+    if "missing_section_path" in warnings:
+        return "missing"
+    return "suspect" if warnings else "ok"
+
+
+def section_path_warnings(path: Sequence[str]) -> tuple[str, ...]:
+    """Return generic warnings for section paths that look like table values."""
+    if not path:
+        return ("missing_section_path",)
+
+    warnings: set[str] = set()
+    for component in path:
+        normalized = re.sub(r"\s+", " ", str(component or "").strip())
+        if not normalized:
+            warnings.add("empty_section_component")
+            continue
+        if _TABLE_VALUE_LIKE_SECTION_PATTERN.fullmatch(normalized):
+            warnings.add("numeric_value_section_component")
+        if "|" in normalized or "<br" in normalized.lower():
+            warnings.add("table_markup_section_component")
+        if len(normalized) > 80:
+            warnings.add("overlong_section_component")
+    return tuple(sorted(warnings))
+
+
 def sanitize_metadata(metadata: Mapping[str, Any]) -> dict[str, JsonValue]:
     """Keep only JSON-safe metadata values for contract serialization."""
     safe: dict[str, JsonValue] = {}
@@ -152,6 +181,10 @@ class _Unsupported:
 
 
 _UNSUPPORTED = _Unsupported()
+
+_TABLE_VALUE_LIKE_SECTION_PATTERN = re.compile(
+    r"^[\d\s,./~:·ㆍ+-]+(?:명|원|점|일|개|건|회|차|%|학점|시간|쪽|페이지)?$"
+)
 
 
 def _to_safe_json_value(value: Any) -> JsonValue | _Unsupported:
