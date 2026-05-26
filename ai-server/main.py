@@ -3603,6 +3603,51 @@ def _load_parent_chunk(parent_chunk_id: str) -> tuple[str | None, dict | None]:
     return documents[0], (metadatas[0] if metadatas else {})
 
 
+def _load_source_block_text(source_lookup_id: str) -> tuple[str | None, dict | None]:
+    """source_blocks collection에서 사용자 출처용 원문 text를 조회한다."""
+    if not source_lookup_id:
+        return None, None
+
+    try:
+        result = source_block_collection.get(ids=[source_lookup_id], include=["documents", "metadatas"])
+    except Exception:
+        logger.exception("[query_source] failed_to_load_source_block source_lookup_id=%s", source_lookup_id)
+        return None, None
+
+    documents = result.get("documents") or []
+    metadatas = result.get("metadatas") or []
+    if not documents:
+        return None, None
+    return str(documents[0] or ""), (metadatas[0] if metadatas else {})
+
+
+def _fallback_source_preview_text(doc: str, meta: dict) -> str:
+    """source_blocks 조회 실패 시 기존 runtime text로 돌아가되 table_fact는 부모 원문을 우선한다."""
+    if meta.get("chunk_role") == "table_fact":
+        parent_content = str(meta.get("parent_content") or "").strip()
+        if parent_content:
+            return parent_content
+
+        parent_chunk_id = str(meta.get("parent_chunk_id") or "").strip()
+        if parent_chunk_id:
+            parent_doc, _ = _load_parent_chunk(parent_chunk_id)
+            if parent_doc:
+                return str(parent_doc)
+
+    return str(doc)
+
+
+def _source_preview_content(doc: str, meta: dict, preview_chars: int = 200) -> str:
+    """사용자에게 보여줄 source preview를 검색용 doc이 아니라 SourceBlock 원문 기준으로 만든다."""
+    source_lookup_id = str(meta.get("source_lookup_id") or "").strip()
+    if source_lookup_id:
+        source_text, _ = _load_source_block_text(source_lookup_id)
+        if source_text:
+            return source_text[:preview_chars]
+
+    return _fallback_source_preview_text(doc, meta)[:preview_chars]
+
+
 def _build_parent_metadata_from_fact(fact_meta: dict) -> dict:
     """table_fact metadata에서 사용자에게 노출할 부모 raw 청크 metadata를 복원한다."""
     parent_meta = dict(fact_meta or {})
@@ -4496,7 +4541,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "page_end": meta.get("page_end"),
             "chunk_index": meta.get("chunk_index", _parse_chunk_index(chunk_id)),
             # 청크 전체를 반환하면 응답이 너무 커지므로 200자 미리보기만 포함
-            "content": doc[:200]
+            "content": _source_preview_content(doc, meta)
         }
         # MarkdownHeaderTextSplitter가 부여한 헤더 메타데이터(Header 1, Header 2 등)를 함께 반환
         for k, v in meta.items():
