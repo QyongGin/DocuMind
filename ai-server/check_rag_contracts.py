@@ -6,6 +6,7 @@ import json
 
 from rag_contract_builders import (
     build_parsed_block,
+    build_retrieval_chunk,
     build_section_node,
     build_source_block,
     section_path_component_is_suspect,
@@ -14,7 +15,6 @@ from rag_contract_builders import (
 )
 from rag_contracts import (
     Candidate,
-    RetrievalChunk,
     SelectedContext,
     SelectedContextItem,
     SourceCitation,
@@ -48,14 +48,10 @@ def build_contract_sample() -> dict:
         parsed_block,
         section_id=section.section_id,
     )
-    retrieval_chunk = RetrievalChunk(
-        retrieval_chunk_id="doc-sample:retrieval-001",
-        document_id="sample",
-        retrieval_text="Table Section Item A Value 10",
-        source_block_ids=(source_block.source_block_id,),
-        section_ids=(section.section_id,),
-        strategy="section_table",
-        chunk_role="raw",
+    retrieval_chunk = build_retrieval_chunk(
+        parsed_block,
+        source_block,
+        section,
     )
     table_fact = TableFact(
         fact_id="doc-sample:fact-001",
@@ -140,8 +136,35 @@ def main() -> None:
     assert decoded["source_block"]["section_id"] == decoded["section"]["section_id"]
     assert decoded["source_block"]["page_span"] == {"start": 1, "end": 2}
     assert decoded["source_block"]["bbox_span"] == [[0.0, 0.0, 100.0, 50.0]]
+    assert decoded["retrieval_chunk"]["strategy"] == "section_prefixed_raw"
+    assert decoded["retrieval_chunk"]["retrieval_text"].startswith(
+        "Document > Table Section\n"
+    )
+    assert decoded["retrieval_chunk"]["source_block_ids"] == [
+        decoded["source_block"]["source_block_id"]
+    ]
+    assert decoded["retrieval_chunk"]["section_ids"] == [decoded["section"]["section_id"]]
     assert decoded["table_fact"]["source_block_id"] == decoded["source_block"]["source_block_id"]
     assert decoded["selected_context"]["citation_ids"] == [decoded["citation"]["citation_id"]]
+
+    suspect_metadata = {"Header 1": "423만원"}
+    suspect_parsed = build_parsed_block(
+        document_id="sample",
+        document_format="pdf",
+        text="원서접수 비용 423만원",
+        block_index=2,
+        metadata=suspect_metadata,
+    )
+    suspect_section = build_section_node(suspect_parsed)
+    assert suspect_section is not None
+    suspect_source = build_source_block(
+        suspect_parsed,
+        section_id=suspect_section.section_id,
+    )
+    suspect_retrieval = build_retrieval_chunk(suspect_parsed, suspect_source, suspect_section)
+    assert suspect_retrieval.strategy == "raw"
+    assert suspect_retrieval.section_ids == ()
+    assert suspect_retrieval.retrieval_text == suspect_source.raw_text
     print("rag_contracts smoke ok")
 
 
