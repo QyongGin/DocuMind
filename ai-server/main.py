@@ -2175,6 +2175,12 @@ QUERY_TERM_SYNONYMS = {
     "방법": {"방법", "절차", "신청", "신청절차", "제출"},
     "주의사항": {"주의사항", "유의사항", "유의", "주의"},
     "전과": {"전과", "전과제도", "전과시행"},
+    "비용": {"비용", "금액", "요금", "가격", "전형료", "면접고사료"},
+    "금액": {"금액", "비용", "요금", "가격", "전형료", "면접고사료"},
+    "요금": {"요금", "비용", "금액", "가격", "전형료", "면접고사료"},
+    "가격": {"가격", "비용", "금액", "요금", "전형료", "면접고사료"},
+    "전형료": {"전형료", "비용", "금액", "요금"},
+    "면접고사료": {"면접고사료", "면접료", "비용", "금액", "요금"},
     "모집": {"모집", "모집인원", "모집정원", "정원"},
     "인원": {"인원", "모집인원", "모집정원", "정원"},
     "정원": {"정원", "모집인원", "모집정원", "인원"},
@@ -2201,7 +2207,8 @@ QUERY_WEAK_SUBJECT_TERMS = {
 QUERY_TABLE_INTENT_TERMS = {
     "값", "수치", "공식", "수식", "상수", "계수", "인원", "정원", "모집", "모집인원", "모집정원",
     "점수", "가산점", "등급", "기간", "날짜", "일정", "서류", "자격", "학과", "과목", "항목",
-    "복장", "상의", "하의", "신발",
+    "복장", "상의", "하의", "신발", "비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료",
+    "전형료", "면접고사료", "면접료",
 }
 QUERY_LIST_COLLECTION_TERMS = {"학과", "과목", "서류", "시설", "항목", "종류", "전형", "대상"}
 QUERY_COLLECTION_WHERE_TERMS = {"학과", "과목", "서류", "항목", "종류", "전형", "대상"}
@@ -2220,7 +2227,7 @@ INTENT_QUERY_TERMS = {
     "list": {"무엇", "뭐", "무슨", "어떤", "목록", "종류", "있어", "있나요", "있습니까", "포함"},
     "location": {"어디", "위치", "장소", "주소", "소재지", "몇층", "층", "호관", "찾아오"},
     "time": {"시간", "이용시간", "운영시간", "언제", "몇시", "기간", "평일", "주말", "공휴일", "방학"},
-    "cost": {"비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료"},
+    "cost": {"비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료", "전형료", "면접고사료", "면접료"},
     "attire": {"복장", "옷", "상의", "하의", "신발", "티셔츠", "스타킹", "단화"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "준비물"},
     "eligibility": {"자격", "지원자격", "대상", "조건", "요건"},
@@ -2233,7 +2240,7 @@ INTENT_EVIDENCE_TERMS = {
     "list": {"시설", "목록", "종류", "항목", "포함", "운영", "이용"},
     "location": {"위치", "장소", "주소", "소재지", "호관", "층", "도로", "길", "정문", "후문", "옆", "앞", "뒤", "내", "근처", "캠퍼스"},
     "time": {"시간", "이용", "이용시간", "운영시간", "기간", "평일", "주말", "공휴일", "방학", "중식", "휴무", "운영"},
-    "cost": {"비용", "금액", "요금", "가격", "납부", "원", "무료", "환불"},
+    "cost": {"비용", "금액", "요금", "가격", "납부", "원", "무료", "환불", "전형료", "면접고사료", "면접료", "계"},
     "attire": {"복장", "수험생", "상의", "하의", "신발", "티셔츠", "스타킹", "단화", "바지", "스커트"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "발급", "원본", "사본"},
     "eligibility": {"자격", "대상", "조건", "요건", "해당자", "지원"},
@@ -2387,6 +2394,7 @@ def _normalize_query_token(token: str) -> str:
     """조사와 어미가 붙은 질문 token을 검색 발췌용 핵심어로 정리한다."""
     normalized = token.strip().lower()
     for suffix in (
+        "인가요", "입니까", "이에요", "예요", "인가", "인지", "이야",
         "에게는", "한테는", "에서는", "으로는", "로는", "에는",
         "으로", "에서", "에게", "한테", "부터", "까지",
         "은", "는", "이", "가", "을", "를", "의", "도", "만", "와", "과", "에", "로",
@@ -2508,7 +2516,8 @@ def _score_table_fact_for_question(fact: str, question: str) -> int:
 def _lookup_lexical_table_fact_candidates(question: str, limit: int = 5) -> list[dict]:
     """표 질의에서 벡터 검색이 놓치는 table_fact 후보를 score와 함께 찾는다."""
     subject_terms, intent_terms = _extract_lexical_query_terms(question)
-    if not subject_terms or not intent_terms:
+    subjectless_cost_query = bool(intent_terms & INTENT_QUERY_TERMS["cost"])
+    if not intent_terms or (not subject_terms and not subjectless_cost_query):
         return []
 
     try:
@@ -3170,14 +3179,19 @@ def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis
         return legend_list_evidence
 
     subject_related = any(_subject_strongly_matches_text(fact, analysis) for fact in facts)
-    if not subject_related:
+    # 비용 질문은 "원서 접수 비용"처럼 subject가 표 행 이름이 아니라 표 제목/속성으로 표현될 수 있다.
+    # 이때는 비용 intent가 직접 맞는 행 fact만 아래 attribute_facts 단계에서 보수적으로 고른다.
+    if not subject_related and analysis.intent != "cost":
         return []
 
     attribute_facts = []
     for fact in facts:
         if not _table_fact_matches_query_attribute(fact, analysis):
             continue
-        if analysis.intent in TABLE_DIRECT_ROW_ATTRIBUTE_INTENTS and not _subject_strongly_matches_text(fact, analysis):
+        if (
+            analysis.intent in TABLE_DIRECT_ROW_ATTRIBUTE_INTENTS
+            and not _subject_strongly_matches_text(fact, analysis)
+        ):
             continue
         attribute_facts.append(fact)
     if not attribute_facts:
