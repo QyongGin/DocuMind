@@ -2300,6 +2300,7 @@ INTENT_DEFAULT_LABELS = {
 }
 TABLE_BRIDGE_CONTEXT_LABEL_TERMS = ("면접", "정시", "수시1차", "수시2차", "수시")
 TABLE_FACT_LABEL_KEYS = {"구분", "분류", "유형"}
+MONEY_VALUE_PATTERN = re.compile(r"\d[\d,]*(?:\.\d+)?\s*(?:(?:천|만|억|조)\s*)?원")
 
 
 @dataclass(frozen=True)
@@ -2387,6 +2388,7 @@ def _normalize_query_token(token: str) -> str:
     """조사와 어미가 붙은 질문 token을 검색 발췌용 핵심어로 정리한다."""
     normalized = token.strip().lower()
     for suffix in (
+        "인가요", "입니까", "이에요", "예요", "인가", "인지", "이야",
         "에게는", "한테는", "에서는", "으로는", "로는", "에는",
         "으로", "에서", "에게", "한테", "부터", "까지",
         "은", "는", "이", "가", "을", "를", "의", "도", "만", "와", "과", "에", "로",
@@ -2463,16 +2465,23 @@ def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
     subject_terms: set[str] = set()
     intent_terms: set[str] = set()
     normalized_question = _compact_search_text(question)
+    raw_tokens = [token.strip().lower() for token in re.findall(r"[0-9A-Za-z가-힣]+", question)]
+    normalized_tokens = [_normalize_query_token(token) for token in raw_tokens]
+    detected_intent = _detect_query_intent(
+        question,
+        [token for token in normalized_tokens if len(token) >= 2],
+    )
+    table_intent_terms = set(QUERY_TABLE_INTENT_TERMS)
+    if detected_intent:
+        table_intent_terms.update(INTENT_QUERY_TERMS.get(detected_intent, set()))
 
-    for token in re.findall(r"[0-9A-Za-z가-힣]+", question):
-        raw_token = token.strip().lower()
-        normalized = _normalize_query_token(raw_token)
-        if len(normalized) < 2 and normalized not in QUERY_TABLE_INTENT_TERMS:
+    for raw_token, normalized in zip(raw_tokens, normalized_tokens):
+        if len(normalized) < 2 and normalized not in table_intent_terms:
             continue
 
         expanded_terms = {raw_token, normalized}
         expanded_terms.update(QUERY_TERM_SYNONYMS.get(normalized, set()))
-        if expanded_terms & QUERY_TABLE_INTENT_TERMS:
+        if expanded_terms & table_intent_terms:
             intent_terms.update(term for term in expanded_terms if len(term) >= 2)
         else:
             subject_terms.update(term for term in expanded_terms if len(term) >= 3 and term not in QUERY_GENERIC_TERMS)
@@ -2484,16 +2493,22 @@ def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
     return subject_terms, intent_terms
 
 
-def _score_table_fact_for_question(fact: str, question: str) -> int:
+def _score_table_fact_for_question(fact: str, question: str, allow_cost_subject_fallback: bool = False) -> int:
     """질문과 table_fact의 lexical 관련도를 계산한다."""
     fact_lower = fact.lower()
     subject_terms, intent_terms = _extract_lexical_query_terms(question)
-    if subject_terms and not any(_term_in_text(term, fact) for term in subject_terms):
-        return 0
+    asks_cost_value = bool(intent_terms & INTENT_QUERY_TERMS["cost"])
+    has_money_value = bool(MONEY_VALUE_PATTERN.search(fact))
+    subject_matches = any(_term_in_text(term, fact) for term in subject_terms)
+    if subject_terms and not subject_matches:
+        if not (allow_cost_subject_fallback and asks_cost_value and has_money_value):
+            return 0
 
     score = 0
     score += sum(12 for term in subject_terms if _term_in_text(term, fact))
     score += sum(4 for term in intent_terms if _term_in_text(term, fact))
+    if asks_cost_value and has_money_value:
+        score += 24
 
     asks_count_value = bool(intent_terms & {"모집", "인원", "정원", "모집인원", "모집정원"})
     has_primary_count_column = bool(re.search(r"(모집\s*정원|모집정원|합계|총|전체|total)\s*=", fact_lower))
@@ -3006,13 +3021,20 @@ def _table_fact_matches_query_attribute(fact: str, analysis: QueryAnalysis) -> b
     return False
 
 
-def _is_table_label_pair(key: str, value: str, analysis: QueryAnalysis) -> bool:
-    """표의 구분/분류용 셀처럼 답변값으로 쓰면 안 되는 pair를 제외한다."""
+def _is_table_label_key(key: str) -> bool:
+    """표의 구분/분류용 column인지 판단한다."""
     normalized_key = re.sub(r"\s+", "", key.lower())
-    normalized_value = re.sub(r"\s+", "", value.lower())
     if normalized_key in TABLE_FACT_LABEL_KEYS:
         return True
     if normalized_key.endswith("구분"):
+        return True
+    return False
+
+
+def _is_table_label_pair(key: str, value: str, analysis: QueryAnalysis) -> bool:
+    """표의 구분/분류용 셀처럼 답변값으로 쓰면 안 되는 pair를 제외한다."""
+    normalized_value = re.sub(r"\s+", "", value.lower())
+    if _is_table_label_key(key):
         return True
     if normalized_value in {"수시", "정시", "수시1차", "수시2차"}:
         return True
@@ -3160,6 +3182,30 @@ def _derive_table_legend_list_evidence_facts(facts: list[str], analysis: QueryAn
     return evidence_facts
 
 
+def _derive_money_table_evidence_facts(facts: list[str]) -> list[str]:
+    """금액 값이 들어 있는 표 행을 column label과 함께 직접 근거로 만든다."""
+    evidence_facts: list[str] = []
+    seen_facts: set[str] = set()
+    for fact in facts:
+        subject = _extract_table_fact_row_subject(fact)
+        cost_pairs: list[str] = []
+        for key, value in _extract_table_fact_pairs(fact):
+            if not value or _is_table_label_key(key):
+                continue
+            if MONEY_VALUE_PATTERN.search(value) or "무료" in value:
+                cost_pairs.append(f"{key} {value}")
+
+        if not subject or not cost_pairs:
+            continue
+
+        evidence_fact = f"- {subject}: {'; '.join(cost_pairs)}"
+        if evidence_fact in seen_facts:
+            continue
+        seen_facts.add(evidence_fact)
+        evidence_facts.append(evidence_fact)
+    return evidence_facts
+
+
 def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis) -> list[str]:
     """같은 표 안의 subject 행과 속성 행을 조합해 질문에 직접 답하는 fact를 만든다."""
     if analysis.intent not in TABLE_BRIDGE_EVIDENCE_INTENTS or not facts:
@@ -3169,6 +3215,9 @@ def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis
     if legend_list_evidence:
         return legend_list_evidence
 
+    if analysis.intent == "cost":
+        return _derive_money_table_evidence_facts(facts)
+
     subject_related = any(_subject_strongly_matches_text(fact, analysis) for fact in facts)
     if not subject_related:
         return []
@@ -3177,7 +3226,10 @@ def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis
     for fact in facts:
         if not _table_fact_matches_query_attribute(fact, analysis):
             continue
-        if analysis.intent in TABLE_DIRECT_ROW_ATTRIBUTE_INTENTS and not _subject_strongly_matches_text(fact, analysis):
+        if (
+            analysis.intent in TABLE_DIRECT_ROW_ATTRIBUTE_INTENTS
+            and not _subject_strongly_matches_text(fact, analysis)
+        ):
             continue
         attribute_facts.append(fact)
     if not attribute_facts:
@@ -3212,14 +3264,24 @@ def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[
             continue
 
         extracted_facts = _extract_table_facts(doc, runtime_meta)
+        allow_cost_subject_fallback = (
+            analysis is not None
+            and _allow_cost_table_subject_fallback(doc, runtime_meta, analysis)
+        )
         if analysis is not None:
-            bridge_source_facts = _get_matched_table_facts(runtime_meta) + extracted_facts
-            for evidence_fact in _derive_query_table_evidence_facts(bridge_source_facts, analysis):
-                runtime_meta = _append_query_evidence_fact(runtime_meta, evidence_fact)
+            can_extract_evidence = analysis.intent != "cost" or allow_cost_subject_fallback
+            if can_extract_evidence:
+                bridge_source_facts = _get_matched_table_facts(runtime_meta) + extracted_facts
+                for evidence_fact in _derive_query_table_evidence_facts(bridge_source_facts, analysis):
+                    runtime_meta = _append_query_evidence_fact(runtime_meta, evidence_fact)
 
         scored_facts: list[tuple[int, str]] = []
         for fact in extracted_facts:
-            score = _score_table_fact_for_question(fact, question)
+            score = _score_table_fact_for_question(
+                fact,
+                question,
+                allow_cost_subject_fallback=allow_cost_subject_fallback,
+            )
             if score > 0:
                 scored_facts.append((score, fact))
 
@@ -3235,6 +3297,15 @@ def _best_runtime_table_fact_score(meta: dict, question: str) -> int:
     """runtime metadata에 붙은 table_fact 중 질문과 가장 관련 높은 점수를 반환한다."""
     facts = _get_matched_table_facts(meta)
     return max((_score_table_fact_for_question(fact, question) for fact in facts), default=0)
+
+
+def _allow_cost_table_subject_fallback(doc: str, meta: dict, analysis: QueryAnalysis) -> bool:
+    """비용 표 fallback은 parent raw chunk가 질문 subject를 담고 있을 때만 허용한다."""
+    if analysis.intent != "cost":
+        return False
+    if not analysis.subject_terms and not analysis.primary_terms:
+        return True
+    return _subject_matches_text(_build_sparse_search_text(doc, meta or {}), analysis)
 
 
 def _score_subject_match(text: str, analysis: QueryAnalysis) -> int:
