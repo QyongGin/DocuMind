@@ -2175,12 +2175,10 @@ QUERY_TERM_SYNONYMS = {
     "방법": {"방법", "절차", "신청", "신청절차", "제출"},
     "주의사항": {"주의사항", "유의사항", "유의", "주의"},
     "전과": {"전과", "전과제도", "전과시행"},
-    "비용": {"비용", "금액", "요금", "가격", "전형료", "면접고사료"},
-    "금액": {"금액", "비용", "요금", "가격", "전형료", "면접고사료"},
-    "요금": {"요금", "비용", "금액", "가격", "전형료", "면접고사료"},
-    "가격": {"가격", "비용", "금액", "요금", "전형료", "면접고사료"},
-    "전형료": {"전형료", "비용", "금액", "요금"},
-    "면접고사료": {"면접고사료", "면접료", "비용", "금액", "요금"},
+    "비용": {"비용", "금액", "요금", "가격"},
+    "금액": {"금액", "비용", "요금", "가격"},
+    "요금": {"요금", "비용", "금액", "가격"},
+    "가격": {"가격", "비용", "금액", "요금"},
     "모집": {"모집", "모집인원", "모집정원", "정원"},
     "인원": {"인원", "모집인원", "모집정원", "정원"},
     "정원": {"정원", "모집인원", "모집정원", "인원"},
@@ -2208,7 +2206,6 @@ QUERY_TABLE_INTENT_TERMS = {
     "값", "수치", "공식", "수식", "상수", "계수", "인원", "정원", "모집", "모집인원", "모집정원",
     "점수", "가산점", "등급", "기간", "날짜", "일정", "서류", "자격", "학과", "과목", "항목",
     "복장", "상의", "하의", "신발", "비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료",
-    "전형료", "면접고사료", "면접료",
 }
 QUERY_LIST_COLLECTION_TERMS = {"학과", "과목", "서류", "시설", "항목", "종류", "전형", "대상"}
 QUERY_COLLECTION_WHERE_TERMS = {"학과", "과목", "서류", "항목", "종류", "전형", "대상"}
@@ -2227,7 +2224,7 @@ INTENT_QUERY_TERMS = {
     "list": {"무엇", "뭐", "무슨", "어떤", "목록", "종류", "있어", "있나요", "있습니까", "포함"},
     "location": {"어디", "위치", "장소", "주소", "소재지", "몇층", "층", "호관", "찾아오"},
     "time": {"시간", "이용시간", "운영시간", "언제", "몇시", "기간", "평일", "주말", "공휴일", "방학"},
-    "cost": {"비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료", "전형료", "면접고사료", "면접료"},
+    "cost": {"비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료"},
     "attire": {"복장", "옷", "상의", "하의", "신발", "티셔츠", "스타킹", "단화"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "준비물"},
     "eligibility": {"자격", "지원자격", "대상", "조건", "요건"},
@@ -2240,7 +2237,7 @@ INTENT_EVIDENCE_TERMS = {
     "list": {"시설", "목록", "종류", "항목", "포함", "운영", "이용"},
     "location": {"위치", "장소", "주소", "소재지", "호관", "층", "도로", "길", "정문", "후문", "옆", "앞", "뒤", "내", "근처", "캠퍼스"},
     "time": {"시간", "이용", "이용시간", "운영시간", "기간", "평일", "주말", "공휴일", "방학", "중식", "휴무", "운영"},
-    "cost": {"비용", "금액", "요금", "가격", "납부", "원", "무료", "환불", "전형료", "면접고사료", "면접료", "계"},
+    "cost": {"비용", "금액", "요금", "가격", "납부", "원", "무료", "환불"},
     "attire": {"복장", "수험생", "상의", "하의", "신발", "티셔츠", "스타킹", "단화", "바지", "스커트"},
     "documents": {"서류", "제출서류", "증빙", "첨부", "제출", "발급", "원본", "사본"},
     "eligibility": {"자격", "대상", "조건", "요건", "해당자", "지원"},
@@ -2307,6 +2304,7 @@ INTENT_DEFAULT_LABELS = {
 }
 TABLE_BRIDGE_CONTEXT_LABEL_TERMS = ("면접", "정시", "수시1차", "수시2차", "수시")
 TABLE_FACT_LABEL_KEYS = {"구분", "분류", "유형"}
+MONEY_VALUE_PATTERN = re.compile(r"\d[\d,]*(?:\s*)(?:원|만원|천원|억원|조원)")
 
 
 @dataclass(frozen=True)
@@ -2496,12 +2494,16 @@ def _score_table_fact_for_question(fact: str, question: str) -> int:
     """질문과 table_fact의 lexical 관련도를 계산한다."""
     fact_lower = fact.lower()
     subject_terms, intent_terms = _extract_lexical_query_terms(question)
-    if subject_terms and not any(_term_in_text(term, fact) for term in subject_terms):
+    asks_cost_value = bool(intent_terms & INTENT_QUERY_TERMS["cost"])
+    has_money_value = bool(MONEY_VALUE_PATTERN.search(fact))
+    if subject_terms and not any(_term_in_text(term, fact) for term in subject_terms) and not asks_cost_value:
         return 0
 
     score = 0
     score += sum(12 for term in subject_terms if _term_in_text(term, fact))
     score += sum(4 for term in intent_terms if _term_in_text(term, fact))
+    if asks_cost_value and has_money_value:
+        score += 24
 
     asks_count_value = bool(intent_terms & {"모집", "인원", "정원", "모집인원", "모집정원"})
     has_primary_count_column = bool(re.search(r"(모집\s*정원|모집정원|합계|총|전체|total)\s*=", fact_lower))
@@ -2516,8 +2518,7 @@ def _score_table_fact_for_question(fact: str, question: str) -> int:
 def _lookup_lexical_table_fact_candidates(question: str, limit: int = 5) -> list[dict]:
     """표 질의에서 벡터 검색이 놓치는 table_fact 후보를 score와 함께 찾는다."""
     subject_terms, intent_terms = _extract_lexical_query_terms(question)
-    subjectless_cost_query = bool(intent_terms & INTENT_QUERY_TERMS["cost"])
-    if not intent_terms or (not subject_terms and not subjectless_cost_query):
+    if not subject_terms or not intent_terms:
         return []
 
     try:
@@ -3015,13 +3016,20 @@ def _table_fact_matches_query_attribute(fact: str, analysis: QueryAnalysis) -> b
     return False
 
 
-def _is_table_label_pair(key: str, value: str, analysis: QueryAnalysis) -> bool:
-    """표의 구분/분류용 셀처럼 답변값으로 쓰면 안 되는 pair를 제외한다."""
+def _is_table_label_key(key: str) -> bool:
+    """표의 구분/분류용 column인지 판단한다."""
     normalized_key = re.sub(r"\s+", "", key.lower())
-    normalized_value = re.sub(r"\s+", "", value.lower())
     if normalized_key in TABLE_FACT_LABEL_KEYS:
         return True
     if normalized_key.endswith("구분"):
+        return True
+    return False
+
+
+def _is_table_label_pair(key: str, value: str, analysis: QueryAnalysis) -> bool:
+    """표의 구분/분류용 셀처럼 답변값으로 쓰면 안 되는 pair를 제외한다."""
+    normalized_value = re.sub(r"\s+", "", value.lower())
+    if _is_table_label_key(key):
         return True
     if normalized_value in {"수시", "정시", "수시1차", "수시2차"}:
         return True
@@ -3169,6 +3177,30 @@ def _derive_table_legend_list_evidence_facts(facts: list[str], analysis: QueryAn
     return evidence_facts
 
 
+def _derive_cost_table_evidence_facts(facts: list[str]) -> list[str]:
+    """금액 값이 들어 있는 표 행을 column label과 함께 직접 근거로 만든다."""
+    evidence_facts: list[str] = []
+    seen_facts: set[str] = set()
+    for fact in facts:
+        subject = _extract_table_fact_row_subject(fact)
+        cost_pairs: list[str] = []
+        for key, value in _extract_table_fact_pairs(fact):
+            if not value or _is_table_label_key(key):
+                continue
+            if MONEY_VALUE_PATTERN.search(value) or "무료" in value:
+                cost_pairs.append(f"{key} {value}")
+
+        if not subject or not cost_pairs:
+            continue
+
+        evidence_fact = f"- {subject}: {'; '.join(cost_pairs)}"
+        if evidence_fact in seen_facts:
+            continue
+        seen_facts.add(evidence_fact)
+        evidence_facts.append(evidence_fact)
+    return evidence_facts
+
+
 def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis) -> list[str]:
     """같은 표 안의 subject 행과 속성 행을 조합해 질문에 직접 답하는 fact를 만든다."""
     if analysis.intent not in TABLE_BRIDGE_EVIDENCE_INTENTS or not facts:
@@ -3178,10 +3210,11 @@ def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis
     if legend_list_evidence:
         return legend_list_evidence
 
+    if analysis.intent == "cost":
+        return _derive_cost_table_evidence_facts(facts)
+
     subject_related = any(_subject_strongly_matches_text(fact, analysis) for fact in facts)
-    # 비용 질문은 "원서 접수 비용"처럼 subject가 표 행 이름이 아니라 표 제목/속성으로 표현될 수 있다.
-    # 이때는 비용 intent가 직접 맞는 행 fact만 아래 attribute_facts 단계에서 보수적으로 고른다.
-    if not subject_related and analysis.intent != "cost":
+    if not subject_related:
         return []
 
     attribute_facts = []
