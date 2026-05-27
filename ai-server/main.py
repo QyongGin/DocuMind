@@ -95,6 +95,7 @@ BM25_INDEX_MAX_ENTRIES = _env_int("BM25_INDEX_MAX_ENTRIES", 50000)
 TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
 TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
 EMBED_TABLE_RAW_CHUNKS = _env_bool("EMBED_TABLE_RAW_CHUNKS", True)
+QUERY_RETRIEVAL_CHUNKS_ENABLED = _env_bool("QUERY_RETRIEVAL_CHUNKS_ENABLED", True)
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
     logger.warning(
@@ -141,7 +142,7 @@ _bm25_sparse_index = None
 _document_progress: dict[int, dict] = {}
 
 logger.info(
-    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s chroma_host=%s chroma_port=%s",
+    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s query_retrieval_chunks_enabled=%s chroma_host=%s chroma_port=%s",
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
     OLLAMA_EMBEDDING_MODEL,
@@ -157,6 +158,7 @@ logger.info(
     DEFAULT_TOP_K,
     BM25_INDEX_MAX_ENTRIES,
     EMBED_TABLE_RAW_CHUNKS,
+    QUERY_RETRIEVAL_CHUNKS_ENABLED,
     CHROMA_HOST or "persistent",
     CHROMA_PORT
 )
@@ -3779,6 +3781,40 @@ def _load_parent_chunk(parent_chunk_id: str) -> tuple[str | None, dict | None]:
     return documents[0], (metadatas[0] if metadatas else {})
 
 
+def _load_parent_chunks(parent_chunk_ids: list[str]) -> dict[str, tuple[str, dict]]:
+    """retrieval_chunks hit가 가리키는 부모 raw chunk를 batch 조회한다."""
+    unique_parent_ids: list[str] = []
+    seen: set[str] = set()
+    for parent_chunk_id in parent_chunk_ids:
+        normalized_id = str(parent_chunk_id or "").strip()
+        if normalized_id and normalized_id not in seen:
+            seen.add(normalized_id)
+            unique_parent_ids.append(normalized_id)
+
+    if not unique_parent_ids:
+        return {}
+
+    try:
+        result = collection.get(ids=unique_parent_ids, include=["documents", "metadatas"])
+    except Exception:
+        logger.exception("[query_vector] failed_to_load_retrieval_parent_chunks count=%s", len(unique_parent_ids))
+        return {}
+
+    result_ids = result.get("ids") or []
+    documents = result.get("documents") or []
+    metadatas = result.get("metadatas") or []
+    if not result_ids and documents:
+        result_ids = unique_parent_ids[:len(documents)]
+
+    loaded: dict[str, tuple[str, dict]] = {}
+    for index, parent_chunk_id in enumerate(result_ids):
+        if index >= len(documents):
+            continue
+        metadata = metadatas[index] if index < len(metadatas) and metadatas[index] else {}
+        loaded[str(parent_chunk_id)] = (str(documents[index] or ""), metadata)
+    return loaded
+
+
 def _load_source_block_text(source_lookup_id: str) -> tuple[str | None, dict | None]:
     """source_blocks collection에서 사용자 출처용 원문 text를 조회한다."""
     if not source_lookup_id:
@@ -4353,12 +4389,18 @@ def _record_vector_trace(
     """벡터 검색 후보의 distance와 원본 hit 정보를 trace에 기록한다."""
     key = _candidate_parent_key(chunk_id, meta)
     entry = _ensure_trace_entry(trace_by_id, key)
-    _append_trace_method(entry, "vector")
+    vector_method = "retrieval_chunk_vector" if meta.get("matched_chunk_role") == "retrieval_chunk" else "vector"
+    _append_trace_method(entry, vector_method)
     entry.setdefault("vector_rank", rank)
     entry.setdefault("vector_distance", _round_float(distance))
     entry.setdefault("vector_similarity_if_cosine", _similarity_if_cosine(distance, metric))
     entry.setdefault("vector_hit_chunk_id", str(chunk_id))
     entry.setdefault("vector_hit_chunk_role", meta.get("chunk_role", "raw"))
+    entry.setdefault("vector_source_collection", meta.get("vector_source_collection", DOCUMENT_COLLECTION_NAME))
+    if meta.get("retrieval_lookup_id"):
+        entry.setdefault("retrieval_lookup_id", meta.get("retrieval_lookup_id"))
+    if meta.get("retrieval_strategy"):
+        entry.setdefault("retrieval_strategy", meta.get("retrieval_strategy"))
     if meta.get("chunk_role") == "table_fact":
         entry.setdefault("vector_hit_fact_preview", _preview_text(doc, 240))
 
@@ -4402,7 +4444,12 @@ def _format_vector_candidate(
         "rank": rank,
         "distance": _round_float(distance),
         "similarity_if_cosine": _similarity_if_cosine(distance, metric),
+        "vector_source_collection": meta.get("vector_source_collection", DOCUMENT_COLLECTION_NAME),
     })
+    if meta.get("matched_chunk_role") == "retrieval_chunk":
+        candidate["retrieval_lookup_id"] = meta.get("retrieval_lookup_id")
+        candidate["retrieval_strategy"] = meta.get("retrieval_strategy")
+        candidate["retrieval_text_preview"] = meta.get("retrieval_text_preview")
     if embedding is not None:
         candidate["embedding_dimension"] = len(embedding)
         candidate["embedding_preview"] = _vector_preview(embedding, vector_preview_size)
@@ -4481,20 +4528,227 @@ def _format_rerank_candidate(
     return formatted
 
 
+def _first_query_result_list(result: dict, key: str) -> list:
+    """Chroma query 결과의 첫 번째 query result list를 안전하게 꺼낸다."""
+    values = result.get(key) or []
+    if not values:
+        return []
+    first = values[0]
+    return first if isinstance(first, list) else []
+
+
+def _empty_vector_query_result(include_vectors: bool = False) -> dict:
+    """vector query 결과 shape을 Chroma query 응답과 맞춘 빈 결과로 만든다."""
+    result = {
+        "documents": [[]],
+        "metadatas": [[]],
+        "ids": [[]],
+        "distances": [[]],
+    }
+    if include_vectors:
+        result["embeddings"] = [[]]
+    return result
+
+
+def _query_chroma_vectors(chroma_collection, question_vector: list[float], retrieval_limit: int, include_vectors: bool) -> dict:
+    """지정한 Chroma collection에서 vector query를 실행한다."""
+    include_fields = ["documents", "metadatas", "distances"]
+    if include_vectors:
+        include_fields.append("embeddings")
+    return chroma_collection.query(
+        query_embeddings=[question_vector],
+        n_results=retrieval_limit,
+        include=include_fields,
+    )
+
+
+def _retrieval_parent_chunk_id(meta: dict) -> str:
+    """retrieval_chunks metadata에서 부모 raw chunk id를 복원한다."""
+    parent_chunk_id = str(meta.get("source_parent_chunk_id") or "").strip()
+    if parent_chunk_id:
+        return parent_chunk_id
+
+    document_id = str(meta.get("document_id") or "").strip()
+    chunk_index = _metadata_int(meta.get("chunk_index"))
+    if document_id and chunk_index is not None:
+        return f"{document_id}_{chunk_index}"
+    return ""
+
+
+def _tag_vector_result_source(result: dict, source_collection: str, include_vectors: bool) -> dict:
+    """vector result metadata에 어느 collection에서 온 hit인지 표시한다."""
+    docs = _first_query_result_list(result, "documents")
+    metadatas = _first_query_result_list(result, "metadatas")
+    ids = _first_query_result_list(result, "ids")
+    distances = _first_query_result_list(result, "distances")
+    embeddings = _first_query_result_list(result, "embeddings") if include_vectors else []
+
+    tagged_metadatas: list[dict] = []
+    for metadata in metadatas:
+        tagged_metadata = dict(metadata or {})
+        tagged_metadata.setdefault("vector_source_collection", source_collection)
+        tagged_metadatas.append(tagged_metadata)
+
+    tagged = {
+        "documents": [docs],
+        "metadatas": [tagged_metadatas],
+        "ids": [ids],
+        "distances": [distances],
+    }
+    if include_vectors:
+        tagged["embeddings"] = [embeddings]
+    return tagged
+
+
+def _expand_retrieval_chunk_vector_result(result: dict, include_vectors: bool) -> dict:
+    """retrieval_chunks vector hit를 prompt/source용 부모 raw chunk 후보로 변환한다."""
+    retrieval_docs = _first_query_result_list(result, "documents")
+    retrieval_metadatas = _first_query_result_list(result, "metadatas")
+    retrieval_ids = _first_query_result_list(result, "ids")
+    retrieval_distances = _first_query_result_list(result, "distances")
+    retrieval_embeddings = _first_query_result_list(result, "embeddings") if include_vectors else []
+
+    parent_chunk_ids = [_retrieval_parent_chunk_id(meta or {}) for meta in retrieval_metadatas]
+    parent_cache = _load_parent_chunks(parent_chunk_ids)
+
+    docs: list[str] = []
+    metadatas: list[dict] = []
+    ids: list[str] = []
+    distances: list[float] = []
+    embeddings: list[list[float]] = []
+    missing_parent_count = 0
+
+    for index, (retrieval_doc, retrieval_meta, retrieval_id) in enumerate(zip(retrieval_docs, retrieval_metadatas, retrieval_ids)):
+        retrieval_meta = retrieval_meta or {}
+        parent_chunk_id = parent_chunk_ids[index] if index < len(parent_chunk_ids) else ""
+        parent_doc, parent_meta = parent_cache.get(parent_chunk_id, (None, None))
+        if not parent_doc:
+            missing_parent_count += 1
+            continue
+
+        runtime_meta = dict(parent_meta or {})
+        runtime_meta["matched_chunk_role"] = "retrieval_chunk"
+        runtime_meta["vector_source_collection"] = RETRIEVAL_CHUNK_COLLECTION_NAME
+        runtime_meta["retrieval_hit_chunk_id"] = str(retrieval_id)
+        runtime_meta["retrieval_lookup_id"] = retrieval_meta.get("retrieval_lookup_id")
+        runtime_meta["retrieval_chunk_id"] = retrieval_meta.get("retrieval_chunk_id")
+        runtime_meta["retrieval_strategy"] = retrieval_meta.get("retrieval_strategy")
+        runtime_meta["retrieval_text_preview"] = _preview_text(str(retrieval_doc or ""), 240)
+        runtime_meta.setdefault("source_lookup_id", retrieval_meta.get("source_lookup_id"))
+        runtime_meta.setdefault("source_block_id", retrieval_meta.get("source_block_id"))
+
+        docs.append(str(parent_doc))
+        metadatas.append(runtime_meta)
+        ids.append(parent_chunk_id)
+        if index < len(retrieval_distances):
+            distances.append(float(retrieval_distances[index]))
+        if include_vectors and index < len(retrieval_embeddings):
+            embeddings.append(retrieval_embeddings[index])
+
+    if missing_parent_count:
+        logger.warning(
+            "[query_vector] retrieval_chunk_parent_missing missing=%s total_hits=%s",
+            missing_parent_count,
+            len(retrieval_ids),
+        )
+
+    expanded = {
+        "documents": [docs],
+        "metadatas": [metadatas],
+        "ids": [ids],
+        "distances": [distances],
+    }
+    if include_vectors:
+        expanded["embeddings"] = [embeddings]
+    return expanded
+
+
+def _merge_vector_query_results(results: list[dict], include_vectors: bool) -> dict:
+    """여러 vector result를 순서대로 합치되 같은 parent chunk는 한 번만 남긴다."""
+    merged_docs: list[str] = []
+    merged_metadatas: list[dict] = []
+    merged_ids: list[str] = []
+    merged_distances: list[float] = []
+    merged_embeddings: list[list[float]] = []
+    seen_ids: set[str] = set()
+
+    for result in results:
+        docs = _first_query_result_list(result, "documents")
+        metadatas = _first_query_result_list(result, "metadatas")
+        ids = _first_query_result_list(result, "ids")
+        distances = _first_query_result_list(result, "distances")
+        embeddings = _first_query_result_list(result, "embeddings") if include_vectors else []
+
+        for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids)):
+            normalized_id = str(chunk_id)
+            if normalized_id in seen_ids:
+                continue
+            seen_ids.add(normalized_id)
+            merged_docs.append(str(doc or ""))
+            merged_metadatas.append(dict(meta or {}))
+            merged_ids.append(normalized_id)
+            if index < len(distances):
+                merged_distances.append(float(distances[index]))
+            if include_vectors and index < len(embeddings):
+                merged_embeddings.append(embeddings[index])
+
+    merged = {
+        "documents": [merged_docs],
+        "metadatas": [merged_metadatas],
+        "ids": [merged_ids],
+        "distances": [merged_distances],
+    }
+    if include_vectors:
+        merged["embeddings"] = [merged_embeddings]
+    return merged
+
+
+def _query_vector_results(
+    question_vector: list[float],
+    retrieval_limit: int,
+    include_vectors: bool,
+) -> dict:
+    """retrieval_chunks와 legacy documents vector search를 raw chunk 후보로 합친다."""
+    retrieval_result = _empty_vector_query_result(include_vectors)
+    retrieval_error: str | None = None
+    if QUERY_RETRIEVAL_CHUNKS_ENABLED:
+        try:
+            raw_retrieval_result = _query_chroma_vectors(
+                retrieval_chunk_collection,
+                question_vector,
+                retrieval_limit,
+                include_vectors,
+            )
+            retrieval_result = _expand_retrieval_chunk_vector_result(raw_retrieval_result, include_vectors)
+        except Exception as exc:
+            retrieval_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "[query_vector] retrieval_chunks_query_failed error=%s",
+                retrieval_error,
+                exc_info=True,
+            )
+
+    legacy_result = _tag_vector_result_source(
+        _query_chroma_vectors(collection, question_vector, retrieval_limit, include_vectors),
+        DOCUMENT_COLLECTION_NAME,
+        include_vectors,
+    )
+    merged = _merge_vector_query_results([retrieval_result, legacy_result], include_vectors)
+    merged["retrieval_chunk_hits"] = len(_first_query_result_list(retrieval_result, "ids"))
+    merged["legacy_vector_hits"] = len(_first_query_result_list(legacy_result, "ids"))
+    merged["retrieval_chunks_enabled"] = QUERY_RETRIEVAL_CHUNKS_ENABLED
+    if retrieval_error:
+        merged["retrieval_chunk_query_error"] = retrieval_error
+    return merged
+
+
 def _query_embeddings_for_trace(
     question_vector: list[float],
     retrieval_limit: int,
     include_vectors: bool,
 ) -> dict:
-    """trace용 Chroma vector search를 실행한다."""
-    include_fields = ["documents", "metadatas", "distances"]
-    if include_vectors:
-        include_fields.append("embeddings")
-    return collection.query(
-        query_embeddings=[question_vector],
-        n_results=retrieval_limit,
-        include=include_fields,
-    )
+    """trace용 vector search를 실행한다."""
+    return _query_vector_results(question_vector, retrieval_limit, include_vectors)
 
 
 def _trace_query_retrieval(
@@ -4528,6 +4782,8 @@ def _trace_query_retrieval(
     vector_distances = [float(distance) for distance in results["distances"][0]] if results.get("distances") else []
     vector_embeddings = results.get("embeddings", [[]])
     vector_embeddings = vector_embeddings[0] if include_vectors and vector_embeddings else []
+    retrieval_chunk_hits = int(results.get("retrieval_chunk_hits") or 0)
+    legacy_vector_hits = int(results.get("legacy_vector_hits") or 0)
 
     trace_by_id: dict[str, dict] = {}
     vector_candidates = []
@@ -4624,10 +4880,12 @@ def _trace_query_retrieval(
     ]
 
     logger.info(
-        "[rag_trace] top_k=%s retrieval_limit=%s vector=%s bm25=%s table_fact=%s final=%s context_chars=%s embed=%.2fs chroma=%.2fs total=%.2fs",
+        "[rag_trace] top_k=%s retrieval_limit=%s vector=%s retrieval_chunk_vector=%s legacy_vector=%s bm25=%s table_fact=%s final=%s context_chars=%s embed=%.2fs chroma=%.2fs total=%.2fs",
         top_k,
         retrieval_limit,
         len(vector_candidates),
+        retrieval_chunk_hits,
+        legacy_vector_hits,
         len(bm25_candidates),
         len(table_fact_candidates),
         len(final_docs),
@@ -4643,6 +4901,13 @@ def _trace_query_retrieval(
         "answer_generated": False,
         "distance_metric": metric,
         "distance_note": "similarity_if_cosine은 collection metric이 cosine으로 명시된 경우에만 계산한다.",
+        "vector_retrieval": {
+            "retrieval_chunks_enabled": bool(results.get("retrieval_chunks_enabled")),
+            "retrieval_chunk_hits": retrieval_chunk_hits,
+            "legacy_vector_hits": legacy_vector_hits,
+            "merged_vector_hits": len(vector_docs),
+            "retrieval_chunk_query_error": results.get("retrieval_chunk_query_error"),
+        },
         "query_analysis": {
             "tokens": analysis.tokens,
             "intent": analysis.intent,
@@ -4695,11 +4960,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
 
     chroma_start = time.perf_counter()
     retrieval_limit = min(20, max(top_k, top_k * 3))
-    results = collection.query(
-        query_embeddings=[question_vector],
-        n_results=retrieval_limit,
-        include=["documents", "metadatas", "distances"]
-    )
+    results = _query_vector_results(question_vector, retrieval_limit, include_vectors=False)
     chroma_elapsed = time.perf_counter() - chroma_start
 
     docs = results["documents"][0] if results["documents"] else []
@@ -4707,6 +4968,8 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     ids = results["ids"][0] if results["ids"] else []
     distance_values = [float(distance) for distance in results["distances"][0]] if results.get("distances") else []
     raw_result_count = len(docs)
+    retrieval_chunk_hits = int(results.get("retrieval_chunk_hits") or 0)
+    legacy_vector_hits = int(results.get("legacy_vector_hits") or 0)
     bm25_docs, bm25_metadatas, bm25_ids = _lookup_bm25_raw_chunks(analysis, limit=top_k)
     lexical_docs, lexical_metadatas, lexical_ids = _lookup_lexical_table_facts(question)
     if bm25_docs:
@@ -4739,13 +5002,19 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "distances": distance_values,
             "bm25_raw_chunks": len(bm25_docs),
             "lexical_table_facts": len(lexical_docs),
+            "retrieval_chunk_vector_hits": retrieval_chunk_hits,
+            "legacy_vector_hits": legacy_vector_hits,
+            "retrieval_chunks_enabled": bool(results.get("retrieval_chunks_enabled")),
+            "retrieval_chunk_query_error": results.get("retrieval_chunk_query_error"),
             "query_intent": analysis.intent,
             "query_subject_terms": sorted(analysis.subject_terms),
         }
         logger.info(
-            "[query_prepare] top_k=%s retrieval_limit=%s docs=0 embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+            "[query_prepare] top_k=%s retrieval_limit=%s docs=0 retrieval_chunk_vector=%s legacy_vector=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
             top_k,
             retrieval_limit,
+            retrieval_chunk_hits,
+            legacy_vector_hits,
             embedding_elapsed,
             _format_seconds(ollama_total),
             _format_seconds(ollama_load),
@@ -4806,14 +5075,20 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "distance_avg": distance_avg,
         "bm25_raw_chunks": len(bm25_docs),
         "lexical_table_facts": len(lexical_docs),
+        "retrieval_chunk_vector_hits": retrieval_chunk_hits,
+        "legacy_vector_hits": legacy_vector_hits,
+        "retrieval_chunks_enabled": bool(results.get("retrieval_chunks_enabled")),
+        "retrieval_chunk_query_error": results.get("retrieval_chunk_query_error"),
         "query_intent": analysis.intent,
         "query_subject_terms": sorted(analysis.subject_terms),
     }
     logger.info(
-        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
+        "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s retrieval_chunk_vector=%s legacy_vector=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
         top_k,
         retrieval_limit,
         raw_result_count,
+        retrieval_chunk_hits,
+        legacy_vector_hits,
         len(bm25_docs),
         len(lexical_docs),
         len(docs),
@@ -4827,10 +5102,12 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         _format_decimal(distance_avg),
     )
     logger.info(
-        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
+        "[query_prepare] top_k=%s retrieval_limit=%s raw_docs=%s retrieval_chunk_vector=%s legacy_vector=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s prompt_chars=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
         top_k,
         retrieval_limit,
         raw_result_count,
+        retrieval_chunk_hits,
+        legacy_vector_hits,
         len(bm25_docs),
         len(lexical_docs),
         len(docs),
