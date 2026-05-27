@@ -2300,7 +2300,7 @@ INTENT_DEFAULT_LABELS = {
 }
 TABLE_BRIDGE_CONTEXT_LABEL_TERMS = ("면접", "정시", "수시1차", "수시2차", "수시")
 TABLE_FACT_LABEL_KEYS = {"구분", "분류", "유형"}
-MONEY_VALUE_PATTERN = re.compile(r"\d[\d,]*(?:\s*)(?:원|만원|천원|억원|조원)")
+MONEY_VALUE_PATTERN = re.compile(r"\d[\d,]*(?:\.\d+)?\s*(?:(?:천|만|억|조)\s*)?원")
 
 
 @dataclass(frozen=True)
@@ -2493,14 +2493,16 @@ def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
     return subject_terms, intent_terms
 
 
-def _score_table_fact_for_question(fact: str, question: str) -> int:
+def _score_table_fact_for_question(fact: str, question: str, allow_cost_subject_fallback: bool = False) -> int:
     """질문과 table_fact의 lexical 관련도를 계산한다."""
     fact_lower = fact.lower()
     subject_terms, intent_terms = _extract_lexical_query_terms(question)
     asks_cost_value = bool(intent_terms & INTENT_QUERY_TERMS["cost"])
     has_money_value = bool(MONEY_VALUE_PATTERN.search(fact))
-    if subject_terms and not any(_term_in_text(term, fact) for term in subject_terms) and not asks_cost_value:
-        return 0
+    subject_matches = any(_term_in_text(term, fact) for term in subject_terms)
+    if subject_terms and not subject_matches:
+        if not (allow_cost_subject_fallback and asks_cost_value and has_money_value):
+            return 0
 
     score = 0
     score += sum(12 for term in subject_terms if _term_in_text(term, fact))
@@ -3262,14 +3264,24 @@ def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[
             continue
 
         extracted_facts = _extract_table_facts(doc, runtime_meta)
+        allow_cost_subject_fallback = (
+            analysis is not None
+            and _allow_cost_table_subject_fallback(doc, runtime_meta, analysis)
+        )
         if analysis is not None:
-            bridge_source_facts = _get_matched_table_facts(runtime_meta) + extracted_facts
-            for evidence_fact in _derive_query_table_evidence_facts(bridge_source_facts, analysis):
-                runtime_meta = _append_query_evidence_fact(runtime_meta, evidence_fact)
+            can_extract_evidence = analysis.intent != "cost" or allow_cost_subject_fallback
+            if can_extract_evidence:
+                bridge_source_facts = _get_matched_table_facts(runtime_meta) + extracted_facts
+                for evidence_fact in _derive_query_table_evidence_facts(bridge_source_facts, analysis):
+                    runtime_meta = _append_query_evidence_fact(runtime_meta, evidence_fact)
 
         scored_facts: list[tuple[int, str]] = []
         for fact in extracted_facts:
-            score = _score_table_fact_for_question(fact, question)
+            score = _score_table_fact_for_question(
+                fact,
+                question,
+                allow_cost_subject_fallback=allow_cost_subject_fallback,
+            )
             if score > 0:
                 scored_facts.append((score, fact))
 
@@ -3285,6 +3297,15 @@ def _best_runtime_table_fact_score(meta: dict, question: str) -> int:
     """runtime metadata에 붙은 table_fact 중 질문과 가장 관련 높은 점수를 반환한다."""
     facts = _get_matched_table_facts(meta)
     return max((_score_table_fact_for_question(fact, question) for fact in facts), default=0)
+
+
+def _allow_cost_table_subject_fallback(doc: str, meta: dict, analysis: QueryAnalysis) -> bool:
+    """비용 표 fallback은 parent raw chunk가 질문 subject를 담고 있을 때만 허용한다."""
+    if analysis.intent != "cost":
+        return False
+    if not analysis.subject_terms and not analysis.primary_terms:
+        return True
+    return _subject_matches_text(_build_sparse_search_text(doc, meta or {}), analysis)
 
 
 def _score_subject_match(text: str, analysis: QueryAnalysis) -> int:
