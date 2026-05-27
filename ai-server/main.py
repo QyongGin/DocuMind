@@ -4450,7 +4450,10 @@ def _typed_table_fact_contract_previews(
     """runtime table_fact 문자열을 typed TableFact preview로 변환한다."""
     facts = _get_matched_table_facts(meta)
     fact_source = "matched_table_facts"
-    if not facts and "|" in doc:
+    if not facts and meta.get("chunk_role") == "table_fact":
+        facts = [doc.strip()] if doc.strip() else []
+        fact_source = "candidate_table_fact_document"
+    elif not facts and "|" in doc:
         facts = _extract_table_facts(doc, meta)
         fact_source = "extracted_from_candidate_doc"
 
@@ -4460,6 +4463,7 @@ def _typed_table_fact_contract_previews(
         if str(meta.get(header_key) or "").strip()
     )
     table_index = _contract_block_index(chunk_id, meta)
+    resolved_source_block_id = str(meta.get("source_block_id") or source_block_id)
     previews: list[dict] = []
     for row_index, fact in enumerate(facts):
         row_label = _extract_table_fact_row_subject(fact)
@@ -4479,7 +4483,7 @@ def _typed_table_fact_contract_previews(
                 row_label=row_label,
                 column_label=column_label,
                 value=value,
-                source_block_id=source_block_id,
+                source_block_id=resolved_source_block_id,
                 caption=caption,
                 header_path=header_path,
             )
