@@ -716,6 +716,34 @@ def _is_empty_table_cell(cell: str) -> bool:
     return not cell or cell in {"-", "–", "—"}
 
 
+def _looks_like_table_data_value(cell: str) -> bool:
+    """표 안에서 제목이 아니라 실제 값처럼 보이는 cell인지 판단한다."""
+    text = _clean_table_cell(cell)
+    if not text:
+        return False
+    if MONEY_VALUE_PATTERN.search(text):
+        return True
+    if re.fullmatch(r"\d[\d,]*(?:\.\d+)?\s*(?:명|개|건|점|%|학점|시간|일|월)?", text):
+        return True
+    if re.search(r"\d{4}[.-]\d{1,2}(?:[.-]\d{1,2})?", text):
+        return True
+    return False
+
+
+def _detect_table_row_group_label(row: list[str]) -> str:
+    """값 없이 한 cell만 채운 행은 이후 data row를 묶는 표 내부 제목으로 본다."""
+    non_empty_cells = [cell for cell in row if not _is_empty_table_cell(cell)]
+    if len(non_empty_cells) != 1:
+        return ""
+
+    label = _clean_table_cell(non_empty_cells[0])
+    if not label or len(label) > 80:
+        return ""
+    if _looks_like_table_data_value(label):
+        return ""
+    return label
+
+
 def _normalize_table_symbol(symbol: str) -> str:
     """범례 symbol 표기를 정리한다."""
     return re.sub(r"\s+", "", symbol.strip())
@@ -925,11 +953,27 @@ def _build_row_legend_pairs(row: list[str], legends: dict[str, str]) -> list[str
     return pairs
 
 
-def _build_row_summary_fact(caption: str, row: list[str], column_labels: list[str], legends: dict[str, str] | None = None) -> str:
+def _compose_row_subject_path(row_header_path: list[str], subject: str) -> list[str]:
+    """표 내부 그룹 제목과 현재 행 주어를 하나의 row path로 합친다."""
+    path = [_clean_table_cell(part) for part in row_header_path if _clean_table_cell(part)]
+    cleaned_subject = _clean_table_subject(subject)
+    if cleaned_subject and (not path or path[-1] != cleaned_subject):
+        path.append(cleaned_subject)
+    return path or [cleaned_subject or "해당 행"]
+
+
+def _build_row_summary_fact(
+    caption: str,
+    row: list[str],
+    column_labels: list[str],
+    legends: dict[str, str] | None = None,
+    row_header_path: list[str] | None = None,
+) -> str:
     """표의 한 행을 key=value 형태의 검색 가능한 문장으로 만든다."""
     pairs: list[str] = _build_row_legend_pairs(row, legends or {})
     subject, _ = _select_row_subject(row, column_labels)
-    subject = _clean_table_subject(subject)
+    subject_path = _compose_row_subject_path(row_header_path or [], subject)
+    subject = " > ".join(subject_path)
     for index, value in enumerate(row):
         if _is_empty_table_cell(value):
             continue
@@ -980,10 +1024,17 @@ def _extract_table_facts(text: str, metadata: dict) -> list[str]:
         column_labels = _compose_column_labels(header_rows, subheader_row)
         generate_matrix_facts = _should_generate_matrix_facts(column_labels)
         previous_values: dict[int, str] = {}
+        row_group_path: list[str] = []
         table_facts: list[str] = []
 
         for row in data_rows:
             if not any(not _is_empty_table_cell(cell) for cell in row):
+                continue
+
+            row_group_label = _detect_table_row_group_label(row)
+            if row_group_label:
+                row_group_path = [row_group_label]
+                previous_values = {}
                 continue
 
             filled_row = list(row)
@@ -993,7 +1044,13 @@ def _extract_table_facts(text: str, metadata: dict) -> list[str]:
                 elif not _is_empty_table_cell(filled_row[index]):
                     previous_values[index] = filled_row[index]
 
-            row_summary = _build_row_summary_fact(caption, filled_row, column_labels, legends)
+            row_summary = _build_row_summary_fact(
+                caption,
+                filled_row,
+                column_labels,
+                legends,
+                row_header_path=row_group_path,
+            )
             if row_summary:
                 table_facts.append(row_summary)
             else:
@@ -2931,6 +2988,15 @@ def _extract_table_fact_row_subject(fact: str) -> str:
     return match.group(1).strip()
 
 
+def _table_fact_row_header_path(row_subject: str) -> tuple[str, ...]:
+    """fact row subject에 포함된 표 내부 그룹 경로를 분리한다."""
+    return tuple(
+        part.strip()
+        for part in str(row_subject or "").split(">")
+        if part.strip()
+    )
+
+
 def _extract_table_fact_pairs(fact: str) -> list[tuple[str, str]]:
     """row summary fact의 key=value 쌍을 분리한다."""
     match = re.search(r"행 정보는\s*(.+?)(?:이다\.?$|$)", fact)
@@ -3886,12 +3952,18 @@ def _format_structured_table_value_evidence(
 
         caption = str(preview.get("caption") or "").strip()
         row_label = str(preview.get("row_label") or "").strip()
+        row_header_path = [
+            str(part).strip()
+            for part in (preview.get("row_header_path") or [])
+            if str(part).strip()
+        ]
+        row_path = " > ".join(row_header_path)
         column_label = str(preview.get("column_label") or "").strip()
         value = str(preview.get("value") or "").strip()
         if not value:
             continue
 
-        dedupe_key = (caption, row_label, column_label, value)
+        dedupe_key = (caption, row_path or row_label, column_label, value)
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
@@ -3899,7 +3971,9 @@ def _format_structured_table_value_evidence(
         parts = []
         if caption:
             parts.append(f"표 제목: {caption}")
-        if row_label:
+        if row_path and row_path != row_label:
+            parts.append(f"행 경로: {row_path}")
+        elif row_label:
             parts.append(f"행: {row_label}")
         if column_label:
             parts.append(f"열: {column_label}")
@@ -4560,9 +4634,11 @@ def _typed_table_fact_contract_previews(
     resolved_source_block_id = str(meta.get("source_block_id") or source_block_id)
     previews: list[dict] = []
     for row_index, fact in enumerate(facts):
-        row_label = _extract_table_fact_row_subject(fact)
-        if not row_label:
+        row_subject = _extract_table_fact_row_subject(fact)
+        if not row_subject:
             continue
+        row_header_path = _table_fact_row_header_path(row_subject)
+        row_label = row_header_path[-1] if row_header_path else row_subject
         caption = fact.split(":", 1)[0].strip() if ":" in fact else None
         for column_index, (column_label, value) in enumerate(
             _extract_table_fact_pairs(fact)
@@ -4579,6 +4655,7 @@ def _typed_table_fact_contract_previews(
                 value=value,
                 source_block_id=resolved_source_block_id,
                 caption=caption,
+                row_header_path=row_header_path,
                 header_path=header_path,
             )
             preview = contract_to_dict(table_fact)
