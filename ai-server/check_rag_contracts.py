@@ -6,11 +6,14 @@ import json
 
 from rag_contract_builders import (
     build_parsed_block,
+    build_query_intent,
     build_retrieval_chunk,
     build_section_node,
     build_source_citation,
     build_source_reference,
     build_source_block,
+    build_table_cell_fact,
+    infer_table_value_type,
     section_path_component_is_suspect,
     section_path_quality,
     section_path_warnings,
@@ -19,7 +22,6 @@ from rag_contracts import (
     Candidate,
     SelectedContext,
     SelectedContextItem,
-    TableFact,
     contract_to_dict,
 )
 
@@ -53,16 +55,27 @@ def build_contract_sample() -> dict:
         source_block,
         section,
     )
-    table_fact = TableFact(
-        fact_id="doc-sample:fact-001",
-        fact_type="row_cell",
-        table_id="doc-sample:table-001",
-        row_subject="Item A",
-        column_path=("Value",),
-        header_path=("Table Section",),
-        value="10",
+    table_fact = build_table_cell_fact(
+        document_id="sample",
+        table_index=1,
+        row_index=1,
+        column_index=1,
+        row_label="Item A",
+        column_label="Value",
+        value="10만 원",
         source_block_id=source_block.source_block_id,
+        caption="Table Section",
+        header_path=("Table Section",),
         confidence=0.95,
+    )
+    query_intent = build_query_intent(
+        query="원서 접수 비용은 얼마인가요?",
+        intent="cost",
+        subject_terms=("원서", "접수"),
+        primary_terms=("원서접수",),
+        context_terms=("원서", "접수", "비용", "얼마"),
+        intent_terms=("비용", "얼마"),
+        notes=("temporary rule-based bridge before QueryIntent runtime",),
     )
     candidate = Candidate(
         candidate_id="doc-sample:candidate-001",
@@ -104,6 +117,7 @@ def build_contract_sample() -> dict:
         "source_block": contract_to_dict(source_block),
         "retrieval_chunk": contract_to_dict(retrieval_chunk),
         "table_fact": contract_to_dict(table_fact),
+        "query_intent": contract_to_dict(query_intent),
         "candidate": contract_to_dict(candidate),
         "citation": contract_to_dict(citation),
         "source_reference": contract_to_dict(source_reference),
@@ -159,6 +173,21 @@ def main() -> None:
     ]
     assert decoded["retrieval_chunk"]["section_ids"] == [decoded["section"]["section_id"]]
     assert decoded["table_fact"]["source_block_id"] == decoded["source_block"]["source_block_id"]
+    assert decoded["table_fact"]["row_label"] == "Item A"
+    assert decoded["table_fact"]["column_label"] == "Value"
+    assert decoded["table_fact"]["value"] == "10만 원"
+    assert decoded["table_fact"]["value_type"] == "money"
+    assert decoded["table_fact"]["unit"] == "만원"
+    assert decoded["table_fact"]["caption"] == "Table Section"
+    assert decoded["query_intent"]["intent"] == "cost"
+    assert decoded["query_intent"]["subject_terms"] == ["원서", "접수"]
+    assert decoded["query_intent"]["primary_terms"] == ["원서접수"]
+    assert decoded["query_intent"]["intent_terms"] == ["비용", "얼마"]
+    assert decoded["query_intent"]["runtime_connection"] == "trace_only"
+    assert infer_table_value_type("30,000원") == ("money", "원")
+    assert infer_table_value_type("5천 원") == ("money", "천원")
+    assert infer_table_value_type("12명") == ("count", "명")
+    assert infer_table_value_type("2026.05.27") == ("date", None)
     assert decoded["selected_context"]["citation_ids"] == [decoded["citation"]["citation_id"]]
 
     suspect_metadata = {"Header 1": "423만원"}

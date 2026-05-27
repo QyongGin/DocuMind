@@ -111,14 +111,38 @@ class TableFact:
     fact_id: str
     fact_type: str
     table_id: str
-    row_subject: str
+    row_label: str
+    column_label: str
     value: str
     source_block_id: str
+    value_type: str = "text"
+    unit: str | None = None
+    row_index: int | None = None
+    column_index: int | None = None
     column_path: tuple[str, ...] = ()
     header_path: tuple[str, ...] = ()
+    caption: str | None = None
     legend: str | None = None
     note: str | None = None
     confidence: float | None = None
+
+
+@dataclass(frozen=True)
+class QueryIntent:
+    """A typed query-understanding result that can replace scattered heuristics."""
+
+    intent_id: str
+    query: str
+    intent: str | None
+    subject_terms: tuple[str, ...] = ()
+    primary_terms: tuple[str, ...] = ()
+    context_terms: tuple[str, ...] = ()
+    intent_terms: tuple[str, ...] = ()
+    extraction_method: str = "rule_based"
+    vocabulary_source: str = "INTENT_QUERY_TERMS"
+    runtime_connection: str = "trace_only"
+    confidence: float | None = None
+    notes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

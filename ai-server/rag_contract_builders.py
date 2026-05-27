@@ -16,11 +16,13 @@ from rag_contracts import (
     JsonValue,
     PageSpan,
     ParsedBlock,
+    QueryIntent,
     RetrievalChunk,
     SectionNode,
     SourceCitation,
     SourceBlock,
     SourceReference,
+    TableFact,
     TextSpan,
 )
 
@@ -152,6 +154,83 @@ def build_retrieval_chunk(
     )
 
 
+def build_table_cell_fact(
+    *,
+    document_id: str | int,
+    table_index: int,
+    row_index: int,
+    column_index: int,
+    row_label: str,
+    column_label: str,
+    value: str,
+    source_block_id: str,
+    caption: str | None = None,
+    column_path: Sequence[str] = (),
+    header_path: Sequence[str] = (),
+    fact_type: str = "cell",
+    confidence: float | None = None,
+) -> TableFact:
+    """Create a typed TableFact from one table cell and its row/column labels."""
+    cleaned_value = _clean_cell_text(value)
+    value_type, unit = infer_table_value_type(cleaned_value)
+    resolved_column_path = tuple(
+        str(part).strip()
+        for part in column_path
+        if str(part).strip()
+    )
+    if not resolved_column_path and column_label.strip():
+        resolved_column_path = (_clean_cell_text(column_label),)
+
+    return TableFact(
+        fact_id=_table_fact_id(document_id, table_index, row_index, column_index),
+        fact_type=fact_type,
+        table_id=_contract_id(document_id, "table", table_index),
+        row_label=_clean_cell_text(row_label) or "해당 행",
+        column_label=_clean_cell_text(column_label) or f"열 {column_index + 1}",
+        value=cleaned_value,
+        source_block_id=source_block_id,
+        value_type=value_type,
+        unit=unit,
+        row_index=row_index,
+        column_index=column_index,
+        column_path=resolved_column_path,
+        header_path=tuple(str(part).strip() for part in header_path if str(part).strip()),
+        caption=_clean_cell_text(caption or "") or None,
+        confidence=confidence,
+    )
+
+
+def build_query_intent(
+    *,
+    query: str,
+    intent: str | None,
+    subject_terms: Sequence[str] = (),
+    primary_terms: Sequence[str] = (),
+    context_terms: Sequence[str] = (),
+    intent_terms: Sequence[str] = (),
+    extraction_method: str = "rule_based",
+    vocabulary_source: str = "INTENT_QUERY_TERMS",
+    runtime_connection: str = "trace_only",
+    confidence: float | None = None,
+    notes: Sequence[str] = (),
+) -> QueryIntent:
+    """Create a typed QueryIntent from current query-analysis output."""
+    return QueryIntent(
+        intent_id=_query_intent_id(query),
+        query=query,
+        intent=intent,
+        subject_terms=_stable_terms(subject_terms),
+        primary_terms=_stable_terms(primary_terms),
+        context_terms=_stable_terms(context_terms),
+        intent_terms=_stable_terms(intent_terms),
+        extraction_method=extraction_method,
+        vocabulary_source=vocabulary_source,
+        runtime_connection=runtime_connection,
+        confidence=confidence,
+        notes=tuple(str(note).strip() for note in notes if str(note).strip()),
+    )
+
+
 def build_section_node(parsed_block: ParsedBlock) -> SectionNode | None:
     """Create a SectionNode from Header 1..6 metadata when a path exists."""
     path = header_path_from_metadata(parsed_block.metadata)
@@ -238,8 +317,38 @@ def sanitize_metadata(metadata: Mapping[str, Any]) -> dict[str, JsonValue]:
     return safe
 
 
+def infer_table_value_type(value: str) -> tuple[str, str | None]:
+    """Infer a coarse value type and unit from a table cell value."""
+    text = _clean_cell_text(value)
+    money_match = _MONEY_VALUE_PATTERN.search(text)
+    if money_match:
+        scale = money_match.group("scale") or ""
+        return "money", f"{scale}원" if scale else "원"
+    if _COUNT_VALUE_PATTERN.fullmatch(text):
+        return "count", "명"
+    if _DATE_VALUE_PATTERN.search(text):
+        return "date", None
+    if _NUMBER_VALUE_PATTERN.fullmatch(text):
+        return "number", None
+    return "text", None
+
+
 def _contract_id(document_id: str | int, kind: str, index: int) -> str:
     return f"doc-{document_id}:{kind}-{index:06d}"
+
+
+def _table_fact_id(
+    document_id: str | int,
+    table_index: int,
+    row_index: int,
+    column_index: int,
+) -> str:
+    return f"doc-{document_id}:table-{table_index:06d}:r{row_index:04d}:c{column_index:04d}"
+
+
+def _query_intent_id(query: str) -> str:
+    query_digest = sha1(str(query or "").strip().encode("utf-8")).hexdigest()[:12]
+    return f"query-intent-{query_digest}"
 
 
 def _section_id(document_id: str | int, path: tuple[str, ...]) -> str:
@@ -302,6 +411,14 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
+def _clean_cell_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").replace("<br>", " ")).strip()
+
+
+def _stable_terms(terms: Sequence[str]) -> tuple[str, ...]:
+    return tuple(sorted({str(term).strip() for term in terms if str(term).strip()}))
+
+
 class _Unsupported:
     pass
 
@@ -335,6 +452,10 @@ _SECTION_PATH_COMPONENT_BLOCKING_WARNINGS = {
     "numeric_value_section_component",
     "table_markup_section_component",
 }
+_MONEY_VALUE_PATTERN = re.compile(r"\d[\d,]*(?:\.\d+)?\s*(?P<scale>천|만|억|조)?\s*원")
+_COUNT_VALUE_PATTERN = re.compile(r"\d[\d,]*\s*명")
+_DATE_VALUE_PATTERN = re.compile(r"\d{4}[.-]\d{1,2}(?:[.-]\d{1,2})?")
+_NUMBER_VALUE_PATTERN = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 
 def _to_safe_json_value(value: Any) -> JsonValue | _Unsupported:
