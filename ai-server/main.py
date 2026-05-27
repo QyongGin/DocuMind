@@ -2163,14 +2163,17 @@ MANDATORY_RAG_PROMPT = (
     "1. 반드시 [검색 근거]에 있는 내용만 사용한다.\n"
     "2. [검색 근거]에 없는 절차, 조건, 날짜, 숫자, 서류, 주의사항, 조언은 만들지 않는다.\n"
     "3. 질문이 방법, 절차, 주의사항을 묻는 경우 [검색 근거]의 절차, 유의사항, 안내 문구를 우선 추출한다.\n"
-    "4. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다.\n"
-    "5. 표에서 숫자, 날짜, 인원, 점수, 기간을 답할 때는 질문의 행 이름과 열 이름에 직접 대응하는 값만 사용한다.\n"
-    "6. 여러 표가 검색되면 질문의 단어와 가장 많이 겹치는 표 제목, 행 이름, 열 이름을 가진 근거를 우선한다.\n"
-    "7. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
-    "8. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
-    "9. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
-    "10. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다.\n"
-    "11. '제공된 문서에서는 확인할 수 없습니다.'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."
+    "4. 검색 근거에 '구조화 표 값 근거'가 있으면 원본 표와 발췌보다 먼저 사용해 표 제목, 행, 열, 값을 판단한다.\n"
+    "5. 구조화 표 값 근거에 질문 의도와 맞는 값이 있으면 '확인할 수 없습니다'라고 답하지 말고 그 값을 그대로 답한다.\n"
+    "6. 여러 행/열 값이 있으면 하나로 합치지 말고 행 이름과 열 이름별로 나눠 답한다.\n"
+    "7. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다.\n"
+    "8. 표에서 숫자, 날짜, 인원, 점수, 기간을 답할 때는 질문의 행 이름과 열 이름에 직접 대응하는 값만 사용한다.\n"
+    "9. 여러 표가 검색되면 질문의 단어와 가장 많이 겹치는 표 제목, 행 이름, 열 이름을 가진 근거를 우선한다.\n"
+    "10. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
+    "11. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
+    "12. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
+    "13. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다.\n"
+    "14. '제공된 문서에서는 확인할 수 없습니다.'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."
 )
 
 
@@ -3821,6 +3824,93 @@ def _score_query_evidence_facts(text: str, analysis: QueryAnalysis, meta: dict |
     return base_score + min(len(facts) - 1, 4) * 25
 
 
+def _typed_table_fact_preview_matches_query(preview: dict, analysis: QueryAnalysis) -> bool:
+    """typed TableFact preview가 질문 의도에 직접 답할 값인지 확인한다."""
+    if not analysis.intent:
+        return False
+
+    value = str(preview.get("value") or "").strip()
+    value_type = str(preview.get("value_type") or "").strip()
+    fact_text = " ".join(
+        str(preview.get(key) or "").strip()
+        for key in ("caption", "row_label", "column_label", "value")
+        if str(preview.get(key) or "").strip()
+    )
+
+    if analysis.intent == "cost":
+        return value_type == "money" or "무료" in value
+    if analysis.intent == "count":
+        return value_type in {"count", "number"} and _line_has_intent_evidence(fact_text, analysis)
+    if analysis.intent in {"schedule", "time"} and value_type == "date":
+        return True
+    return _line_has_intent_evidence(fact_text, analysis)
+
+
+def _should_include_structured_table_value_evidence(doc: str, meta: dict, analysis: QueryAnalysis) -> bool:
+    """표 값 근거는 후보 chunk가 질문 subject와 연결될 때만 노출한다."""
+    if not analysis.intent:
+        return False
+    if analysis.intent != "cost":
+        return True
+    if _allow_cost_table_subject_fallback(doc, meta, analysis):
+        return True
+    fact_text = "\n".join(_get_matched_table_facts(meta))
+    return bool(fact_text and _subject_strongly_matches_text(fact_text, analysis))
+
+
+def _format_structured_table_value_evidence(
+    chunk_id: str,
+    doc: str,
+    meta: dict,
+    analysis: QueryAnalysis,
+    max_facts: int = 8,
+) -> str:
+    """runtime table facts를 LLM이 바로 읽을 수 있는 행/열/값 근거로 포맷한다."""
+    if not _should_include_structured_table_value_evidence(doc, meta, analysis):
+        return ""
+
+    source_block_id = str(meta.get("source_block_id") or meta.get("source_lookup_id") or chunk_id)
+    previews = _typed_table_fact_contract_previews(
+        str(chunk_id),
+        doc,
+        meta,
+        source_block_id,
+        max_facts=max_facts * 2,
+    )
+
+    lines: list[str] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for preview in previews:
+        if not _typed_table_fact_preview_matches_query(preview, analysis):
+            continue
+
+        caption = str(preview.get("caption") or "").strip()
+        row_label = str(preview.get("row_label") or "").strip()
+        column_label = str(preview.get("column_label") or "").strip()
+        value = str(preview.get("value") or "").strip()
+        if not value:
+            continue
+
+        dedupe_key = (caption, row_label, column_label, value)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        parts = []
+        if caption:
+            parts.append(f"표 제목: {caption}")
+        if row_label:
+            parts.append(f"행: {row_label}")
+        if column_label:
+            parts.append(f"열: {column_label}")
+        parts.append(f"값: {value}")
+        lines.append(f"- {' / '.join(parts)}")
+        if len(lines) >= max_facts:
+            break
+
+    return "\n".join(lines)
+
+
 def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analysis: QueryAnalysis) -> str:
     """LLM이 검색 근거 단위를 구분할 수 있도록 출처 metadata와 청크 본문을 함께 포맷한다."""
     source_name = str(meta.get("source", "")).strip() or "알 수 없는 문서"
@@ -3846,11 +3936,13 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     matched_table_facts = _get_matched_table_facts(meta)
     fact_text = "\n".join(matched_table_facts)
 
+    structured_table_evidence = _format_structured_table_value_evidence(chunk_id, doc, meta, analysis)
+    structured_table_block = f"\n구조화 표 값 근거:\n{structured_table_evidence}" if structured_table_evidence else ""
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
     if relevant_excerpt:
-        return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
-    return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n전체 내용:\n{doc.strip()}"
+        return f"[출처 {index}]\n{metadata}{structured_table_block}{evidence_fact_block}{table_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
+    return f"[출처 {index}]\n{metadata}{structured_table_block}{evidence_fact_block}{table_fact_block}\n전체 내용:\n{doc.strip()}"
 
 
 def _build_context(docs: list[str], metadatas: list[dict], ids: list[str], analysis: QueryAnalysis) -> str:
@@ -4141,9 +4233,11 @@ def _build_rag_prompt(system_prompt: str | None, context: str, question: str) ->
 
 [답변 직전 확인]
 - 답변은 [검색 근거]에 직접 적힌 내용만 사용한다.
-- [검색 근거]의 '질문 의도 추출 정보'가 있으면 답변에 가장 먼저 사용한다.
+- [검색 근거]의 '구조화 표 값 근거'가 있으면 답변에 가장 먼저 사용한다.
+- 구조화 표 값 근거에 여러 값이 있으면 행 이름과 열 이름별로 나눠 답한다.
+- [검색 근거]의 '질문 의도 추출 정보'는 구조화 표 값 근거 다음으로 사용한다.
 - [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다.
-- [검색 근거]의 '질문 관련 발췌'가 있으면 그 발췌에 직접 적힌 항목만 우선 사용한다.
+- [검색 근거]의 '질문 관련 발췌'는 구조화 표 값 근거와 질문 의도 추출 정보가 없을 때 우선 사용한다.
 - 질문 단어와 일치하는 섹션 제목이 있으면 해당 섹션 아래 내용만 답변한다.
 - 같은 청크 안에 다른 섹션이 있어도 질문과 맞지 않으면 답변에 섞지 않는다.
 - 근거에 없는 일반적인 대학 행정 절차나 조언은 쓰지 않는다.
