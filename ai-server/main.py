@@ -174,6 +174,10 @@ _MD_HEADERS = [
     ("#####", "Header 5"),
     ("######", "Header 6"),
 ]
+HEADER_METADATA_KEYS = tuple(header_key for _, header_key in _MD_HEADERS)
+SOURCE_RESPONSE_AREA_HEADER_PATTERN = re.compile(
+    r"^[\d\s,./~:·ㆍ+-]+(?:㎡|m²|M²|m2|M2|제곱미터|평)$"
+)
 _md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_MD_HEADERS, strip_headers=False)
 
 # 2단계: CHUNK_SIZE 초과 청크만 재분할. 내장 overlap은 서로 다른 헤더 구간 간 미적용 버그가
@@ -2342,10 +2346,30 @@ def _format_header_path(meta: dict) -> str:
     """검색 근거 context에 넣을 Markdown header 경로를 만든다."""
     headers = [
         str(meta.get(header_key, "")).strip()
-        for header_key in ("Header 1", "Header 2", "Header 3", "Header 4", "Header 5", "Header 6")
+        for header_key in HEADER_METADATA_KEYS
         if str(meta.get(header_key, "")).strip()
     ]
     return " > ".join(headers)
+
+
+def _source_response_header_metadata(meta: dict) -> dict[str, object]:
+    """사용자 source 응답에는 표 값처럼 보이는 header component를 노출하지 않는다."""
+    headers: dict[str, object] = {}
+    for header_key in HEADER_METADATA_KEYS:
+        value = meta.get(header_key)
+        if value is None:
+            continue
+
+        text = str(value).strip()
+        if (
+            not text
+            or section_path_component_is_suspect(text)
+            or SOURCE_RESPONSE_AREA_HEADER_PATTERN.fullmatch(text)
+        ):
+            continue
+
+        headers[header_key] = value
+    return headers
 
 
 def _format_chunk_label(meta: dict, chunk_id: str) -> str:
@@ -5084,7 +5108,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
     prompt = _build_rag_prompt(system_prompt, context, question)
 
-    # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 헤더 메타데이터 포함
+    # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 사용자 표시용 헤더 포함
     sources = []
     source_chars = [len(doc) for doc in docs]
     source_lookup_ids = [
@@ -5104,10 +5128,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             # 청크 전체를 반환하면 응답이 너무 커지므로 200자 미리보기만 포함
             "content": _source_preview_content(doc, meta, source_block_cache=source_block_cache, analysis=analysis)
         }
-        # MarkdownHeaderTextSplitter가 부여한 헤더 메타데이터(Header 1, Header 2 등)를 함께 반환
-        for k, v in meta.items():
-            if k.startswith("Header"):
-                source[k] = v
+        source.update(_source_response_header_metadata(meta))
         sources.append(source)
 
     context_build_elapsed = time.perf_counter() - context_build_start
