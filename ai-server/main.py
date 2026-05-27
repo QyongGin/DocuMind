@@ -21,15 +21,18 @@ from threading import Lock
 
 from rag_contract_builders import (
     build_parsed_block,
+    build_query_intent,
     build_retrieval_chunk,
     build_section_node,
     build_source_block,
     build_source_citation,
     build_source_reference,
+    build_table_cell_fact,
     section_path_component_is_suspect,
     section_path_quality,
     section_path_warnings,
 )
+from rag_contracts import contract_to_dict
 
 try:
     from kiwipiepy import Kiwi
@@ -4419,6 +4422,79 @@ def _source_reference_collection(source_collection: str):
     return None
 
 
+def _query_intent_contract_preview(question: str, analysis: QueryAnalysis) -> dict:
+    """현재 rule 기반 질문 분석 결과를 QueryIntent contract preview로 노출한다."""
+    _, intent_terms = _extract_lexical_query_terms(question)
+    query_intent = build_query_intent(
+        query=question,
+        intent=analysis.intent,
+        subject_terms=analysis.subject_terms,
+        primary_terms=analysis.primary_terms,
+        context_terms=analysis.context_terms,
+        intent_terms=intent_terms,
+        extraction_method="rule_based",
+        vocabulary_source="INTENT_QUERY_TERMS",
+        runtime_connection="trace_only",
+        notes=("current runtime still uses QueryAnalysis",),
+    )
+    return contract_to_dict(query_intent)
+
+
+def _typed_table_fact_contract_previews(
+    chunk_id: str,
+    doc: str,
+    meta: dict,
+    source_block_id: str,
+    max_facts: int = 8,
+) -> list[dict]:
+    """runtime table_fact 문자열을 typed TableFact preview로 변환한다."""
+    facts = _get_matched_table_facts(meta)
+    fact_source = "matched_table_facts"
+    if not facts and meta.get("chunk_role") == "table_fact":
+        facts = [doc.strip()] if doc.strip() else []
+        fact_source = "candidate_table_fact_document"
+    elif not facts and "|" in doc:
+        facts = _extract_table_facts(doc, meta)
+        fact_source = "extracted_from_candidate_doc"
+
+    header_path = tuple(
+        str(meta.get(header_key) or "").strip()
+        for header_key in HEADER_METADATA_KEYS
+        if str(meta.get(header_key) or "").strip()
+    )
+    table_index = _contract_block_index(chunk_id, meta)
+    resolved_source_block_id = str(meta.get("source_block_id") or source_block_id)
+    previews: list[dict] = []
+    for row_index, fact in enumerate(facts):
+        row_label = _extract_table_fact_row_subject(fact)
+        if not row_label:
+            continue
+        caption = fact.split(":", 1)[0].strip() if ":" in fact else None
+        for column_index, (column_label, value) in enumerate(
+            _extract_table_fact_pairs(fact)
+        ):
+            if not value or _is_table_label_key(column_label):
+                continue
+            table_fact = build_table_cell_fact(
+                document_id=meta.get("document_id", ""),
+                table_index=table_index,
+                row_index=row_index,
+                column_index=column_index,
+                row_label=row_label,
+                column_label=column_label,
+                value=value,
+                source_block_id=resolved_source_block_id,
+                caption=caption,
+                header_path=header_path,
+            )
+            preview = contract_to_dict(table_fact)
+            preview["preview_source"] = fact_source
+            previews.append(preview)
+            if len(previews) >= max_facts:
+                return previews
+    return previews
+
+
 def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: int = 240) -> dict:
     """현재 trace 후보를 ParsedBlock/SourceBlock 진단 preview로 변환한다."""
     meta = meta or {}
@@ -4448,6 +4524,12 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
         )
         page_span = source_block.page_span
         section_path = list(section_node.path) if section_node else []
+        typed_table_facts = _typed_table_fact_contract_previews(
+            str(chunk_id),
+            doc,
+            meta,
+            source_block.source_block_id,
+        )
         return {
             "parsed_block_id": parsed_block.block_id,
             "source_block_id": source_block.source_block_id,
@@ -4501,6 +4583,7 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
                 retrieval_text=retrieval_chunk.retrieval_text,
                 preview_chars=preview_chars,
             ),
+            "typed_table_facts": typed_table_facts,
         }
     except Exception:
         logger.exception("[rag_contract_preview] failed chunk_id=%s", chunk_id)
@@ -5063,6 +5146,9 @@ def _trace_query_retrieval(
             "subject_terms": sorted(analysis.subject_terms),
             "primary_terms": sorted(analysis.primary_terms),
             "context_terms": sorted(analysis.context_terms),
+        },
+        "contract_preview": {
+            "query_intent": _query_intent_contract_preview(question, analysis),
         },
         "query_vector": {
             "dimension": len(question_vector),
