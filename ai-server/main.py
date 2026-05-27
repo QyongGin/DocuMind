@@ -3858,20 +3858,73 @@ def _load_source_block_texts(source_lookup_ids: list[str]) -> dict[str, tuple[st
     return loaded
 
 
-def _fallback_source_preview_text(doc: str, meta: dict) -> str:
+def _source_preview_evidence_texts(meta: dict) -> list[str]:
+    """source preview line 선택에 사용할 runtime evidence text를 모은다."""
+    evidence_texts: list[str] = []
+    evidence_texts.extend(_get_matched_table_facts(meta))
+    query_evidence_facts = meta.get("query_evidence_facts")
+    if isinstance(query_evidence_facts, list):
+        evidence_texts.extend(str(fact) for fact in query_evidence_facts)
+    elif query_evidence_facts:
+        evidence_texts.append(str(query_evidence_facts))
+    return evidence_texts
+
+
+def _source_preview_value_terms(meta: dict) -> set[str]:
+    """금액/수치처럼 사용자가 확인하려는 값을 먼저 찾기 위한 term 후보를 만든다."""
+    terms: set[str] = set()
+    for text in _source_preview_evidence_texts(meta):
+        for token in re.findall(r"[0-9][0-9,]*(?:원|만원|명|점|%)?", text):
+            normalized_token = token.strip().lower()
+            if len(normalized_token) >= 2:
+                terms.add(normalized_token)
+    return terms
+
+
+def _source_preview_candidate_terms(meta: dict, analysis: QueryAnalysis | None) -> set[str]:
+    """SourceBlock raw text에서 사용자에게 보여줄 관련 line을 찾기 위한 term 후보를 만든다."""
+    terms: set[str] = set()
+    if analysis is not None:
+        terms.update(analysis.primary_terms)
+        terms.update(analysis.context_terms)
+        terms.update(analysis.subject_terms)
+
+    for text in _source_preview_evidence_texts(meta):
+        for token in re.findall(r"[0-9][0-9,]*(?:원|만원|명|점|%)?|[A-Za-z가-힣]{2,}", text):
+            normalized_token = token.strip().lower()
+            if len(normalized_token) >= 2:
+                terms.add(normalized_token)
+    return terms
+
+
+def _source_relevant_excerpt(text: str, meta: dict, analysis: QueryAnalysis | None, preview_chars: int) -> str:
+    """SourceBlock raw text 안에서 질문/근거와 가까운 원문 excerpt를 고른다."""
+    value_terms = _source_preview_value_terms(meta)
+    value_excerpt = _select_relevant_excerpt(text, value_terms, window=2, max_lines=8)
+    if value_excerpt:
+        return value_excerpt[:preview_chars]
+
+    terms = _source_preview_candidate_terms(meta, analysis)
+    excerpt = _select_relevant_excerpt(text, terms, window=2, max_lines=8)
+    if excerpt:
+        return excerpt[:preview_chars]
+    return str(text)[:preview_chars]
+
+
+def _fallback_source_preview_text(doc: str, meta: dict, analysis: QueryAnalysis | None = None, preview_chars: int = 200) -> str:
     """source_blocks 조회 실패 시 기존 runtime text로 돌아가되 table_fact는 부모 원문을 우선한다."""
     if meta.get("chunk_role") == "table_fact":
         parent_content = str(meta.get("parent_content") or "").strip()
         if parent_content:
-            return parent_content
+            return _source_relevant_excerpt(parent_content, meta, analysis, preview_chars)
 
         parent_chunk_id = str(meta.get("parent_chunk_id") or "").strip()
         if parent_chunk_id:
             parent_doc, _ = _load_parent_chunk(parent_chunk_id)
             if parent_doc:
-                return str(parent_doc)
+                return _source_relevant_excerpt(str(parent_doc), meta, analysis, preview_chars)
 
-    return str(doc)
+    return _source_relevant_excerpt(str(doc), meta, analysis, preview_chars)
 
 
 def _source_preview_content(
@@ -3879,6 +3932,7 @@ def _source_preview_content(
     meta: dict,
     preview_chars: int = 200,
     source_block_cache: dict[str, tuple[str, dict]] | None = None,
+    analysis: QueryAnalysis | None = None,
 ) -> str:
     """사용자에게 보여줄 source preview를 검색용 doc이 아니라 SourceBlock 원문 기준으로 만든다."""
     source_lookup_id = str(meta.get("source_lookup_id") or "").strip()
@@ -3888,9 +3942,9 @@ def _source_preview_content(
         else:
             source_text, _ = source_block_cache.get(source_lookup_id, (None, None))
         if source_text:
-            return source_text[:preview_chars]
+            return _source_relevant_excerpt(source_text, meta, analysis, preview_chars)
 
-    return _fallback_source_preview_text(doc, meta)[:preview_chars]
+    return _fallback_source_preview_text(doc, meta, analysis, preview_chars)
 
 
 def _build_parent_metadata_from_fact(fact_meta: dict) -> dict:
@@ -5048,7 +5102,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "page_end": meta.get("page_end"),
             "chunk_index": meta.get("chunk_index", _parse_chunk_index(chunk_id)),
             # 청크 전체를 반환하면 응답이 너무 커지므로 200자 미리보기만 포함
-            "content": _source_preview_content(doc, meta, source_block_cache=source_block_cache)
+            "content": _source_preview_content(doc, meta, source_block_cache=source_block_cache, analysis=analysis)
         }
         # MarkdownHeaderTextSplitter가 부여한 헤더 메타데이터(Header 1, Header 2 등)를 함께 반환
         for k, v in meta.items():
