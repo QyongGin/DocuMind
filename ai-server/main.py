@@ -2175,10 +2175,6 @@ QUERY_TERM_SYNONYMS = {
     "방법": {"방법", "절차", "신청", "신청절차", "제출"},
     "주의사항": {"주의사항", "유의사항", "유의", "주의"},
     "전과": {"전과", "전과제도", "전과시행"},
-    "비용": {"비용", "금액", "요금", "가격"},
-    "금액": {"금액", "비용", "요금", "가격"},
-    "요금": {"요금", "비용", "금액", "가격"},
-    "가격": {"가격", "비용", "금액", "요금"},
     "모집": {"모집", "모집인원", "모집정원", "정원"},
     "인원": {"인원", "모집인원", "모집정원", "정원"},
     "정원": {"정원", "모집인원", "모집정원", "인원"},
@@ -2205,7 +2201,7 @@ QUERY_WEAK_SUBJECT_TERMS = {
 QUERY_TABLE_INTENT_TERMS = {
     "값", "수치", "공식", "수식", "상수", "계수", "인원", "정원", "모집", "모집인원", "모집정원",
     "점수", "가산점", "등급", "기간", "날짜", "일정", "서류", "자격", "학과", "과목", "항목",
-    "복장", "상의", "하의", "신발", "비용", "금액", "얼마", "요금", "가격", "납부", "원", "무료",
+    "복장", "상의", "하의", "신발",
 }
 QUERY_LIST_COLLECTION_TERMS = {"학과", "과목", "서류", "시설", "항목", "종류", "전형", "대상"}
 QUERY_COLLECTION_WHERE_TERMS = {"학과", "과목", "서류", "항목", "종류", "전형", "대상"}
@@ -2469,16 +2465,23 @@ def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
     subject_terms: set[str] = set()
     intent_terms: set[str] = set()
     normalized_question = _compact_search_text(question)
+    raw_tokens = [token.strip().lower() for token in re.findall(r"[0-9A-Za-z가-힣]+", question)]
+    normalized_tokens = [_normalize_query_token(token) for token in raw_tokens]
+    detected_intent = _detect_query_intent(
+        question,
+        [token for token in normalized_tokens if len(token) >= 2],
+    )
+    table_intent_terms = set(QUERY_TABLE_INTENT_TERMS)
+    if detected_intent:
+        table_intent_terms.update(INTENT_QUERY_TERMS.get(detected_intent, set()))
 
-    for token in re.findall(r"[0-9A-Za-z가-힣]+", question):
-        raw_token = token.strip().lower()
-        normalized = _normalize_query_token(raw_token)
-        if len(normalized) < 2 and normalized not in QUERY_TABLE_INTENT_TERMS:
+    for raw_token, normalized in zip(raw_tokens, normalized_tokens):
+        if len(normalized) < 2 and normalized not in table_intent_terms:
             continue
 
         expanded_terms = {raw_token, normalized}
         expanded_terms.update(QUERY_TERM_SYNONYMS.get(normalized, set()))
-        if expanded_terms & QUERY_TABLE_INTENT_TERMS:
+        if expanded_terms & table_intent_terms:
             intent_terms.update(term for term in expanded_terms if len(term) >= 2)
         else:
             subject_terms.update(term for term in expanded_terms if len(term) >= 3 and term not in QUERY_GENERIC_TERMS)
@@ -3177,7 +3180,7 @@ def _derive_table_legend_list_evidence_facts(facts: list[str], analysis: QueryAn
     return evidence_facts
 
 
-def _derive_cost_table_evidence_facts(facts: list[str]) -> list[str]:
+def _derive_money_table_evidence_facts(facts: list[str]) -> list[str]:
     """금액 값이 들어 있는 표 행을 column label과 함께 직접 근거로 만든다."""
     evidence_facts: list[str] = []
     seen_facts: set[str] = set()
@@ -3211,7 +3214,7 @@ def _derive_query_table_evidence_facts(facts: list[str], analysis: QueryAnalysis
         return legend_list_evidence
 
     if analysis.intent == "cost":
-        return _derive_cost_table_evidence_facts(facts)
+        return _derive_money_table_evidence_facts(facts)
 
     subject_related = any(_subject_strongly_matches_text(fact, analysis) for fact in facts)
     if not subject_related:
