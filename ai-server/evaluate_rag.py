@@ -114,6 +114,54 @@ def _keyword_list(case: dict, key: str) -> list[str]:
     return [str(item) for item in _as_list(case.get(key)) if str(item).strip()]
 
 
+def _unique_strings(value: Any) -> list[str]:
+    items = []
+    for item in _as_list(value):
+        text = str(item).strip()
+        if text and text not in items:
+            items.append(text)
+    return items
+
+
+def _append_unique(items: list[str], value: str) -> None:
+    if value not in items:
+        items.append(value)
+
+
+def _case_failure_axes(case: dict) -> list[str]:
+    """Return #73 failure axes for a case, with fallback for older question records."""
+    axes = _unique_strings(case.get("failure_axes"))
+    category = str(case.get("category") or "")
+    group = str(case.get("group") or "")
+
+    if not axes:
+        if group == "p0_scope" or "scope" in category:
+            _append_unique(axes, "scope_loss")
+        if group == "p0_retrieval" or "retrieval" in category:
+            _append_unique(axes, "retrieval_miss")
+        if group == "p0_source" or "source_contamination" in category:
+            _append_unique(axes, "source_contamination")
+        if group == "p0_table" or "table" in category:
+            _append_unique(axes, "table_relation_loss")
+        if "generation" in category:
+            _append_unique(axes, "generation_grounding")
+
+    if case.get("unsupported"):
+        _append_unique(axes, "unsupported_handling")
+
+    return axes or ["unclassified"]
+
+
+def _filter_values(values: list[str]) -> set[str]:
+    filters = set()
+    for value in values:
+        for item in str(value).split(","):
+            item = item.strip()
+            if item:
+                filters.add(item)
+    return filters
+
+
 def _stringify(value: Any) -> str:
     if value is None:
         return ""
@@ -470,8 +518,18 @@ def _load_cases(path: Path) -> list[dict]:
     return cases
 
 
-def _select_cases(cases: list[dict], case_ids: set[str], limit: int | None) -> list[dict]:
-    selected = [case for case in cases if not case_ids or str(case.get("id")) in case_ids]
+def _select_cases(
+    cases: list[dict],
+    case_ids: set[str],
+    failure_axes: set[str],
+    limit: int | None,
+) -> list[dict]:
+    selected = [
+        case
+        for case in cases
+        if (not case_ids or str(case.get("id")) in case_ids)
+        and (not failure_axes or bool(set(_case_failure_axes(case)) & failure_axes))
+    ]
     if limit is not None:
         return selected[:limit]
     return selected
@@ -503,6 +561,7 @@ def _run_single_question(args: argparse.Namespace, case: dict, variant_name: str
         "variant": variant_name,
         "category": case.get("category", "uncategorized"),
         "group": case.get("group"),
+        "failure_axes": _case_failure_axes(case),
         "question": question,
         "top_k": top_k,
         "overall_pass": overall_pass,
@@ -514,7 +573,8 @@ def _run_single_question(args: argparse.Namespace, case: dict, variant_name: str
 
 
 def _run_evaluation(args: argparse.Namespace) -> dict:
-    cases = _select_cases(_load_cases(args.questions), set(args.case_id), args.limit)
+    axis_filter = _filter_values(args.axis)
+    cases = _select_cases(_load_cases(args.questions), set(args.case_id), axis_filter, args.limit)
     results = []
     for case in cases:
         for variant_name, variant_case, question in _question_variants(case):
@@ -527,6 +587,7 @@ def _run_evaluation(args: argparse.Namespace) -> dict:
                         "variant": variant_name,
                         "category": variant_case.get("category", "uncategorized"),
                         "group": variant_case.get("group"),
+                        "failure_axes": _case_failure_axes(variant_case),
                         "question": question,
                         "overall_pass": False,
                         "trace_pass": False,
@@ -540,11 +601,43 @@ def _run_evaluation(args: argparse.Namespace) -> dict:
         "base_url": args.base_url,
         "questions_path": str(args.questions),
         "include_query": args.include_query,
+        "axis_filter": sorted(axis_filter),
         "case_count": len(cases),
         "question_count": len(results),
         "summary": _build_summary(results),
         "results": results,
     }
+
+
+def _new_summary_bucket() -> dict:
+    return {
+        "total": 0,
+        "overall_pass": 0,
+        "trace_pass": 0,
+        "answer_evaluated": 0,
+        "answer_pass": 0,
+    }
+
+
+def _add_summary_result(bucket: dict, result: dict) -> None:
+    bucket["total"] += 1
+    bucket["overall_pass"] += 1 if result.get("overall_pass") is True else 0
+    bucket["trace_pass"] += 1 if result.get("trace_pass") is True else 0
+    if result.get("answer_pass") is not None:
+        bucket["answer_evaluated"] += 1
+        bucket["answer_pass"] += 1 if result.get("answer_pass") is True else 0
+
+
+def _add_summary_rates(buckets: dict[str, dict]) -> dict[str, dict]:
+    for item in buckets.values():
+        total = item["total"]
+        answer_evaluated = item["answer_evaluated"]
+        item["overall_pass_rate"] = round(item["overall_pass"] / total, 4) if total else 0
+        item["trace_pass_rate"] = round(item["trace_pass"] / total, 4) if total else 0
+        item["answer_pass_rate"] = (
+            round(item["answer_pass"] / answer_evaluated, 4) if answer_evaluated else None
+        )
+    return buckets
 
 
 def _build_summary(results: list[dict]) -> dict:
@@ -557,17 +650,14 @@ def _build_summary(results: list[dict]) -> dict:
     answer_passes = sum(1 for result in answer_evaluated if result.get("answer_pass") is True)
     by_category: dict[str, dict] = {}
     by_group: dict[str, dict] = {}
+    by_failure_axis: dict[str, dict] = {}
     for result in results:
         category = str(result.get("category") or "uncategorized")
-        item = by_category.setdefault(category, {"total": 0, "overall_pass": 0, "trace_pass": 0})
-        item["total"] += 1
-        item["overall_pass"] += 1 if result.get("overall_pass") is True else 0
-        item["trace_pass"] += 1 if result.get("trace_pass") is True else 0
+        _add_summary_result(by_category.setdefault(category, _new_summary_bucket()), result)
         group = str(result.get("group") or "ungrouped")
-        group_item = by_group.setdefault(group, {"total": 0, "overall_pass": 0, "trace_pass": 0})
-        group_item["total"] += 1
-        group_item["overall_pass"] += 1 if result.get("overall_pass") is True else 0
-        group_item["trace_pass"] += 1 if result.get("trace_pass") is True else 0
+        _add_summary_result(by_group.setdefault(group, _new_summary_bucket()), result)
+        for axis in result.get("failure_axes") or ["unclassified"]:
+            _add_summary_result(by_failure_axis.setdefault(str(axis), _new_summary_bucket()), result)
 
     return {
         "total": total,
@@ -578,8 +668,9 @@ def _build_summary(results: list[dict]) -> dict:
         "answer_evaluated": len(answer_evaluated),
         "answer_pass": answer_passes,
         "answer_pass_rate": round(answer_passes / len(answer_evaluated), 4) if answer_evaluated else None,
-        "by_category": by_category,
-        "by_group": by_group,
+        "by_category": _add_summary_rates(by_category),
+        "by_group": _add_summary_rates(by_group),
+        "by_failure_axis": _add_summary_rates(by_failure_axis),
     }
 
 
@@ -597,6 +688,7 @@ def _write_csv(path: Path, data: dict) -> None:
         "variant",
         "category",
         "group",
+        "failure_axes",
         "overall_pass",
         "trace_pass",
         "answer_pass",
@@ -627,6 +719,7 @@ def _write_csv(path: Path, data: dict) -> None:
             row = dict(result)
             for key in (
                 "selected_retrieval_methods",
+                "failure_axes",
                 "missing_evidence_keywords",
                 "forbidden_evidence_hits",
                 "missing_trace_source_content_keywords",
@@ -655,10 +748,19 @@ def _print_summary(data: dict) -> None:
             f"Answer checks: {summary['answer_pass']}/{summary['answer_evaluated']} "
             f"({summary['answer_pass_rate']:.2%})"
         )
+    if summary.get("by_failure_axis"):
+        print("By failure axis:")
+        for axis, item in sorted(summary["by_failure_axis"].items()):
+            print(
+                f"- {axis}: overall {item['overall_pass']}/{item['total']} "
+                f"({item['overall_pass_rate']:.2%}), trace {item['trace_pass']}/{item['total']} "
+                f"({item['trace_pass_rate']:.2%})"
+            )
     failed = [result for result in data["results"] if result.get("overall_pass") is not True]
     if failed:
         print("Failed cases:")
         for result in failed[:20]:
+            axes = ", ".join(result.get("failure_axes") or [])
             reason = (
                 result.get("error")
                 or ", ".join(result.get("missing_evidence_keywords", []))
@@ -674,7 +776,8 @@ def _print_summary(data: dict) -> None:
                 or ", ".join(result.get("forbidden_source_content_hits", []))
                 or "answer/citation check failed"
             )
-            print(f"- {result.get('id')} [{result.get('variant')}]: {reason}")
+            axis_label = f" ({axes})" if axes else ""
+            print(f"- {result.get('id')} [{result.get('variant')}]{axis_label}: {reason}")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -685,6 +788,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--csv-output", type=Path)
     parser.add_argument("--top-k", type=int)
     parser.add_argument("--case-id", action="append", default=[])
+    parser.add_argument("--axis", action="append", default=[], help="Filter by #73 failure axis. Repeat or use commas.")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--include-query", action="store_true")
     parser.add_argument("--system-prompt")

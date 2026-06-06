@@ -32,7 +32,7 @@ from rag_contract_builders import (
     section_path_quality,
     section_path_warnings,
 )
-from rag_contracts import contract_to_dict
+from rag_contracts import SelectedContext, SelectedContextItem, contract_to_dict
 
 try:
     from kiwipiepy import Kiwi
@@ -780,8 +780,8 @@ def _extract_table_caption(text: str, metadata: dict) -> str:
             continue
         if _is_markdown_table_line(stripped):
             break
-        if stripped.startswith("######"):
-            caption_candidates.append(stripped.lstrip("#").strip())
+        if re.match(r"^#{1,6}\s+", stripped):
+            caption_candidates.append(re.sub(r"^#{1,6}\s*", "", stripped).strip())
             continue
         if re.match(r"^(표|Table)\s*\d", stripped, flags=re.IGNORECASE):
             caption_candidates.append(stripped)
@@ -2220,17 +2220,19 @@ MANDATORY_RAG_PROMPT = (
     "1. 반드시 [검색 근거]에 있는 내용만 사용한다.\n"
     "2. [검색 근거]에 없는 절차, 조건, 날짜, 숫자, 서류, 주의사항, 조언은 만들지 않는다.\n"
     "3. 질문이 방법, 절차, 주의사항을 묻는 경우 [검색 근거]의 절차, 유의사항, 안내 문구를 우선 추출한다.\n"
-    "4. 검색 근거에 '구조화 표 값 근거'가 있으면 원본 표와 발췌보다 먼저 사용해 표 제목, 행, 열, 값을 판단한다.\n"
-    "5. 구조화 표 값 근거에 질문 의도와 맞는 값이 있으면 '확인할 수 없습니다'라고 답하지 말고 그 값을 그대로 답한다.\n"
-    "6. 여러 행/열 값이 있으면 하나로 합치지 말고 행 이름과 열 이름별로 나눠 답한다.\n"
-    "7. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다.\n"
-    "8. 표에서 숫자, 날짜, 인원, 점수, 기간을 답할 때는 질문의 행 이름과 열 이름에 직접 대응하는 값만 사용한다.\n"
-    "9. 여러 표가 검색되면 질문의 단어와 가장 많이 겹치는 표 제목, 행 이름, 열 이름을 가진 근거를 우선한다.\n"
-    "10. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
-    "11. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
-    "12. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
-    "13. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다.\n"
-    "14. '제공된 문서에서는 확인할 수 없습니다.'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."
+    "4. 검색 근거 맨 앞에 '[우선 답변 근거]'가 있으면 그 항목을 답변 사실로 가장 먼저 고정한다.\n"
+    "5. [우선 답변 근거]에 질문 의도와 맞는 값이 있으면 '확인할 수 없습니다'라고 답하지 말고 그 값을 그대로 답한다.\n"
+    "6. 검색 근거에 '구조화 표 값 근거'가 있으면 원본 표와 발췌보다 먼저 사용해 표 제목, 행, 열, 값을 판단한다.\n"
+    "7. 구조화 표 값 근거에 질문 의도와 맞는 값이 있으면 '확인할 수 없습니다'라고 답하지 말고 그 값을 그대로 답한다.\n"
+    "8. 여러 행/열 값이 있으면 하나로 합치지 말고 행 이름과 열 이름별로 나눠 답한다.\n"
+    "9. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다.\n"
+    "10. 표에서 숫자, 날짜, 인원, 점수, 기간을 답할 때는 질문의 행 이름과 열 이름에 직접 대응하는 값만 사용한다.\n"
+    "11. 여러 표가 검색되면 질문의 단어와 가장 많이 겹치는 표 제목, 행 이름, 열 이름을 가진 근거를 우선한다.\n"
+    "12. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
+    "13. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
+    "14. 근거가 부족하면 부족한 항목을 지어내지 말고 '제공된 문서에서는 확인할 수 없습니다.'라고 답한다.\n"
+    "15. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다.\n"
+    "16. '제공된 문서에서는 확인할 수 없습니다.'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."
 )
 
 
@@ -2377,6 +2379,35 @@ class QueryAnalysis:
 
 
 @dataclass(frozen=True)
+class PriorityEvidenceItem:
+    """LLM prompt 맨 앞에 고정할 질문 직접 근거 한 줄이다."""
+    candidate_id: str
+    prompt_text: str
+    evidence_type: str
+    source_block_id: str | None = None
+    details: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class StructuredTableValueEvidence:
+    """runtime TableFact에서 만든 행/열/값 직접 근거다."""
+    prompt_line: str
+    caption: str
+    row_label: str
+    row_path: str
+    column_label: str
+    value: str
+
+
+@dataclass(frozen=True)
+class QueryContextBundle:
+    """trace와 query가 공유하는 최종 근거 조립 결과다."""
+    context: str
+    selected_context: SelectedContext
+    grounded_priority_answer: str
+
+
+@dataclass(frozen=True)
 class SparseIndexRecord:
     """BM25 점수 계산에 필요한 raw chunk의 sparse search 정보를 보관한다."""
     chunk_id: str
@@ -2414,6 +2445,27 @@ def _format_header_path(meta: dict) -> str:
         if str(meta.get(header_key, "")).strip()
     ]
     return " > ".join(headers)
+
+
+def _format_prompt_header_path(meta: dict) -> str:
+    """LLM prompt에는 표 값처럼 보이는 header component를 넣지 않는다."""
+    headers = [
+        str(meta.get(header_key, "")).strip()
+        for header_key in HEADER_METADATA_KEYS
+        if _is_prompt_safe_header_component(meta.get(header_key))
+    ]
+    return " > ".join(headers)
+
+
+def _is_prompt_safe_header_component(component: object) -> bool:
+    """검색용 metadata는 유지하되 prompt에 보여도 되는 heading인지 판단한다."""
+    text = str(component or "").strip()
+    if not text:
+        return False
+    return not (
+        section_path_component_is_suspect(text)
+        or SOURCE_RESPONSE_AREA_HEADER_PATTERN.fullmatch(text)
+    )
 
 
 def _source_response_header_metadata(meta: dict) -> dict[str, object]:
@@ -3924,16 +3976,21 @@ def _should_include_structured_table_value_evidence(doc: str, meta: dict, analys
     return bool(fact_text and _subject_strongly_matches_text(fact_text, analysis))
 
 
-def _format_structured_table_value_evidence(
+def _normalize_table_caption_for_prompt(caption: object) -> str:
+    """표 제목을 prompt와 직접 답변에 쓰기 좋은 표시 문자열로 정리한다."""
+    return re.sub(r"^#{1,6}\s*", "", str(caption or "").strip()).strip()
+
+
+def _collect_structured_table_value_evidence(
     chunk_id: str,
     doc: str,
     meta: dict,
     analysis: QueryAnalysis,
     max_facts: int = 8,
-) -> str:
-    """runtime table facts를 LLM이 바로 읽을 수 있는 행/열/값 근거로 포맷한다."""
+) -> list[StructuredTableValueEvidence]:
+    """runtime TableFact에서 질문에 직접 답하는 행/열/값 근거를 구조화해 모은다."""
     if not _should_include_structured_table_value_evidence(doc, meta, analysis):
-        return ""
+        return []
 
     source_block_id = str(meta.get("source_block_id") or meta.get("source_lookup_id") or chunk_id)
     previews = _typed_table_fact_contract_previews(
@@ -3944,13 +4001,13 @@ def _format_structured_table_value_evidence(
         max_facts=max_facts * 2,
     )
 
-    lines: list[str] = []
+    evidence_items: list[StructuredTableValueEvidence] = []
     seen: set[tuple[str, str, str, str]] = set()
     for preview in previews:
         if not _typed_table_fact_preview_matches_query(preview, analysis):
             continue
 
-        caption = str(preview.get("caption") or "").strip()
+        caption = _normalize_table_caption_for_prompt(preview.get("caption"))
         row_label = str(preview.get("row_label") or "").strip()
         row_header_path = [
             str(part).strip()
@@ -3978,11 +4035,289 @@ def _format_structured_table_value_evidence(
         if column_label:
             parts.append(f"열: {column_label}")
         parts.append(f"값: {value}")
-        lines.append(f"- {' / '.join(parts)}")
-        if len(lines) >= max_facts:
+        evidence_items.append(
+            StructuredTableValueEvidence(
+                prompt_line=f"- {' / '.join(parts)}",
+                caption=caption,
+                row_label=row_label,
+                row_path=row_path,
+                column_label=column_label,
+                value=value,
+            )
+        )
+        if len(evidence_items) >= max_facts:
             break
 
-    return "\n".join(lines)
+    return evidence_items
+
+
+def _format_structured_table_value_evidence(
+    chunk_id: str,
+    doc: str,
+    meta: dict,
+    analysis: QueryAnalysis,
+    max_facts: int = 8,
+) -> str:
+    """runtime TableFact 근거를 LLM prompt에 넣을 문자열로 렌더링한다."""
+    evidence_items = _collect_structured_table_value_evidence(
+        chunk_id,
+        doc,
+        meta,
+        analysis,
+        max_facts=max_facts,
+    )
+    return "\n".join(item.prompt_line for item in evidence_items)
+
+
+def _sanitize_prompt_context_text(text: str) -> str:
+    """LLM prompt용 본문에서 값처럼 보이는 Markdown heading만 제거한다."""
+    safe_lines: list[str] = []
+    for line in str(text or "").splitlines():
+        level = _markdown_heading_level(line)
+        if level is not None:
+            heading_text = re.sub(r"^#{1,6}\s*", "", line).strip()
+            if not _is_prompt_safe_header_component(heading_text):
+                continue
+        safe_lines.append(line)
+    return "\n".join(safe_lines).strip()
+
+
+def _normalize_priority_evidence_key(text: str) -> str:
+    """우선 근거 중복 제거용 key를 만든다."""
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def _strip_priority_evidence_bullet(text: str) -> str:
+    """기존 근거 bullet을 우선 근거 한 줄에 넣기 좋게 정리한다."""
+    return re.sub(r"^\s*[-*]\s*", "", str(text or "").strip())
+
+
+def _priority_evidence_source_label(source_index: int, meta: dict, chunk_id: str) -> str:
+    """우선 근거가 어느 출처에서 왔는지 짧게 표시한다."""
+    labels = [f"출처 {source_index}"]
+    page_label = _format_page_label(meta)
+    if page_label:
+        labels.append(page_label)
+
+    header_path = _format_prompt_header_path(meta)
+    if header_path:
+        labels.append(header_path)
+
+    chunk_label = _format_chunk_label(meta, chunk_id)
+    if chunk_label:
+        labels.append(chunk_label)
+    return " / ".join(labels)
+
+
+def _append_priority_evidence_item(
+    items: list[PriorityEvidenceItem],
+    seen: set[str],
+    source_index: int,
+    meta: dict,
+    chunk_id: str,
+    analysis: QueryAnalysis,
+    evidence_type: str,
+    evidence_text: str,
+    max_items: int,
+    details: dict[str, str] | None = None,
+) -> None:
+    """우선 근거 후보를 중복 없이 누적한다."""
+    cleaned_text = _strip_priority_evidence_bullet(evidence_text)
+    if not cleaned_text or len(items) >= max_items:
+        return
+    if not _priority_evidence_has_direct_answer(cleaned_text, evidence_type, analysis):
+        return
+
+    dedupe_key = _normalize_priority_evidence_key(f"{evidence_type}:{cleaned_text}")
+    if dedupe_key in seen:
+        return
+    seen.add(dedupe_key)
+
+    source_label = _priority_evidence_source_label(source_index, meta, chunk_id)
+    source_block_id = str(meta.get("source_block_id") or meta.get("source_lookup_id") or "").strip() or None
+    items.append(
+        PriorityEvidenceItem(
+            candidate_id=str(chunk_id),
+            prompt_text=f"- {source_label} / {evidence_type}: {cleaned_text}",
+            evidence_type=evidence_type,
+            source_block_id=source_block_id,
+            details=tuple(sorted((details or {}).items())),
+        )
+    )
+
+
+def _priority_evidence_has_direct_answer(text: str, evidence_type: str, analysis: QueryAnalysis) -> bool:
+    """우선 근거에는 질문 intent에 직접 답하는 값/문장만 올린다."""
+    if evidence_type == "구조화 표 값 근거":
+        return True
+    if analysis.intent == "cost":
+        return bool(MONEY_VALUE_PATTERN.search(text) or "무료" in text)
+    if analysis.intent in STRICT_LOCAL_EVIDENCE_INTENTS:
+        return _line_has_intent_evidence(text, analysis)
+    return True
+
+
+def _collect_priority_evidence_items(
+    docs: list[str],
+    metadatas: list[dict],
+    ids: list[str],
+    analysis: QueryAnalysis,
+    max_items: int = 8,
+) -> list[PriorityEvidenceItem]:
+    """질문에 직접 답하는 구조화 근거를 prompt 최상단용으로 모은다."""
+    items: list[PriorityEvidenceItem] = []
+    seen: set[str] = set()
+
+    for source_index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids), start=1):
+        structured_evidence_items = _collect_structured_table_value_evidence(
+            str(chunk_id),
+            doc,
+            meta or {},
+            analysis,
+            max_facts=6,
+        )
+        for evidence in structured_evidence_items:
+            details = {}
+            if evidence.caption:
+                details["표 제목"] = evidence.caption
+            if evidence.row_path and evidence.row_path != evidence.row_label:
+                details["행 경로"] = evidence.row_path
+            elif evidence.row_label:
+                details["행"] = evidence.row_label
+            if evidence.column_label:
+                details["열"] = evidence.column_label
+            details["값"] = evidence.value
+            _append_priority_evidence_item(
+                items,
+                seen,
+                source_index,
+                meta or {},
+                str(chunk_id),
+                analysis,
+                "구조화 표 값 근거",
+                evidence.prompt_line,
+                max_items,
+                details=details,
+            )
+            if len(items) >= max_items:
+                return items
+
+    for source_index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids), start=1):
+        prompt_doc = _sanitize_prompt_context_text(doc) or str(doc or "").strip()
+        for fact in _extract_query_evidence_fact_lines(prompt_doc, analysis, max_facts=3, meta=meta or {}):
+            _append_priority_evidence_item(
+                items,
+                seen,
+                source_index,
+                meta or {},
+                str(chunk_id),
+                analysis,
+                "질문 의도 추출 정보",
+                fact,
+                max_items,
+            )
+            if len(items) >= max_items:
+                return items
+
+    return items
+
+
+def _selected_context_from_priority_items(
+    priority_items: list[PriorityEvidenceItem],
+    analysis: QueryAnalysis,
+) -> SelectedContext:
+    """동일한 우선 근거 목록에서 SelectedContext contract를 만든다."""
+    selected_items = tuple(
+        SelectedContextItem(
+            candidate_id=item.candidate_id,
+            prompt_text=item.prompt_text,
+            source_block_ids=(item.source_block_id,) if item.source_block_id else (),
+        )
+        for item in priority_items
+    )
+    prompt_text = "\n".join(item.prompt_text for item in priority_items)
+    return SelectedContext(
+        context_id=f"priority:{analysis.intent or 'general'}",
+        items=selected_items,
+        prompt_text=prompt_text,
+        unsupported_reason=None if priority_items else "no_direct_priority_evidence",
+    )
+
+
+def _build_selected_context_contract(
+    docs: list[str],
+    metadatas: list[dict],
+    ids: list[str],
+    analysis: QueryAnalysis,
+) -> SelectedContext:
+    """prompt 최상단 우선 근거를 SelectedContext contract 형태로 만든다."""
+    priority_items = _collect_priority_evidence_items(docs, metadatas, ids, analysis)
+    return _selected_context_from_priority_items(priority_items, analysis)
+
+
+def _build_priority_grounded_answer_from_items(
+    priority_items: list[PriorityEvidenceItem],
+) -> str:
+    """같은 우선 근거 목록에서 deterministic 직접 답변을 만든다."""
+    structured_items = [
+        item
+        for item in priority_items
+        if item.evidence_type == "구조화 표 값 근거" and dict(item.details).get("값")
+    ]
+    if not structured_items:
+        return ""
+
+    caption = ""
+    grouped_values: dict[str, list[str]] = {}
+    seen_pairs: set[tuple[str, str]] = set()
+    for item in structured_items:
+        details = dict(item.details)
+        caption = caption or details.get("표 제목", "")
+        row_label = details.get("행 경로") or details.get("행") or "해당 항목"
+        column_label = details.get("열") or "값"
+        value = details.get("값", "")
+        if not value:
+            continue
+
+        pair = f"{column_label} {value}"
+        dedupe_key = (row_label, pair)
+        if dedupe_key in seen_pairs:
+            continue
+        seen_pairs.add(dedupe_key)
+        grouped_values.setdefault(row_label, []).append(pair)
+
+    if not grouped_values:
+        return ""
+
+    row_phrases = [
+        f"{row_label}: {', '.join(values)}"
+        for row_label, values in grouped_values.items()
+    ]
+    if caption:
+        return f"제공된 문서의 '{caption}' 표 기준으로 {'; '.join(row_phrases)}입니다."
+    return f"제공된 문서 기준으로 {'; '.join(row_phrases)}입니다."
+
+
+def _build_priority_grounded_answer(
+    docs: list[str],
+    metadatas: list[dict],
+    ids: list[str],
+    analysis: QueryAnalysis,
+) -> str:
+    """구조화 표 값이 확정된 직접 질문은 LLM 대신 안정적인 답변을 만든다."""
+    priority_items = _collect_priority_evidence_items(docs, metadatas, ids, analysis)
+    return _build_priority_grounded_answer_from_items(priority_items)
+
+
+def _format_priority_evidence_block(selected_context: SelectedContext) -> str:
+    """SelectedContext를 LLM이 먼저 읽을 우선 근거 block으로 포맷한다."""
+    if not selected_context.prompt_text.strip():
+        return ""
+    return (
+        "[우선 답변 근거]\n"
+        "아래 항목은 질문과 직접 연결된 값/문장이다. 답변을 만들 때 이 항목을 먼저 사용한다.\n"
+        f"{selected_context.prompt_text}"
+    )
 
 
 def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analysis: QueryAnalysis) -> str:
@@ -3998,15 +4333,16 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     if chunk_label:
         metadata_lines.append(f"청크: {chunk_label}")
 
-    header_path = _format_header_path(meta)
+    header_path = _format_prompt_header_path(meta)
     if header_path:
         metadata_lines.append(f"섹션: {header_path}")
 
+    prompt_doc = _sanitize_prompt_context_text(doc) or str(doc or "").strip()
     metadata = "\n".join(metadata_lines)
-    evidence_facts = _extract_query_evidence_facts(doc, analysis, meta=meta)
-    relevant_excerpt = _select_relevant_excerpt(doc, analysis.primary_terms)
+    evidence_facts = _extract_query_evidence_facts(prompt_doc, analysis, meta=meta)
+    relevant_excerpt = _select_relevant_excerpt(prompt_doc, analysis.primary_terms)
     if not relevant_excerpt:
-        relevant_excerpt = _select_relevant_excerpt(doc, analysis.context_terms)
+        relevant_excerpt = _select_relevant_excerpt(prompt_doc, analysis.context_terms)
     matched_table_facts = _get_matched_table_facts(meta)
     fact_text = "\n".join(matched_table_facts)
 
@@ -4015,16 +4351,45 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
     if relevant_excerpt:
-        return f"[출처 {index}]\n{metadata}{structured_table_block}{evidence_fact_block}{table_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
-    return f"[출처 {index}]\n{metadata}{structured_table_block}{evidence_fact_block}{table_fact_block}\n전체 내용:\n{doc.strip()}"
+        return f"[출처 {index}]\n{metadata}{structured_table_block}{evidence_fact_block}{table_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{prompt_doc}"
+    return f"[출처 {index}]\n{metadata}{structured_table_block}{evidence_fact_block}{table_fact_block}\n전체 내용:\n{prompt_doc}"
 
 
-def _build_context(docs: list[str], metadatas: list[dict], ids: list[str], analysis: QueryAnalysis) -> str:
+def _build_context(
+    docs: list[str],
+    metadatas: list[dict],
+    ids: list[str],
+    analysis: QueryAnalysis,
+    selected_context: SelectedContext | None = None,
+) -> str:
     """검색된 청크들을 출처 단위 context로 변환한다."""
     blocks = []
+    if selected_context is None:
+        selected_context = _build_selected_context_contract(docs, metadatas, ids, analysis)
+    priority_evidence_block = _format_priority_evidence_block(selected_context)
+    if priority_evidence_block:
+        blocks.append(priority_evidence_block)
     for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids), start=1):
         blocks.append(_format_context_block(index, doc, meta or {}, chunk_id, analysis))
     return "\n\n".join(blocks)
+
+
+def _build_query_context_bundle(
+    docs: list[str],
+    metadatas: list[dict],
+    ids: list[str],
+    analysis: QueryAnalysis,
+) -> QueryContextBundle:
+    """trace와 query가 같은 SelectedContext 조립 경로를 사용하게 한다."""
+    priority_items = _collect_priority_evidence_items(docs, metadatas, ids, analysis)
+    selected_context = _selected_context_from_priority_items(priority_items, analysis)
+    context = _build_context(docs, metadatas, ids, analysis, selected_context=selected_context)
+    grounded_priority_answer = _build_priority_grounded_answer_from_items(priority_items)
+    return QueryContextBundle(
+        context=context,
+        selected_context=selected_context,
+        grounded_priority_answer=grounded_priority_answer,
+    )
 
 
 def _load_parent_chunk(parent_chunk_id: str) -> tuple[str | None, dict | None]:
@@ -4307,6 +4672,8 @@ def _build_rag_prompt(system_prompt: str | None, context: str, question: str) ->
 
 [답변 직전 확인]
 - 답변은 [검색 근거]에 직접 적힌 내용만 사용한다.
+- [검색 근거] 맨 앞의 '[우선 답변 근거]'가 있으면 그 항목을 답변 사실로 가장 먼저 사용한다.
+- [우선 답변 근거]에 질문 의도와 맞는 값이 있으면 '확인할 수 없습니다'라고 답하지 않는다.
 - [검색 근거]의 '구조화 표 값 근거'가 있으면 답변에 가장 먼저 사용한다.
 - 구조화 표 값 근거에 여러 값이 있으면 행 이름과 열 이름별로 나눠 답한다.
 - [검색 근거]의 '질문 의도 추출 정보'는 구조화 표 값 근거 다음으로 사용한다.
@@ -5266,8 +5633,14 @@ def _trace_query_retrieval(
     final_docs = focused_docs[:top_k]
     final_metadatas = focused_metadatas[:top_k]
     final_ids = focused_ids[:top_k]
-    context = _build_context(final_docs, final_metadatas, final_ids, analysis) if final_docs else ""
+    context_bundle = _build_query_context_bundle(final_docs, final_metadatas, final_ids, analysis) if final_docs else None
+    context = context_bundle.context if context_bundle else ""
     prompt = _build_rag_prompt(system_prompt, context, question) if final_docs else ""
+    selected_context = (
+        context_bundle.selected_context
+        if context_bundle
+        else _selected_context_from_priority_items([], analysis)
+    )
     final_candidates = [
         _format_rerank_candidate(
             index + 1,
@@ -5320,6 +5693,7 @@ def _trace_query_retrieval(
         },
         "contract_preview": {
             "query_intent": _query_intent_contract_preview(question, analysis),
+            "selected_context": contract_to_dict(selected_context),
         },
         "query_vector": {
             "dimension": len(question_vector),
@@ -5414,6 +5788,9 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
             "retrieval_chunk_query_error": results.get("retrieval_chunk_query_error"),
             "query_intent": analysis.intent,
             "query_subject_terms": sorted(analysis.subject_terms),
+            "selected_context": contract_to_dict(_selected_context_from_priority_items([], analysis)),
+            "selected_context_item_count": 0,
+            "grounded_priority_answer": "",
         }
         logger.info(
             "[query_prepare] top_k=%s retrieval_limit=%s docs=0 retrieval_chunk_vector=%s legacy_vector=%s embed=%.2fs ollama_total=%s ollama_load=%s prompt_eval=%s chroma=%.2fs context_build=%.2fs total=%.2fs",
@@ -5432,7 +5809,10 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         return None, [], metrics
 
     context_build_start = time.perf_counter()
-    context = _build_context(docs, metadatas, ids, analysis)
+    context_bundle = _build_query_context_bundle(docs, metadatas, ids, analysis)
+    context = context_bundle.context
+    selected_context = context_bundle.selected_context
+    grounded_priority_answer = context_bundle.grounded_priority_answer
     # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
     prompt = _build_rag_prompt(system_prompt, context, question)
 
@@ -5484,6 +5864,10 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "retrieval_chunk_query_error": results.get("retrieval_chunk_query_error"),
         "query_intent": analysis.intent,
         "query_subject_terms": sorted(analysis.subject_terms),
+        "selected_context": contract_to_dict(selected_context),
+        "selected_context_item_count": len(selected_context.items),
+        "selected_context_unsupported_reason": selected_context.unsupported_reason,
+        "grounded_priority_answer": grounded_priority_answer,
     }
     logger.info(
         "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s retrieval_chunk_vector=%s legacy_vector=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
@@ -5640,7 +6024,8 @@ async def query_document(request: QueryRequest):
     """
     RAG 질의응답 파이프라인 (동기):
     1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query)
-    2. EXAONE LLM 비동기 호출 → 답변 반환
+    2. 구조화 직접 근거가 있으면 우선 답변 반환
+    3. 직접 근거 답변이 없을 때 EXAONE LLM 비동기 호출 → 답변 반환
     """
     query_start = time.perf_counter()
     # _prepare_query는 embed_query·Chroma 조회가 모두 동기 블로킹이다.
@@ -5655,6 +6040,19 @@ async def query_document(request: QueryRequest):
 
     if prompt is None:
         return {"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
+
+    grounded_priority_answer = str(query_metrics.get("grounded_priority_answer") or "").strip()
+    if grounded_priority_answer:
+        logger.info(
+            "[query] top_k=%s sources=%s context_chars=%s prompt_chars=%s answer_source=priority_evidence prepare=%.2fs total=%.2fs",
+            request.top_k,
+            len(sources),
+            query_metrics["context_chars"],
+            query_metrics["prompt_chars"],
+            query_metrics["prepare_elapsed"],
+            time.perf_counter() - query_start
+        )
+        return {"answer": grounded_priority_answer, "sources": sources}
 
     # async 핸들러에서 ainvoke()로 이벤트 루프 블로킹 방지
     llm_start = time.perf_counter()
@@ -5679,8 +6077,9 @@ async def query_stream(request: QueryRequest):
     """
     SSE 스트리밍 RAG 파이프라인:
     1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query)
-    2. EXAONE 토큰 스트리밍 → SSE data 이벤트 전송
-    3. 완료 시 sources 포함 done 이벤트 전송
+    2. 구조화 직접 근거가 있으면 우선 답변을 SSE token으로 전송
+    3. 직접 근거 답변이 없을 때 EXAONE 토큰 스트리밍 → SSE data 이벤트 전송
+    4. 완료 시 sources 포함 done 이벤트 전송
     클라이언트 연결 종료 시 asyncio.CancelledError로 자동 중단된다.
     """
     stream_start = time.perf_counter()
@@ -5701,6 +6100,27 @@ async def query_stream(request: QueryRequest):
 
         return StreamingResponse(
             empty_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+        )
+
+    grounded_priority_answer = str(query_metrics.get("grounded_priority_answer") or "").strip()
+    if grounded_priority_answer:
+        async def priority_answer_stream():
+            logger.info(
+                "[query_stream] priority_answer top_k=%s sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs total=%.2fs",
+                request.top_k,
+                len(sources),
+                query_metrics["context_chars"],
+                query_metrics["prompt_chars"],
+                query_metrics["prepare_elapsed"],
+                time.perf_counter() - stream_start
+            )
+            yield f"data: {json.dumps({'token': grounded_priority_answer}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'done': True, 'sources': sources}, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            priority_answer_stream(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
         )
