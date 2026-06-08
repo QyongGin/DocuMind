@@ -795,8 +795,15 @@ def _parse_markdown_table(block_text: str) -> tuple[list[list[str]], list[list[s
     return padded_headers, padded_body
 
 
-def _is_probable_subheader_row(row: list[str]) -> bool:
+def _is_probable_subheader_row(row: list[str], header_rows: list[list[str]] | None = None) -> bool:
     """본문 첫 줄이 실제 데이터가 아니라 병합 header 보강 row인지 추정한다."""
+    if header_rows and not any(
+        _is_empty_table_cell(cell)
+        for header_row in header_rows
+        for cell in header_row
+    ):
+        return False
+
     non_empty_cells = [cell for cell in row if not _is_empty_table_cell(cell)]
     if len(non_empty_cells) < 2:
         return False
@@ -841,6 +848,7 @@ def _select_row_subject(row: list[str], column_labels: list[str]) -> tuple[str, 
     descriptors: list[str] = []
     subject = ""
     preferred_subject = ""
+    preferred_subject_label = ""
     for index, cell in enumerate(row):
         if _is_empty_table_cell(cell):
             continue
@@ -850,7 +858,12 @@ def _select_row_subject(row: list[str], column_labels: list[str]) -> tuple[str, 
             any(keyword in label for keyword in ("모집단위", "학과", "항목", "요소", "구분", "전형", "프로젝트 유형"))
             and not re.fullmatch(r"[\d.,]+", cell)
         ):
-            preferred_subject = cell
+            normalized_label = re.sub(r"\s+", "", label)
+            if not preferred_subject:
+                preferred_subject = cell
+                preferred_subject_label = normalized_label
+            elif normalized_label == preferred_subject_label:
+                preferred_subject = cell
         if not subject and not re.fullmatch(r"[\d.,]+", cell):
             subject = cell
         if len(descriptors) >= 3:
@@ -977,7 +990,7 @@ def _extract_table_facts(text: str, metadata: dict) -> list[str]:
         if not header_rows or not body_rows:
             continue
 
-        subheader_row = body_rows[0] if body_rows and _is_probable_subheader_row(body_rows[0]) else None
+        subheader_row = body_rows[0] if body_rows and _is_probable_subheader_row(body_rows[0], header_rows) else None
         data_rows = body_rows[1:] if subheader_row else body_rows
         column_labels = _compose_column_labels(header_rows, subheader_row)
         generate_matrix_facts = _should_generate_matrix_facts(column_labels)
@@ -4447,7 +4460,6 @@ def _typed_table_fact_contract_candidates(
     doc: str,
     meta: dict,
     source_block_id: str,
-    max_facts: int = 8,
 ) -> list[tuple[TableFact, str]]:
     """runtime table_fact 문자열을 typed TableFact 후보로 변환한다."""
     fact_entries: list[tuple[str, str]] = []
@@ -4461,10 +4473,15 @@ def _typed_table_fact_contract_candidates(
             seen_facts.add(normalized_fact)
             fact_entries.append((normalized_fact, fact_source))
 
-    if "|" in doc and meta.get("chunk_role") != "table_fact":
-        append_facts(_extract_table_facts(doc, meta), "extracted_from_candidate_doc")
+    extracted_facts = (
+        _extract_table_facts(doc, meta)
+        if "|" in doc and meta.get("chunk_role") != "table_fact"
+        else []
+    )
+    append_facts(extracted_facts, "extracted_from_candidate_doc")
 
-    append_facts(_get_matched_table_facts(meta), "matched_table_facts")
+    if not fact_entries:
+        append_facts(_get_matched_table_facts(meta), "matched_table_facts")
 
     if not fact_entries and meta.get("chunk_role") == "table_fact":
         append_facts([doc.strip()] if doc.strip() else [], "candidate_table_fact_document")
@@ -4500,8 +4517,6 @@ def _typed_table_fact_contract_candidates(
                 header_path=header_path,
             )
             candidates.append((table_fact, fact_source))
-            if len(candidates) >= max_facts:
-                return candidates
     return candidates
 
 
@@ -4586,9 +4601,12 @@ def _contract_trace_preview(
             meta,
             source_block.source_block_id,
         )
+        typed_table_fact_preview_limit = 8
         typed_table_facts = [
             _typed_table_fact_preview(table_fact, fact_source)
-            for table_fact, fact_source in typed_table_fact_candidates
+            for table_fact, fact_source in typed_table_fact_candidates[
+                :typed_table_fact_preview_limit
+            ]
         ]
         selected_table_facts = (
             _selected_table_fact_previews(question, typed_table_fact_candidates)
@@ -4649,6 +4667,11 @@ def _contract_trace_preview(
                 preview_chars=preview_chars,
             ),
             "typed_table_facts": typed_table_facts,
+            "typed_table_fact_count": len(typed_table_fact_candidates),
+            "typed_table_fact_preview_limit": typed_table_fact_preview_limit,
+            "typed_table_fact_preview_truncated": (
+                len(typed_table_fact_candidates) > typed_table_fact_preview_limit
+            ),
             "selected_table_facts": selected_table_facts,
         }
     except Exception:

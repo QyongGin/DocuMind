@@ -6,6 +6,7 @@ from main import (
     _extract_table_fact_pairs,
     _extract_table_fact_row_subject,
     _extract_table_facts,
+    _typed_table_fact_contract_candidates,
 )
 
 
@@ -37,6 +38,67 @@ def main() -> None:
     assert ("전형", "유형Ⅰ") in fact_by_subject["유형Ⅰ"]
     assert ("전형", "지역전형") in fact_by_subject["유형Ⅱ"]
     assert ("전형", "유형Ⅱ") in fact_by_subject["유형Ⅱ"]
+
+    ordinary_sample = """
+###### 학과별 지원자격
+
+|모집단위|전형|지원자격|
+|---|---|---|
+|컴퓨터정보공학과|일반고|일반고 졸업자|
+"""
+    ordinary_facts = _extract_table_facts(
+        ordinary_sample,
+        {"document_id": "runtime-table-smoke"},
+    )
+    ordinary_subjects = [
+        _extract_table_fact_row_subject(fact)
+        for fact in ordinary_facts
+    ]
+    assert "컴퓨터정보공학과" in ordinary_subjects
+    assert "일반고" not in ordinary_subjects
+
+    wide_sample = """
+###### 전형 지원자격
+
+|전형| |지원자격|항목1|항목2|항목3|항목4|항목5|항목6|항목7|항목8|
+|---|---|---|---|---|---|---|---|---|---|---|
+|지역전형|유형Ⅰ|조건1|A1|B1|C1|D1|E1|F1|G1|H1|
+| |유형Ⅱ|조건2|A2|B2|C2|D2|E2|F2|G2|H2|
+"""
+    typed_candidates = _typed_table_fact_contract_candidates(
+        chunk_id="wide-table-smoke",
+        doc=wide_sample,
+        meta={"document_id": "runtime-table-smoke"},
+        source_block_id="source-wide-table-smoke",
+    )
+    typed_rows = {
+        table_fact.row_label
+        for table_fact, _ in typed_candidates
+    }
+    assert "유형Ⅰ" in typed_rows
+    assert "유형Ⅱ" in typed_rows
+
+    stale_fact_candidates = _typed_table_fact_contract_candidates(
+        chunk_id="stale-fact-smoke",
+        doc=sample,
+        meta={
+            "document_id": "runtime-table-smoke",
+            "matched_table_facts": [
+                "전형 지원자격: 오래된행 행 정보는 지원자격=오래된 값이다."
+            ],
+        },
+        source_block_id="source-stale-fact-smoke",
+    )
+    stale_fact_sources = {
+        fact_source
+        for _, fact_source in stale_fact_candidates
+    }
+    stale_fact_rows = {
+        table_fact.row_label
+        for table_fact, _ in stale_fact_candidates
+    }
+    assert stale_fact_sources == {"extracted_from_candidate_doc"}
+    assert "오래된행" not in stale_fact_rows
 
     print("table fact runtime extraction smoke ok")
 
