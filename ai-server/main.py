@@ -33,7 +33,10 @@ from rag_contract_builders import (
     section_path_warnings,
 )
 from rag_contracts import TableFact, contract_to_dict
-from rag_table_fact_selector import select_table_facts_for_question
+from rag_table_fact_selector import (
+    build_table_fact_evidence_preview,
+    select_table_facts_for_question,
+)
 
 try:
     from kiwipiepy import Kiwi
@@ -4545,10 +4548,26 @@ def _selected_table_fact_previews(
         preview["matched_row_terms"] = list(selection.matched_row_terms)
         preview["matched_column_terms"] = list(selection.matched_column_terms)
         selected_previews.append(preview)
+    evidence_preview = build_table_fact_evidence_preview(selection_result)
     return {
         "comparison_mode": selection_result.comparison_mode,
         "target_row_labels": list(selection_result.target_row_labels),
         "selected_facts": selected_previews,
+        "evidence_preview": {
+            "runtime_connection": "trace_only",
+            "prompt_candidate_ready": evidence_preview.prompt_candidate_ready,
+            "evidence_text": evidence_preview.evidence_text,
+            "reasons": list(evidence_preview.reasons),
+            "truncated": evidence_preview.truncated,
+            "diagnostics": [
+                {
+                    "code": diagnostic.code,
+                    "message": diagnostic.message,
+                    "details": diagnostic.details or {},
+                }
+                for diagnostic in evidence_preview.diagnostics
+            ],
+        },
         "diagnostics": [
             {
                 "code": diagnostic.code,

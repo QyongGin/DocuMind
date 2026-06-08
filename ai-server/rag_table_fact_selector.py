@@ -45,6 +45,17 @@ class TableFactSelectionResult:
     diagnostics: tuple[TableFactSelectionDiagnostic, ...] = ()
 
 
+@dataclass(frozen=True)
+class TableFactEvidencePreview:
+    """Trace-only preview of whether selected facts are safe prompt candidates."""
+
+    prompt_candidate_ready: bool
+    evidence_text: str
+    reasons: tuple[str, ...] = ()
+    diagnostics: tuple[TableFactSelectionDiagnostic, ...] = ()
+    truncated: bool = False
+
+
 def select_table_facts_for_question(
     question: str,
     table_facts: Sequence[TableFact],
@@ -69,7 +80,7 @@ def select_table_facts_for_question(
         diagnostics.append(
             TableFactSelectionDiagnostic(
                 code="comparison_target_rows_unresolved",
-                message="Comparison question did not resolve at least two explicit target rows.",
+                message="비교 질문에서 명확한 비교 대상 행을 두 개 이상 찾지 못했습니다.",
                 details={"matched_row_labels": list(matched_rows)},
             )
         )
@@ -84,7 +95,7 @@ def select_table_facts_for_question(
             diagnostics.append(
                 TableFactSelectionDiagnostic(
                     code="non_target_rows_excluded",
-                    message="Question matched explicit target rows, so non-target rows were excluded.",
+                    message="질문에서 명확한 대상 행이 잡혀 대상이 아닌 행을 제외했습니다.",
                     details={
                         "excluded_count": excluded_count,
                         "target_row_labels": list(target_row_labels),
@@ -100,7 +111,7 @@ def select_table_facts_for_question(
             diagnostics.append(
                 TableFactSelectionDiagnostic(
                     code="non_target_columns_excluded",
-                    message="Question matched explicit target columns, so non-target columns were excluded.",
+                    message="질문에서 명확한 대상 열이 잡혀 대상이 아닌 열을 제외했습니다.",
                     details={"excluded_count": excluded_count},
                 )
             )
@@ -109,7 +120,7 @@ def select_table_facts_for_question(
         diagnostics.append(
             TableFactSelectionDiagnostic(
                 code="no_table_fact_selected",
-                message="No TableFact had enough row, column, or table context overlap with the question.",
+                message="질문과 충분히 겹치는 행, 열, 표 맥락을 가진 표 근거가 없습니다.",
             )
         )
 
@@ -131,6 +142,237 @@ def select_table_facts_for_question(
         target_row_labels=target_row_labels,
         diagnostics=tuple(diagnostics),
     )
+
+
+def build_table_fact_evidence_preview(
+    selection_result: TableFactSelectionResult,
+    *,
+    max_lines: int = 8,
+) -> TableFactEvidencePreview:
+    """Render selected facts and explain whether they are safe prompt candidates.
+
+    This is a trace-only readiness check. It does not connect evidence text to
+    the LLM prompt because unrelated tables can still be selected upstream.
+    """
+    diagnostics: list[TableFactSelectionDiagnostic] = []
+    reasons: list[str] = []
+    selections = selection_result.selections
+
+    if not selections:
+        diagnostics.append(
+            TableFactSelectionDiagnostic(
+                code="no_selected_table_facts_for_evidence",
+                message="근거 텍스트로 바꿀 선택된 표 근거가 없습니다.",
+            )
+        )
+        return TableFactEvidencePreview(
+            prompt_candidate_ready=False,
+            evidence_text="",
+            diagnostics=tuple([*selection_result.diagnostics, *diagnostics]),
+        )
+
+    table_ids = _dedupe(selection.fact.table_id for selection in selections)
+    if len(table_ids) > 1:
+        diagnostics.append(
+            TableFactSelectionDiagnostic(
+                code="multiple_tables_selected",
+                message="선택된 표 근거가 여러 표에서 나와 prompt 후보 근거로 쓰기 안전하지 않습니다.",
+                details={"table_count": len(table_ids)},
+            )
+        )
+    else:
+        reasons.append("single_table")
+
+    selected_row_identities = [
+        _row_identity(selection.fact)
+        for selection in selections
+    ]
+    selected_row_labels = _dedupe(
+        row_identity
+        for row_identity in selected_row_identities
+        if row_identity
+    )
+    target_row_labels = selection_result.target_row_labels
+    if selection_result.comparison_mode:
+        missing_targets = sorted(set(target_row_labels) - set(selected_row_labels))
+        if len(target_row_labels) < 2 or missing_targets:
+            diagnostics.append(
+                TableFactSelectionDiagnostic(
+                    code="comparison_rows_incomplete_for_evidence",
+                    message="비교 질문의 prompt 후보 근거에는 비교 대상 행이 모두 들어 있어야 합니다.",
+                    details={
+                        "target_row_labels": list(target_row_labels),
+                        "selected_row_labels": list(selected_row_labels),
+                        "missing_target_row_labels": missing_targets,
+                    },
+                )
+            )
+        else:
+            reasons.append("comparison_rows_covered")
+    else:
+        if not target_row_labels:
+            diagnostics.append(
+                TableFactSelectionDiagnostic(
+                    code="target_row_unresolved_for_evidence",
+                    message="비교 질문이 아닌 경우에는 prompt 후보 근거로 쓰기 전에 질문 대상 행이 명확해야 합니다.",
+                    details={"selected_row_labels": list(selected_row_labels)},
+                )
+            )
+        elif len(target_row_labels) > 1:
+            reasons.append("multiple_target_rows")
+        else:
+            reasons.append("single_target_row")
+
+        if not any(selection.matched_column_terms for selection in selections):
+            diagnostics.append(
+                TableFactSelectionDiagnostic(
+                    code="target_column_unresolved_for_evidence",
+                    message="비교 질문이 아닌 경우에는 prompt 후보 근거로 쓰기 전에 질문 대상 열이 명확해야 합니다.",
+                )
+            )
+        else:
+            reasons.append("target_column_matched")
+
+    evidence_text, truncated = render_selected_table_facts_as_evidence_text(
+        selections,
+        max_lines=max_lines,
+    )
+    if not evidence_text:
+        diagnostics.append(
+            TableFactSelectionDiagnostic(
+                code="no_renderable_table_fact_evidence",
+                message="선택된 표 근거가 라벨 반복값이나 공통값만 포함해 답변 근거 문장으로 만들 수 없습니다.",
+            )
+        )
+    all_diagnostics = (*selection_result.diagnostics, *diagnostics)
+    return TableFactEvidencePreview(
+        prompt_candidate_ready=not diagnostics,
+        evidence_text=evidence_text,
+        reasons=_dedupe(reasons),
+        diagnostics=all_diagnostics,
+        truncated=truncated,
+    )
+
+
+def render_selected_table_facts_as_evidence_text(
+    selections: Sequence[TableFactSelection],
+    *,
+    max_lines: int = 8,
+) -> tuple[str, bool]:
+    """Render selected table facts as compact Korean key-value evidence text."""
+    if not selections:
+        return "", False
+
+    renderable_selections = _renderable_evidence_selections(selections)
+    if not renderable_selections:
+        return "", False
+
+    shared_contexts = _shared_evidence_contexts(selections)
+    max_lines = max(0, max_lines)
+    lines = ["[표 근거 후보]"]
+    emitted = 0
+    truncated = False
+    current_caption = None
+    for selection in renderable_selections:
+        if emitted >= max_lines:
+            truncated = True
+            break
+        fact = selection.fact
+        caption = _display_caption(fact)
+        if caption and caption != current_caption:
+            lines.append(f"표 제목: {caption}")
+            if shared_contexts:
+                lines.append(f"공통 맥락: {', '.join(shared_contexts)}")
+            current_caption = caption
+        row_label = _display_path(fact.row_header_path, fact.row_label)
+        column_label = _display_path(fact.column_path, fact.column_label)
+        lines.append(f"- 행: {row_label} / 열: {column_label} / 값: {fact.value}")
+        emitted += 1
+
+    if truncated:
+        lines.append(f"- 추가 표 근거 {len(renderable_selections) - emitted}개는 미리보기에서 생략됨")
+    return "\n".join(lines), truncated
+
+
+def _renderable_evidence_selections(
+    selections: Sequence[TableFactSelection],
+) -> tuple[TableFactSelection, ...]:
+    rows = _dedupe(
+        _row_identity(selection.fact)
+        for selection in selections
+        if _row_identity(selection.fact)
+    )
+    shared_comparison_values = (
+        _shared_column_values(selections) if len(rows) >= 2 else set()
+    )
+    renderable: list[TableFactSelection] = []
+    for selection in selections:
+        fact = selection.fact
+        if _is_label_echo_fact(fact):
+            continue
+        column_value_key = (
+            _normalize_text(fact.column_label),
+            _normalize_text(fact.value),
+        )
+        if column_value_key in shared_comparison_values:
+            continue
+        renderable.append(selection)
+    return tuple(renderable)
+
+
+def _shared_evidence_contexts(
+    selections: Sequence[TableFactSelection],
+) -> tuple[str, ...]:
+    shared_values = _shared_column_values(selections)
+    contexts: list[str] = []
+    seen: set[str] = set()
+    for selection in selections:
+        fact = selection.fact
+        key = (
+            _normalize_text(fact.column_label),
+            _normalize_text(fact.value),
+        )
+        if key not in shared_values or _is_label_echo_fact(fact):
+            continue
+        column_label = _display_path(fact.column_path, fact.column_label)
+        context = f"{column_label}={fact.value}"
+        if context in seen:
+            continue
+        seen.add(context)
+        contexts.append(context)
+    return tuple(contexts)
+
+
+def _shared_column_values(
+    selections: Sequence[TableFactSelection],
+) -> set[tuple[str, str]]:
+    rows_by_column_value: dict[tuple[str, str], set[str]] = {}
+    for selection in selections:
+        fact = selection.fact
+        key = (_normalize_text(fact.column_label), _normalize_text(fact.value))
+        if not key[0] or not key[1]:
+            continue
+        rows_by_column_value.setdefault(key, set()).add(_row_identity(fact))
+    return {
+        key
+        for key, row_labels in rows_by_column_value.items()
+        if len(row_labels) >= 2
+    }
+
+
+def _is_label_echo_fact(fact: TableFact) -> bool:
+    value = _normalize_text(fact.value)
+    if not value:
+        return True
+    label_terms = _normalized_terms(
+        [
+            fact.row_label,
+            *fact.row_header_path,
+            fact.column_label,
+            *fact.column_path,
+        ]
+    )
+    return value in label_terms
 
 
 def _score_table_fact(
@@ -223,6 +465,21 @@ def _column_terms(fact: TableFact) -> tuple[str, ...]:
 def _context_terms(fact: TableFact) -> tuple[str, ...]:
     values = [fact.caption or "", *fact.header_path]
     return _normalized_terms(values)
+
+
+def _display_caption(fact: TableFact) -> str:
+    if fact.caption:
+        return fact.caption.strip()
+    if fact.header_path:
+        return fact.header_path[-1].strip()
+    return ""
+
+
+def _display_path(path: Sequence[str], fallback: str) -> str:
+    values = [str(value).strip() for value in path if str(value).strip()]
+    if values:
+        return " > ".join(values)
+    return str(fallback or "").strip()
 
 
 def _row_identity(fact: TableFact) -> str:
