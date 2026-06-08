@@ -119,6 +119,7 @@ class TableFact:
     unit: str | None = None
     row_index: int | None = None
     column_index: int | None = None
+    row_header_path: tuple[str, ...] = ()
     column_path: tuple[str, ...] = ()
     header_path: tuple[str, ...] = ()
     caption: str | None = None
