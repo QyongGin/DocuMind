@@ -220,18 +220,33 @@ def _iter_elements(elements: Iterable[Any]) -> Iterable[Mapping[str, Any]]:
     for element in elements:
         if not isinstance(element, Mapping):
             continue
-        yield element
         element_type = _normalize_element_type(element.get("type"))
+        nested = _nested_text_children(element)
+        if not _is_container_only_element(element, nested):
+            yield element
         if element_type in {"table", "list"}:
             continue
-        nested = element.get("kids") or element.get("children") or []
-        if isinstance(nested, Sequence) and not isinstance(nested, (str, bytes)):
+        if nested:
             yield from _iter_elements(nested)
 
 
 def _normalize_element_type(value: Any) -> str:
-    normalized = re.sub(r"\s+", "_", str(value or "").strip().lower())
+    normalized = _raw_element_type(value)
     return _ELEMENT_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _raw_element_type(value: Any) -> str:
+    return re.sub(r"\s+", "_", str(value or "").strip().lower())
+
+
+def _is_container_only_element(
+    element: Mapping[str, Any],
+    nested: Sequence[Mapping[str, Any]],
+) -> bool:
+    return bool(
+        nested
+        and _raw_element_type(element.get("type")) in _CONTAINER_ONLY_ELEMENT_TYPES
+    )
 
 
 def _element_text(element: Mapping[str, Any]) -> str:
@@ -682,6 +697,7 @@ def _last_text(values: Sequence[str]) -> str:
 
 
 _CONTRACT_ELEMENT_TYPES = {"heading", "paragraph", "table", "list"}
+_CONTAINER_ONLY_ELEMENT_TYPES = {"text_block"}
 _ELEMENT_TYPE_ALIASES = {
     "text_block": "paragraph",
     "list_item": "paragraph",

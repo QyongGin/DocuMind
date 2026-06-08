@@ -143,6 +143,23 @@ def build_adapter_sample() -> dict:
                 "bounding box": [10, 300, 500, 340],
                 "content": "반복 라벨 반복 라벨",
             },
+            {
+                "type": "text_block",
+                "page number": 1,
+                "bounding box": [10, 220, 500, 290],
+                "kids": [
+                    {
+                        "type": "paragraph",
+                        "page number": 1,
+                        "content": "컨테이너 첫 문장",
+                    },
+                    {
+                        "type": "paragraph",
+                        "page number": 1,
+                        "content": "컨테이너 둘째 문장",
+                    },
+                ],
+            },
         ],
     }
     result = adapt_opendataloader_json_page(
@@ -177,11 +194,17 @@ def main() -> None:
         "table",
         "list",
         "paragraph",
+        "paragraph",
+        "paragraph",
     ]
+    block_texts = [block["text"] for block in parsed_blocks]
     assert parsed_blocks[2]["metadata"]["Header 1"] == "문서 제목"
     assert parsed_blocks[2]["metadata"]["Header 2"] == "표 영역"
     assert parsed_blocks[3]["text"].splitlines()[0] == "구분 | 지원 | 지원 | 설명"
     assert parsed_blocks[3]["text"].splitlines()[1] == "구분 | 수시 | 정시 | 비고"
+    assert "컨테이너 첫 문장\n컨테이너 둘째 문장" not in block_texts
+    assert block_texts.count("컨테이너 첫 문장") == 1
+    assert block_texts.count("컨테이너 둘째 문장") == 1
     assert "첫 번째 항목 보조 설명" in parsed_blocks[4]["text"]
     assert "두 번째 항목" in parsed_blocks[4]["text"]
     assert parsed_blocks[0]["page"] == 1
