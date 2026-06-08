@@ -167,9 +167,10 @@ def build_adapter_sample() -> dict:
             },
             {
                 "type": "caption",
+                "linked content id": 10,
                 "page number": 1,
                 "bounding box": [10, 260, 500, 285],
-                "content": "그림 1. 구조 보존 adapter 처리 흐름",
+                "content": "표 1. 지원 금액 현황",
             },
             {
                 "type": "formula",
@@ -240,11 +241,12 @@ def main() -> None:
     assert parsed_blocks[2]["metadata"]["Header 2"] == "표 영역"
     assert parsed_blocks[3]["text"].splitlines()[0] == "구분 | 지원 | 지원 | 설명"
     assert parsed_blocks[3]["text"].splitlines()[1] == "구분 | 수시 | 정시 | 비고"
-    assert block_texts.count("그림 1. 구조 보존 adapter 처리 흐름") == 1
+    assert block_texts.count("표 1. 지원 금액 현황") == 1
     assert block_texts.count("정확도 = 정답 수 / 전체 질문 수") == 1
     assert parsed_blocks[6]["block_type"] == "caption"
     assert parsed_blocks[7]["block_type"] == "formula"
-    assert source_blocks[6]["raw_text"] == "그림 1. 구조 보존 adapter 처리 흐름"
+    assert parsed_blocks[6]["metadata"]["opendataloader_linked_content_id"] == 10
+    assert source_blocks[6]["raw_text"] == "표 1. 지원 금액 현황"
     assert source_blocks[7]["raw_text"] == "정확도 = 정답 수 / 전체 질문 수"
     assert "반복 머리말" not in block_texts
     assert "반복 꼬리말" not in block_texts
@@ -275,6 +277,7 @@ def main() -> None:
     assert money_fact["value_type"] == "money"
     assert money_fact["source_block_id"] == source_blocks[3]["source_block_id"]
     assert money_fact["header_path"] == ["문서 제목", "표 영역"]
+    assert money_fact["caption"] == "표 1. 지원 금액 현황"
 
     shifted_fact = next(fact for fact in table_facts if fact["value"] == "40,000원")
     assert shifted_fact["row_label"] == "항목 C"
@@ -282,10 +285,11 @@ def main() -> None:
     assert shifted_fact["row_header_path"] == ["금액", "항목 C"]
     assert shifted_fact["column_path"] == ["지원", "정시"]
     assert shifted_fact["column_index"] == 2
+    assert shifted_fact["caption"] == "표 1. 지원 금액 현황"
 
     assert all(fact["value"] != "-" for fact in table_facts)
     assert all("긴 설명 문장" not in fact["value"] for fact in table_facts)
-    assert evidence_text.startswith("[표 근거]\n표 제목: 표 영역")
+    assert evidence_text.startswith("[표 근거]\n표 제목: 표 1. 지원 금액 현황")
     assert "행: 금액 > 항목 A / 열: 지원 > 수시 / 값: 10,000원" in evidence_text
     assert "row_label" not in evidence_text
     assert "column_label" not in evidence_text

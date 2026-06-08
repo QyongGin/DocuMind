@@ -83,6 +83,7 @@ def adapt_opendataloader_json_page(
     section_by_id: dict[str, SectionNode] = {}
     table_facts: list[TableFact] = []
     heading_path: list[str] = []
+    linked_caption_by_content_id = _linked_caption_by_content_id(candidates)
 
     for block_index, candidate in enumerate(candidates, start=1):
         level = _heading_level(candidate.element)
@@ -140,7 +141,11 @@ def adapt_opendataloader_json_page(
                     document_id=document_id,
                     table_index=block_index,
                     source_block_id=source_block.source_block_id,
-                    caption=_table_caption(heading_path),
+                    caption=_table_caption_for_candidate(
+                        candidate,
+                        heading_path,
+                        linked_caption_by_content_id,
+                    ),
                     header_path=heading_path,
                     diagnostics=diagnostics,
                     block_id=parsed_block.block_id,
@@ -388,6 +393,10 @@ def _base_element_metadata(element: Mapping[str, Any]) -> dict[str, Any]:
     }
     for source_key, target_key in (
         ("id", "opendataloader_element_id"),
+        ("linked content id", "opendataloader_linked_content_id"),
+        ("linked_content_id", "opendataloader_linked_content_id"),
+        ("linked content ids", "opendataloader_linked_content_ids"),
+        ("linked_content_ids", "opendataloader_linked_content_ids"),
         ("level", "opendataloader_level"),
         ("heading level", "opendataloader_heading_level"),
         ("numbering style", "opendataloader_numbering_style"),
@@ -406,6 +415,67 @@ def _base_element_metadata(element: Mapping[str, Any]) -> dict[str, Any]:
     if bbox is not None:
         metadata["bbox"] = list(bbox)
     return metadata
+
+
+def _linked_caption_by_content_id(
+    candidates: Sequence[_ElementCandidate],
+) -> dict[str, str]:
+    caption_by_content_id: dict[str, str] = {}
+    for candidate in candidates:
+        if candidate.element_type != "caption":
+            continue
+        for linked_content_id in _linked_content_ids(candidate.element):
+            caption_by_content_id.setdefault(linked_content_id, candidate.text)
+    return caption_by_content_id
+
+
+def _table_caption_for_candidate(
+    candidate: _ElementCandidate,
+    heading_path: Sequence[str],
+    linked_caption_by_content_id: Mapping[str, str],
+) -> str | None:
+    for content_id in _element_ids(candidate.element):
+        caption = linked_caption_by_content_id.get(content_id)
+        if caption:
+            return caption
+    return _table_caption(heading_path)
+
+
+def _element_ids(element: Mapping[str, Any]) -> tuple[str, ...]:
+    return _id_values(element, _ELEMENT_ID_KEYS)
+
+
+def _linked_content_ids(element: Mapping[str, Any]) -> tuple[str, ...]:
+    return _id_values(element, _LINKED_CONTENT_ID_KEYS)
+
+
+def _id_values(element: Mapping[str, Any], keys: Sequence[str]) -> tuple[str, ...]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for key in keys:
+        if key not in element:
+            continue
+        for value in _iter_id_values(element[key]):
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            values.append(value)
+    return tuple(values)
+
+
+def _iter_id_values(value: Any) -> Iterable[str]:
+    if isinstance(value, Mapping):
+        for key in _ELEMENT_ID_KEYS:
+            if key in value:
+                yield from _iter_id_values(value[key])
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for item in value:
+            yield from _iter_id_values(item)
+        return
+    cleaned = _clean_text(value)
+    if cleaned:
+        yield cleaned
 
 
 def _metadata_for_candidate(
@@ -762,6 +832,25 @@ _ELEMENT_TYPE_ALIASES = {
     "text_block": "paragraph",
     "list_item": "paragraph",
 }
+_ELEMENT_ID_KEYS = (
+    "id",
+    "content id",
+    "content_id",
+    "element id",
+    "element_id",
+)
+_LINKED_CONTENT_ID_KEYS = (
+    "linked content id",
+    "linked_content_id",
+    "linked content ids",
+    "linked_content_ids",
+    "linked content",
+    "linked_content",
+    "linked id",
+    "linked_id",
+    "linked element id",
+    "linked_element_id",
+)
 _NAMED_HEADING_LEVELS = {
     "doctitle": 1,
     "title": 1,
