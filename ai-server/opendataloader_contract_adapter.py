@@ -269,15 +269,51 @@ def _table_rows(element: Mapping[str, Any]) -> tuple[tuple[str, ...], ...]:
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
         return ()
     resolved_rows: list[tuple[str, ...]] = []
-    for row in rows:
+    row_span_carry: dict[int, dict[int, str]] = {}
+    for row_position, row in enumerate(rows):
         if not isinstance(row, Mapping):
             continue
+        row_number = _positive_int_from_mapping(
+            row,
+            _ROW_NUMBER_KEYS,
+            default=row_position + 1,
+        )
+        slots: dict[int, str] = dict(row_span_carry.pop(row_number, {}))
         cells = row.get("cells") or []
         if not isinstance(cells, Sequence) or isinstance(cells, (str, bytes)):
             continue
-        cell_texts = tuple(_element_text(cell) for cell in cells if isinstance(cell, Mapping))
-        if any(cell_texts):
-            resolved_rows.append(cell_texts)
+        next_column_index = 0
+        for cell in cells:
+            if not isinstance(cell, Mapping):
+                continue
+            fallback_column_index = _next_available_column_index(
+                slots,
+                next_column_index,
+            )
+            column_index = _zero_based_column_index(cell, fallback=fallback_column_index)
+            column_span = _positive_int_from_mapping(cell, _COLUMN_SPAN_KEYS, default=1)
+            row_span = _positive_int_from_mapping(cell, _ROW_SPAN_KEYS, default=1)
+            cell_text = _element_text(cell)
+
+            for span_offset in range(column_span):
+                resolved_column_index = column_index + span_offset
+                slots[resolved_column_index] = cell_text
+                for row_offset in range(1, row_span):
+                    carry_row_number = row_number + row_offset
+                    row_span_carry.setdefault(carry_row_number, {})[
+                        resolved_column_index
+                    ] = cell_text
+
+            next_column_index = max(next_column_index, column_index + column_span)
+
+        if slots:
+            width = max(slots) + 1
+            cell_texts = tuple(
+                _clean_text(slots.get(index, ""))
+                for index in range(width)
+            )
+            if any(cell_texts):
+                resolved_rows.append(cell_texts)
     return tuple(resolved_rows)
 
 
@@ -458,20 +494,26 @@ def _is_fact_value(value: str) -> bool:
 def _table_header_row_count(rows: Sequence[Sequence[str]]) -> int:
     header_count = 1
     for row in rows[1:3]:
-        if _row_looks_like_header_extension(row):
+        previous_row = rows[header_count - 1]
+        if _row_looks_like_header_extension(row, previous_row):
             header_count += 1
         else:
             break
     return header_count
 
 
-def _row_looks_like_header_extension(row: Sequence[str]) -> bool:
+def _row_looks_like_header_extension(
+    row: Sequence[str],
+    previous_row: Sequence[str] | None = None,
+) -> bool:
     cells = [_clean_text(cell) for cell in row]
     non_empty = [cell for cell in cells if cell]
     if not non_empty:
         return False
     if cells and cells[0]:
-        return False
+        previous_first = _clean_text(previous_row[0]) if previous_row else ""
+        if cells[0] != previous_first:
+            return False
     return not any(_table_cell_has_compact_value(cell) for cell in non_empty)
 
 
@@ -588,6 +630,41 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
+def _positive_int_from_mapping(
+    values: Mapping[str, Any],
+    keys: Sequence[str],
+    *,
+    default: int,
+) -> int:
+    for key in keys:
+        if key not in values:
+            continue
+        parsed = _coerce_int(values[key])
+        if parsed is not None and parsed > 0:
+            return parsed
+    return default
+
+
+def _zero_based_column_index(values: Mapping[str, Any], *, fallback: int) -> int:
+    parsed = None
+    for key in _COLUMN_NUMBER_KEYS:
+        if key in values:
+            parsed = _coerce_int(values[key])
+            break
+    if parsed is None:
+        return fallback
+    if parsed <= 0:
+        return 0
+    return parsed - 1
+
+
+def _next_available_column_index(slots: Mapping[int, str], start: int) -> int:
+    candidate = max(0, start)
+    while candidate in slots:
+        candidate += 1
+    return candidate
+
+
 def _clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").replace("<br>", " ")).strip()
 
@@ -616,3 +693,7 @@ _NAMED_HEADING_LEVELS = {
 }
 _EMPTY_TABLE_VALUES = {"-", "–", "—", "ㆍ", ".", ""}
 _MAX_COMPACT_TEXT_FACT_CHARS = 80
+_ROW_NUMBER_KEYS = ("row number", "row_number", "row")
+_COLUMN_NUMBER_KEYS = ("column number", "column_number", "col number", "col_number")
+_ROW_SPAN_KEYS = ("row span", "row_span", "rowspan")
+_COLUMN_SPAN_KEYS = ("column span", "column_span", "col span", "col_span", "colspan")

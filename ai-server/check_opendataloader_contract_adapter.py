@@ -41,16 +41,15 @@ def build_adapter_sample() -> dict:
                 "id": 10,
                 "page number": 1,
                 "bounding box": [10, 460, 500, 610],
-                "number of rows": 5,
+                "number of rows": 6,
                 "number of columns": 4,
                 "rows": [
                     {
                         "type": "table row",
                         "row number": 1,
                         "cells": [
-                            _cell("구분", row=1, column=1),
-                            _cell("지원", row=1, column=2),
-                            _cell("지원", row=1, column=3),
+                            _cell("구분", row=1, column=1, row_span=2),
+                            _cell("지원", row=1, column=2, column_span=2),
                             _cell("설명", row=1, column=4),
                         ],
                     },
@@ -58,7 +57,6 @@ def build_adapter_sample() -> dict:
                         "type": "table row",
                         "row number": 2,
                         "cells": [
-                            _cell("", row=2, column=1),
                             _cell("수시", row=2, column=2),
                             _cell("정시", row=2, column=3),
                             _cell("비고", row=2, column=4),
@@ -99,6 +97,15 @@ def build_adapter_sample() -> dict:
                             _cell("-", row=5, column=2),
                             _cell("30,000원", row=5, column=3),
                             _cell("검토", row=5, column=4),
+                        ],
+                    },
+                    {
+                        "type": "table row",
+                        "row number": 6,
+                        "cells": [
+                            _cell("항목 C", row=6, column=1),
+                            _cell("40,000원", row=6, column=3),
+                            _cell("완료", row=6, column=4),
                         ],
                     },
                 ],
@@ -174,6 +181,7 @@ def main() -> None:
     assert parsed_blocks[2]["metadata"]["Header 1"] == "문서 제목"
     assert parsed_blocks[2]["metadata"]["Header 2"] == "표 영역"
     assert parsed_blocks[3]["text"].splitlines()[0] == "구분 | 지원 | 지원 | 설명"
+    assert parsed_blocks[3]["text"].splitlines()[1] == "구분 | 수시 | 정시 | 비고"
     assert "첫 번째 항목 보조 설명" in parsed_blocks[4]["text"]
     assert "두 번째 항목" in parsed_blocks[4]["text"]
     assert parsed_blocks[0]["page"] == 1
@@ -190,6 +198,14 @@ def main() -> None:
     assert money_fact["value_type"] == "money"
     assert money_fact["source_block_id"] == source_blocks[3]["source_block_id"]
     assert money_fact["header_path"] == ["문서 제목", "표 영역"]
+
+    shifted_fact = next(fact for fact in table_facts if fact["value"] == "40,000원")
+    assert shifted_fact["row_label"] == "항목 C"
+    assert shifted_fact["column_label"] == "지원 > 정시"
+    assert shifted_fact["row_header_path"] == ["금액", "항목 C"]
+    assert shifted_fact["column_path"] == ["지원", "정시"]
+    assert shifted_fact["column_index"] == 2
+
     assert all(fact["value"] != "-" for fact in table_facts)
     assert all("긴 설명 문장" not in fact["value"] for fact in table_facts)
     assert evidence_text.startswith("[표 근거]\n표 제목: 표 영역")
@@ -223,8 +239,15 @@ def main() -> None:
     print("opendataloader contract adapter smoke ok")
 
 
-def _cell(content: str, *, row: int, column: int) -> dict:
-    return {
+def _cell(
+    content: str,
+    *,
+    row: int,
+    column: int,
+    row_span: int = 1,
+    column_span: int = 1,
+) -> dict:
+    cell = {
         "type": "table cell",
         "page number": 1,
         "row number": row,
@@ -237,6 +260,11 @@ def _cell(content: str, *, row: int, column: int) -> dict:
             }
         ],
     }
+    if row_span > 1:
+        cell["row span"] = row_span
+    if column_span > 1:
+        cell["column span"] = column_span
+    return cell
 
 
 if __name__ == "__main__":
