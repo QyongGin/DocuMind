@@ -33,7 +33,10 @@ from rag_contract_builders import (
     section_path_warnings,
 )
 from rag_contracts import TableFact, contract_to_dict
-from rag_table_fact_selector import select_table_facts_for_question
+from rag_table_fact_selector import (
+    build_table_fact_evidence_preview,
+    select_table_facts_for_question,
+)
 
 try:
     from kiwipiepy import Kiwi
@@ -2169,6 +2172,16 @@ class RagTraceRequest(BaseModel):
     vector_preview_size: int = Field(default=8, ge=0, le=32)
 
 
+@dataclass(frozen=True)
+class PriorityTableFactEvidence:
+    """Prompt에 우선 배치할 수 있는 검증된 표 근거."""
+
+    evidence_text: str
+    chunk_id: str
+    source_index: int
+    reasons: tuple[str, ...] = ()
+
+
 DEFAULT_SYSTEM_PROMPT = (
     "너는 인하공업전문대학 문서를 근거로 답변하는 안내 챗봇이다."
 )
@@ -4141,12 +4154,28 @@ def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list
     return expanded_docs, expanded_metadatas, expanded_ids
 
 
-def _build_rag_prompt(system_prompt: str | None, context: str, question: str) -> str:
+def _build_rag_prompt(
+    system_prompt: str | None,
+    context: str,
+    question: str,
+    priority_table_evidence: str = "",
+) -> str:
     """검색 근거와 사용자 질문을 LLM 입력 프롬프트로 조합한다."""
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
+    priority_block = ""
+    if priority_table_evidence.strip():
+        priority_block = f"""
+[우선 표 근거]
+{priority_table_evidence.strip()}
+
+[우선 표 근거 사용 규칙]
+- [우선 표 근거]가 있으면 이 블록의 행, 열, 값 관계를 [검색 근거]보다 먼저 사용한다.
+- [우선 표 근거]에 없는 조건, 전형, 서류, 해석은 만들지 않는다.
+"""
     return f"""{prompt_policy}
 
 {MANDATORY_RAG_PROMPT}
+{priority_block}
 
 [검색 근거]
 {context}
@@ -4545,10 +4574,26 @@ def _selected_table_fact_previews(
         preview["matched_row_terms"] = list(selection.matched_row_terms)
         preview["matched_column_terms"] = list(selection.matched_column_terms)
         selected_previews.append(preview)
+    evidence_preview = build_table_fact_evidence_preview(selection_result)
     return {
         "comparison_mode": selection_result.comparison_mode,
         "target_row_labels": list(selection_result.target_row_labels),
         "selected_facts": selected_previews,
+        "evidence_preview": {
+            "runtime_connection": "trace_only",
+            "prompt_candidate_ready": evidence_preview.prompt_candidate_ready,
+            "evidence_text": evidence_preview.evidence_text,
+            "reasons": list(evidence_preview.reasons),
+            "truncated": evidence_preview.truncated,
+            "diagnostics": [
+                {
+                    "code": diagnostic.code,
+                    "message": diagnostic.message,
+                    "details": diagnostic.details or {},
+                }
+                for diagnostic in evidence_preview.diagnostics
+            ],
+        },
         "diagnostics": [
             {
                 "code": diagnostic.code,
@@ -4558,6 +4603,100 @@ def _selected_table_fact_previews(
             for diagnostic in selection_result.diagnostics
         ],
     }
+
+
+def _priority_table_fact_evidence_for_prompt(
+    question: str,
+    docs: list[str],
+    metadatas: list[dict],
+    ids: list[str],
+) -> PriorityTableFactEvidence | None:
+    """최종 검색 후보에서 prompt에 올릴 수 있는 첫 번째 표 근거를 고른다."""
+    for source_index, (doc, meta, chunk_id) in enumerate(
+        zip(docs, metadatas, ids),
+        start=1,
+    ):
+        meta = meta or {}
+        source_block_id = str(meta.get("source_block_id") or "")
+        table_fact_candidates = _typed_table_fact_contract_candidates(
+            str(chunk_id),
+            doc,
+            meta,
+            source_block_id,
+        )
+        if not table_fact_candidates:
+            continue
+        selection_result = select_table_facts_for_question(
+            question,
+            [table_fact for table_fact, _ in table_fact_candidates],
+        )
+        evidence_preview = build_table_fact_evidence_preview(selection_result)
+        if not evidence_preview.prompt_candidate_ready or not evidence_preview.evidence_text:
+            continue
+        return PriorityTableFactEvidence(
+            evidence_text=evidence_preview.evidence_text,
+            chunk_id=str(chunk_id),
+            source_index=source_index,
+            reasons=evidence_preview.reasons,
+        )
+    return None
+
+
+def _build_priority_table_fact_answer(
+    evidence: PriorityTableFactEvidence | None,
+) -> str | None:
+    """검증된 표 근거가 있으면 LLM 없이 행/열/값 기반 답변을 만든다."""
+    if evidence is None or not evidence.evidence_text.strip():
+        return None
+
+    common_contexts: list[str] = []
+    answer_lines: list[str] = []
+    for line in evidence.evidence_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("공통 맥락:"):
+            context = stripped.split(":", 1)[1].strip()
+            if context:
+                common_contexts.append(context)
+            continue
+        match = re.match(r"- 행: (?P<row>.+?) / 열: (?P<column>.+?) / 값: (?P<value>.+)$", stripped)
+        if not match:
+            continue
+        row = match.group("row").strip()
+        column = match.group("column").strip()
+        value = match.group("value").strip()
+        if not row or not column or not value:
+            continue
+        if column == "지원자격" or column.endswith(" > 지원자격"):
+            answer_lines.append(f"- {row}: {value}")
+        else:
+            answer_lines.append(f"- {row} / {column}: {value}")
+
+    if not answer_lines:
+        return None
+
+    prefix = "표 근거 기준 답변입니다."
+    if common_contexts:
+        prefix += f"\n공통 맥락: {', '.join(common_contexts)}"
+    return f"{prefix}\n" + "\n".join(answer_lines)
+
+
+def _priority_table_fact_answer_for_request(
+    evidence: PriorityTableFactEvidence | None,
+    system_prompt: str | None,
+) -> str | None:
+    """관리자 prompt가 있으면 고정 답변 대신 LLM이 형식 지시를 적용하게 둔다."""
+    if system_prompt and system_prompt.strip():
+        return None
+    return _build_priority_table_fact_answer(evidence)
+
+
+def _priority_table_fact_answer_disabled_reason(
+    evidence: PriorityTableFactEvidence | None,
+    system_prompt: str | None,
+) -> str | None:
+    if evidence is not None and system_prompt and system_prompt.strip():
+        return "custom_system_prompt"
+    return None
 
 
 def _contract_trace_preview(
@@ -5195,8 +5334,27 @@ def _trace_query_retrieval(
     final_docs = focused_docs[:top_k]
     final_metadatas = focused_metadatas[:top_k]
     final_ids = focused_ids[:top_k]
+    priority_table_evidence = (
+        _priority_table_fact_evidence_for_prompt(
+            question,
+            final_docs,
+            final_metadatas,
+            final_ids,
+        )
+        if final_docs
+        else None
+    )
     context = _build_context(final_docs, final_metadatas, final_ids, analysis) if final_docs else ""
-    prompt = _build_rag_prompt(system_prompt, context, question) if final_docs else ""
+    prompt = (
+        _build_rag_prompt(
+            system_prompt,
+            context,
+            question,
+            priority_table_evidence.evidence_text if priority_table_evidence else "",
+        )
+        if final_docs
+        else ""
+    )
     final_candidates = [
         _format_rerank_candidate(
             index + 1,
@@ -5266,6 +5424,23 @@ def _trace_query_retrieval(
             "final_candidates": final_candidates,
         },
         "final_context": context,
+        "priority_table_evidence": {
+            "runtime_connection": "query_prompt",
+            "chunk_id": priority_table_evidence.chunk_id,
+            "source_index": priority_table_evidence.source_index,
+            "reasons": list(priority_table_evidence.reasons),
+            "evidence_text": priority_table_evidence.evidence_text,
+            "deterministic_answer": _priority_table_fact_answer_for_request(
+                priority_table_evidence,
+                system_prompt,
+            ),
+            "deterministic_answer_disabled_reason": (
+                _priority_table_fact_answer_disabled_reason(
+                    priority_table_evidence,
+                    system_prompt,
+                )
+            ),
+        } if priority_table_evidence else None,
         "final_prompt_preview": _preview_text(prompt, 3000),
         "timing": {
             "embedding_elapsed": _round_float(embedding_elapsed, 4),
@@ -5361,9 +5536,24 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         return None, [], metrics
 
     context_build_start = time.perf_counter()
+    priority_table_evidence = _priority_table_fact_evidence_for_prompt(
+        question,
+        docs,
+        metadatas,
+        ids,
+    )
     context = _build_context(docs, metadatas, ids, analysis)
     # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
-    prompt = _build_rag_prompt(system_prompt, context, question)
+    prompt = _build_rag_prompt(
+        system_prompt,
+        context,
+        question,
+        priority_table_evidence.evidence_text if priority_table_evidence else "",
+    )
+    priority_table_fact_answer = _priority_table_fact_answer_for_request(
+        priority_table_evidence,
+        system_prompt,
+    )
 
     # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 사용자 표시용 헤더 포함
     sources = []
@@ -5413,6 +5603,17 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "retrieval_chunk_query_error": results.get("retrieval_chunk_query_error"),
         "query_intent": analysis.intent,
         "query_subject_terms": sorted(analysis.subject_terms),
+        "priority_table_evidence_used": priority_table_evidence is not None,
+        "priority_table_evidence_chunk_id": (
+            priority_table_evidence.chunk_id if priority_table_evidence else None
+        ),
+        "priority_table_fact_answer": priority_table_fact_answer,
+        "priority_table_fact_answer_disabled_reason": (
+            _priority_table_fact_answer_disabled_reason(
+                priority_table_evidence,
+                system_prompt,
+            )
+        ),
     }
     logger.info(
         "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s retrieval_chunk_vector=%s legacy_vector=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
@@ -5585,6 +5786,18 @@ async def query_document(request: QueryRequest):
     if prompt is None:
         return {"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
 
+    priority_answer = query_metrics.get("priority_table_fact_answer")
+    if priority_answer:
+        logger.info(
+            "[query] priority_table_fact_answer sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs total=%.2fs",
+            len(sources),
+            query_metrics["context_chars"],
+            query_metrics["prompt_chars"],
+            query_metrics["prepare_elapsed"],
+            time.perf_counter() - query_start,
+        )
+        return {"answer": priority_answer, "sources": sources}
+
     # async 핸들러에서 ainvoke()로 이벤트 루프 블로킹 방지
     llm_start = time.perf_counter()
     answer = await llm.ainvoke(prompt)
@@ -5632,6 +5845,30 @@ async def query_stream(request: QueryRequest):
             empty_stream(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+        )
+
+    priority_answer = query_metrics.get("priority_table_fact_answer")
+    if priority_answer:
+        async def priority_stream():
+            yield f"data: {json.dumps({'answer': priority_answer}, ensure_ascii=False)}\n\n"
+            payload = json.dumps(
+                {"done": True, "answer": priority_answer, "sources": sources},
+                ensure_ascii=False,
+            )
+            yield f"data: {payload}\n\n"
+
+        logger.info(
+            "[query_stream] priority_table_fact_answer sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs total=%.2fs",
+            len(sources),
+            query_metrics["context_chars"],
+            query_metrics["prompt_chars"],
+            query_metrics["prepare_elapsed"],
+            time.perf_counter() - stream_start,
+        )
+        return StreamingResponse(
+            priority_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     async def token_stream():
