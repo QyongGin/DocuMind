@@ -32,7 +32,8 @@ from rag_contract_builders import (
     section_path_quality,
     section_path_warnings,
 )
-from rag_contracts import contract_to_dict
+from rag_contracts import TableFact, contract_to_dict
+from rag_table_fact_selector import select_table_facts_for_question
 
 try:
     from kiwipiepy import Kiwi
@@ -713,7 +714,7 @@ def _clean_table_cell(cell: str) -> str:
 
 def _is_empty_table_cell(cell: str) -> bool:
     """Markdown 파싱 과정에서 생긴 빈 cell인지 확인한다."""
-    return not cell or cell in {"-", "–", "—"}
+    return not cell or cell in {"-", "–", "—"} or bool(re.fullmatch(r"[-–—]+", cell))
 
 
 def _normalize_table_symbol(symbol: str) -> str:
@@ -801,6 +802,8 @@ def _is_probable_subheader_row(row: list[str]) -> bool:
         return False
     if any(re.search(r"\d", cell) for cell in non_empty_cells):
         return False
+    if any(len(cell) > 24 or len(cell.split()) >= 4 for cell in non_empty_cells):
+        return False
     return True
 
 
@@ -844,8 +847,7 @@ def _select_row_subject(row: list[str], column_labels: list[str]) -> tuple[str, 
         label = column_labels[index] if index < len(column_labels) else f"열 {index + 1}"
         descriptors.append(f"{label}={cell}")
         if (
-            not preferred_subject
-            and any(keyword in label for keyword in ("모집단위", "학과", "항목", "요소", "구분", "전형", "프로젝트 유형"))
+            any(keyword in label for keyword in ("모집단위", "학과", "항목", "요소", "구분", "전형", "프로젝트 유형"))
             and not re.fullmatch(r"[\d.,]+", cell)
         ):
             preferred_subject = cell
@@ -4440,22 +4442,32 @@ def _query_intent_contract_preview(question: str, analysis: QueryAnalysis) -> di
     return contract_to_dict(query_intent)
 
 
-def _typed_table_fact_contract_previews(
+def _typed_table_fact_contract_candidates(
     chunk_id: str,
     doc: str,
     meta: dict,
     source_block_id: str,
     max_facts: int = 8,
-) -> list[dict]:
-    """runtime table_fact 문자열을 typed TableFact preview로 변환한다."""
-    facts = _get_matched_table_facts(meta)
-    fact_source = "matched_table_facts"
-    if not facts and meta.get("chunk_role") == "table_fact":
-        facts = [doc.strip()] if doc.strip() else []
-        fact_source = "candidate_table_fact_document"
-    elif not facts and "|" in doc:
-        facts = _extract_table_facts(doc, meta)
-        fact_source = "extracted_from_candidate_doc"
+) -> list[tuple[TableFact, str]]:
+    """runtime table_fact 문자열을 typed TableFact 후보로 변환한다."""
+    fact_entries: list[tuple[str, str]] = []
+    seen_facts: set[str] = set()
+
+    def append_facts(facts: list[str], fact_source: str) -> None:
+        for fact in facts:
+            normalized_fact = fact.strip()
+            if not normalized_fact or normalized_fact in seen_facts:
+                continue
+            seen_facts.add(normalized_fact)
+            fact_entries.append((normalized_fact, fact_source))
+
+    if "|" in doc and meta.get("chunk_role") != "table_fact":
+        append_facts(_extract_table_facts(doc, meta), "extracted_from_candidate_doc")
+
+    append_facts(_get_matched_table_facts(meta), "matched_table_facts")
+
+    if not fact_entries and meta.get("chunk_role") == "table_fact":
+        append_facts([doc.strip()] if doc.strip() else [], "candidate_table_fact_document")
 
     header_path = tuple(
         str(meta.get(header_key) or "").strip()
@@ -4464,8 +4476,8 @@ def _typed_table_fact_contract_previews(
     )
     table_index = _contract_block_index(chunk_id, meta)
     resolved_source_block_id = str(meta.get("source_block_id") or source_block_id)
-    previews: list[dict] = []
-    for row_index, fact in enumerate(facts):
+    candidates: list[tuple[TableFact, str]] = []
+    for row_index, (fact, fact_source) in enumerate(fact_entries):
         row_label = _extract_table_fact_row_subject(fact)
         if not row_label:
             continue
@@ -4487,15 +4499,59 @@ def _typed_table_fact_contract_previews(
                 caption=caption,
                 header_path=header_path,
             )
-            preview = contract_to_dict(table_fact)
-            preview["preview_source"] = fact_source
-            previews.append(preview)
-            if len(previews) >= max_facts:
-                return previews
-    return previews
+            candidates.append((table_fact, fact_source))
+            if len(candidates) >= max_facts:
+                return candidates
+    return candidates
 
 
-def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: int = 240) -> dict:
+def _typed_table_fact_preview(table_fact: TableFact, fact_source: str) -> dict:
+    preview = contract_to_dict(table_fact)
+    preview["preview_source"] = fact_source
+    return preview
+
+
+def _selected_table_fact_previews(
+    question: str,
+    table_fact_candidates: list[tuple[TableFact, str]],
+) -> dict:
+    typed_facts = [table_fact for table_fact, _ in table_fact_candidates]
+    selection_result = select_table_facts_for_question(question, typed_facts)
+    fact_source_by_id = {
+        table_fact.fact_id: fact_source
+        for table_fact, fact_source in table_fact_candidates
+    }
+    selected_previews = []
+    for selection in selection_result.selections:
+        preview = contract_to_dict(selection.fact)
+        preview["preview_source"] = fact_source_by_id.get(selection.fact.fact_id, "")
+        preview["selection_score"] = selection.score
+        preview["selection_reasons"] = list(selection.reasons)
+        preview["matched_row_terms"] = list(selection.matched_row_terms)
+        preview["matched_column_terms"] = list(selection.matched_column_terms)
+        selected_previews.append(preview)
+    return {
+        "comparison_mode": selection_result.comparison_mode,
+        "target_row_labels": list(selection_result.target_row_labels),
+        "selected_facts": selected_previews,
+        "diagnostics": [
+            {
+                "code": diagnostic.code,
+                "message": diagnostic.message,
+                "details": diagnostic.details or {},
+            }
+            for diagnostic in selection_result.diagnostics
+        ],
+    }
+
+
+def _contract_trace_preview(
+    chunk_id: str,
+    doc: str,
+    meta: dict,
+    preview_chars: int = 240,
+    question: str | None = None,
+) -> dict:
     """현재 trace 후보를 ParsedBlock/SourceBlock 진단 preview로 변환한다."""
     meta = meta or {}
     try:
@@ -4524,11 +4580,20 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
         )
         page_span = source_block.page_span
         section_path = list(section_node.path) if section_node else []
-        typed_table_facts = _typed_table_fact_contract_previews(
+        typed_table_fact_candidates = _typed_table_fact_contract_candidates(
             str(chunk_id),
             doc,
             meta,
             source_block.source_block_id,
+        )
+        typed_table_facts = [
+            _typed_table_fact_preview(table_fact, fact_source)
+            for table_fact, fact_source in typed_table_fact_candidates
+        ]
+        selected_table_facts = (
+            _selected_table_fact_previews(question, typed_table_fact_candidates)
+            if question and typed_table_fact_candidates
+            else None
         )
         return {
             "parsed_block_id": parsed_block.block_id,
@@ -4584,13 +4649,20 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
                 preview_chars=preview_chars,
             ),
             "typed_table_facts": typed_table_facts,
+            "selected_table_facts": selected_table_facts,
         }
     except Exception:
         logger.exception("[rag_contract_preview] failed chunk_id=%s", chunk_id)
         return {"error": "contract_preview_failed"}
 
 
-def _candidate_location_summary(chunk_id: str, doc: str, meta: dict, preview_chars: int = 360) -> dict:
+def _candidate_location_summary(
+    chunk_id: str,
+    doc: str,
+    meta: dict,
+    preview_chars: int = 360,
+    question: str | None = None,
+) -> dict:
     """trace 후보의 문서 위치와 본문 미리보기를 만든다."""
     meta = meta or {}
     return {
@@ -4605,7 +4677,12 @@ def _candidate_location_summary(chunk_id: str, doc: str, meta: dict, preview_cha
         "chunk_index": meta.get("chunk_index", _parse_chunk_index(str(chunk_id))),
         "header_path": _format_header_path(meta),
         "content_preview": _preview_text(doc, preview_chars),
-        "contract_preview": _contract_trace_preview(str(chunk_id), doc, meta),
+        "contract_preview": _contract_trace_preview(
+            str(chunk_id),
+            doc,
+            meta,
+            question=question,
+        ),
     }
 
 
@@ -4741,7 +4818,7 @@ def _format_rerank_candidate(
 
     trace_key = _candidate_parent_key(str(chunk_id), meta)
     retrieval = trace_by_id.get(str(chunk_id)) or trace_by_id.get(trace_key) or {"retrieval_methods": []}
-    formatted = _candidate_location_summary(chunk_id, doc, meta)
+    formatted = _candidate_location_summary(chunk_id, doc, meta, question=question)
     formatted.update({
         "rank": rank,
         "selected_for_prompt": selected,
