@@ -31,6 +31,17 @@ def build_adapter_sample() -> dict:
                 "content": "표 영역",
             },
             {
+                "type": "header",
+                "page number": 1,
+                "kids": [
+                    {
+                        "type": "paragraph",
+                        "page number": 1,
+                        "content": "반복 머리말",
+                    }
+                ],
+            },
+            {
                 "type": "paragraph",
                 "page number": 1,
                 "bounding box": [10, 620, 280, 650],
@@ -138,6 +149,17 @@ def build_adapter_sample() -> dict:
                 ],
             },
             {
+                "type": "footer",
+                "page number": 1,
+                "kids": [
+                    {
+                        "type": "paragraph",
+                        "page number": 1,
+                        "content": "반복 꼬리말",
+                    }
+                ],
+            },
+            {
                 "type": "paragraph",
                 "page number": 1,
                 "bounding box": [10, 300, 500, 340],
@@ -194,6 +216,7 @@ def main() -> None:
     sample = build_adapter_sample()
 
     parsed_blocks = sample["parsed_blocks"]
+    section_nodes = sample["section_nodes"]
     source_blocks = sample["source_blocks"]
     table_facts = sample["table_facts"]
     evidence_text = sample["evidence_text"]
@@ -212,6 +235,7 @@ def main() -> None:
         "paragraph",
     ]
     block_texts = [block["text"] for block in parsed_blocks]
+    section_by_path = {tuple(section["path"]): section for section in section_nodes}
     assert parsed_blocks[2]["metadata"]["Header 1"] == "문서 제목"
     assert parsed_blocks[2]["metadata"]["Header 2"] == "표 영역"
     assert parsed_blocks[3]["text"].splitlines()[0] == "구분 | 지원 | 지원 | 설명"
@@ -222,6 +246,8 @@ def main() -> None:
     assert parsed_blocks[7]["block_type"] == "formula"
     assert source_blocks[6]["raw_text"] == "그림 1. 구조 보존 adapter 처리 흐름"
     assert source_blocks[7]["raw_text"] == "정확도 = 정답 수 / 전체 질문 수"
+    assert "반복 머리말" not in block_texts
+    assert "반복 꼬리말" not in block_texts
     assert "컨테이너 첫 문장\n컨테이너 둘째 문장" not in block_texts
     assert block_texts.count("컨테이너 첫 문장") == 1
     assert block_texts.count("컨테이너 둘째 문장") == 1
@@ -232,6 +258,14 @@ def main() -> None:
     assert source_blocks[0]["raw_text"] == "문서 제목"
     assert source_blocks[0]["page_span"] == {"start": 1, "end": 1}
     assert source_blocks[0]["bbox_span"] == [[10.0, 700.0, 200.0, 730.0]]
+
+    root_section = section_by_path[("문서 제목",)]
+    table_section = section_by_path[("문서 제목", "표 영역")]
+    assert root_section["block_ids"] == [parsed_blocks[0]["block_id"]]
+    assert table_section["block_ids"] == [
+        block["block_id"] for block in parsed_blocks[1:]
+    ]
+    assert table_section["page_span"] == {"start": 1, "end": 1}
 
     money_fact = next(fact for fact in table_facts if fact["value"] == "10,000원")
     assert money_fact["row_label"] == "항목 A"

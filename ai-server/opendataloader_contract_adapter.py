@@ -8,7 +8,7 @@ ParsedBlock, SectionNode, SourceBlock, and TableFact contracts.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
@@ -21,7 +21,14 @@ from rag_contract_builders import (
     build_table_cell_fact,
     infer_table_value_type,
 )
-from rag_contracts import JsonValue, ParsedBlock, SectionNode, SourceBlock, TableFact
+from rag_contracts import (
+    JsonValue,
+    PageSpan,
+    ParsedBlock,
+    SectionNode,
+    SourceBlock,
+    TableFact,
+)
 
 
 @dataclass(frozen=True)
@@ -101,7 +108,12 @@ def adapt_opendataloader_json_page(
 
         section_node = build_section_node(parsed_block)
         if section_node is not None:
-            section_by_id.setdefault(section_node.section_id, section_node)
+            existing_section = section_by_id.get(section_node.section_id)
+            section_by_id[section_node.section_id] = (
+                _merge_section_nodes(existing_section, section_node)
+                if existing_section is not None
+                else section_node
+            )
 
         source_block = build_source_block(
             parsed_block,
@@ -224,10 +236,43 @@ def _iter_elements(elements: Iterable[Any]) -> Iterable[Mapping[str, Any]]:
         nested = _nested_text_children(element)
         if not _is_container_only_element(element, nested):
             yield element
-        if element_type in {"table", "list"}:
+        if element_type in _SUBTREE_STOP_ELEMENT_TYPES:
             continue
         if nested:
             yield from _iter_elements(nested)
+
+
+def _merge_section_nodes(existing: SectionNode, incoming: SectionNode) -> SectionNode:
+    return replace(
+        existing,
+        page_span=_merge_page_spans(existing.page_span, incoming.page_span),
+        block_ids=_append_unique(existing.block_ids, incoming.block_ids),
+    )
+
+
+def _merge_page_spans(left: PageSpan | None, right: PageSpan | None) -> PageSpan | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+
+    starts = [value for value in (left.start, right.start) if value is not None]
+    ends = [value for value in (left.end, right.end) if value is not None]
+    return PageSpan(
+        start=min(starts) if starts else None,
+        end=max(ends) if ends else None,
+    )
+
+
+def _append_unique(left: Sequence[str], right: Sequence[str]) -> tuple[str, ...]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in (*left, *right):
+        if value in seen:
+            continue
+        seen.add(value)
+        merged.append(value)
+    return tuple(merged)
 
 
 def _normalize_element_type(value: Any) -> str:
@@ -705,6 +750,14 @@ _CONTRACT_ELEMENT_TYPES = {
     "formula",
 }
 _CONTAINER_ONLY_ELEMENT_TYPES = {"text_block"}
+_SUBTREE_STOP_ELEMENT_TYPES = {
+    "table",
+    "list",
+    "header",
+    "footer",
+    "page_header",
+    "page_footer",
+}
 _ELEMENT_TYPE_ALIASES = {
     "text_block": "paragraph",
     "list_item": "paragraph",
