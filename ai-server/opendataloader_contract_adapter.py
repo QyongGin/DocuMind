@@ -696,7 +696,14 @@ def _last_text(values: Sequence[str]) -> str:
     return ""
 
 
-_CONTRACT_ELEMENT_TYPES = {"heading", "paragraph", "table", "list"}
+_CONTRACT_ELEMENT_TYPES = {
+    "heading",
+    "paragraph",
+    "table",
+    "list",
+    "caption",
+    "formula",
+}
 _CONTAINER_ONLY_ELEMENT_TYPES = {"text_block"}
 _ELEMENT_TYPE_ALIASES = {
     "text_block": "paragraph",
