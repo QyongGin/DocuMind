@@ -1,0 +1,25 @@
+Thesis
+
+DocuMind RAG improved because we stopped treating PDFs as flat text and started preserving the structure that answers depend on: tables, labels, legends, and two-column layout.
+
+Audience
+
+Beginner developers, project reviewers, and faculty evaluating a graduation-project RAG system.
+
+One-line arc
+
+The team moved from symptom-driven prompt tweaks to a measurable RAG pipeline: evaluate, diagnose chunk quality, preserve layout, extract table facts, compress evidence, then answer.
+
+Slide list
+
+1. Cover: The failure was not simply model quality; the evidence shape was broken. Proof: 2~3/8 to 7/8.
+2. Diagnosis: Trace and answer checks split the failure type. Proof: trace pass remained high while answer pass failed.
+3. Root cause: flat Markdown collapses tables and two-column cards. Proof: problem matrix.
+4. Industry pattern: reliable RAG keeps layout, chunks by structure, and checks grounding. Proof: source map.
+5. New pipeline: raw chunks, table facts, layout sidecar, and evidence focus are separate layers. Proof: architecture diagram.
+6. Evaluation and chunk lab: quality tooling made the invisible visible. Proof: tool chain and observed counters.
+7. Layout layer: LayoutBlock and sidecar store add coordinates without replacing raw chunks. Proof: gate diagram.
+8. Table/evidence layer: table facts and label matching make direct evidence. Proof: examples.
+9. Rollbacks: hardcoding was rejected even when it improved a narrow case. Proof: rollback matrix.
+10. Conclusion: the next work is server validation, broader evaluation, and subject catalog for abbreviations. Proof: roadmap.
+

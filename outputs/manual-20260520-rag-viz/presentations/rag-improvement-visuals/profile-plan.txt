@@ -1,0 +1,31 @@
+Task mode: create
+Primary deck-profile: engineering-platform
+Secondary profile gates: none
+
+Required proof objects
+
+- Evaluation delta: overall answer pass moved from 2~3/8 to 7/8 on the four admission cases.
+- Diagnostic split: trace pass remained high while answer pass failed, proving generation/grounding and structure issues.
+- Architecture map: before/after ingestion and retrieval pipeline.
+- Layout proof: LayoutBlock, sidecar store, confidence gate.
+- Table proof: table_fact, label evidence, legend aggregate, label-value bridge.
+- Rollback table: hardcoding-prone attempts intentionally removed.
+
+Source and asset requirements
+
+- Use local docs and source code as factual basis.
+- Use verified external references as text citations only.
+- Do not invent additional metrics beyond the known evaluation numbers.
+
+Profile-specific QA gates
+
+- Technical labels must remain accurate enough for engineers.
+- Slides must simplify without hiding the core RAG mechanics.
+- Every slide must have one claim and one proof object.
+- No decorative pseudo-logos or generic feature-card grid.
+
+Known missing inputs
+
+- No user-provided brand template.
+- No server-side screenshots or final GCP validation for the latest two local commits yet.
+

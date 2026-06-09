@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DocuMind RAG Lab</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">DocuMind Experiment</p>
+        <h1>RAG Lab</h1>
+      </div>
+      <div class="status" id="serverStatus">AI 서버 확인 중</div>
+    </header>
+
+    <main class="workspace">
+      <section class="query-pane" aria-label="질문 입력">
+        <form id="queryForm">
+          <label for="question">질문</label>
+          <textarea id="question" name="question" rows="8" placeholder="예: 전공심화 과정이 개설된 학과는 어디인가요?"></textarea>
+
+          <div class="control-row">
+            <label for="topK">Top K</label>
+            <input id="topK" name="topK" type="number" min="1" max="20" value="5" />
+          </div>
+
+          <label for="systemPrompt">시스템 프롬프트</label>
+          <textarea id="systemPrompt" name="systemPrompt" rows="5" placeholder="비워 두면 ai-server 기본 프롬프트를 사용한다."></textarea>
+
+          <label class="check-row">
+            <input id="includeTrace" name="includeTrace" type="checkbox" checked />
+            <span>RAG trace 같이 보기</span>
+          </label>
+
+          <button class="primary-button" type="submit">질문 실행</button>
+        </form>
+
+        <div class="examples" aria-label="예시 질문">
+          <button type="button" data-question="전공심화 과정이 개설된 학과는 어디인가요?">전공심화 학과</button>
+          <button type="button" data-question="항공운항과 면접 복장 좀 알려줘">면접 복장</button>
+          <button type="button" data-question="학생식당 이용시간은 어떻게 돼?">학생식당 시간</button>
+        </div>
+      </section>
+
+      <section class="result-pane" aria-label="실험 결과">
+        <div class="tabs" role="tablist">
+          <button class="tab is-active" type="button" data-tab="rendered">표 렌더링</button>
+          <button class="tab" type="button" data-tab="raw">Markdown 원문</button>
+          <button class="tab" type="button" data-tab="trace">RAG Trace</button>
+        </div>
+
+        <section id="renderedPanel" class="panel is-active" aria-label="Markdown 표 렌더링 결과">
+          <div class="answer-meta" id="answerMeta">질문을 실행하면 결과가 표시된다.</div>
+          <article class="markdown-body" id="answerRendered"></article>
+          <section class="sources" id="sources"></section>
+        </section>
+
+        <section id="rawPanel" class="panel" aria-label="Markdown 원문">
+          <pre id="answerRaw" class="raw-output"></pre>
+        </section>
+
+        <section id="tracePanel" class="panel" aria-label="RAG trace">
+          <div id="traceSummary" class="trace-summary"></div>
+          <pre id="traceRaw" class="raw-output"></pre>
+        </section>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" hidden></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,508 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/aooyj1",
+    "id": "aooyj1",
+    "slide": 1,
+    "layoutId": "b2b779c1-d5ea-4f9e-bdc5-b242435851c3",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "9cf55182-c676-4403-88c0-7df21b72a5ad",
+    "masterLayoutName": "Master",
+    "backgroundColor": "#18304B",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Apple SD Gothic Neo"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "b2b779c1-d5ea-4f9e-bdc5-b242435851c3",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "9cf55182-c676-4403-88c0-7df21b72a5ad",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "9cf55182-c676-4403-88c0-7df21b72a5ad",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/dcbulwva",
+      "id": "1",
+      "bbox": [
+        0,
+        0,
+        10,
+        720
+      ],
+      "geometry": "rect",
+      "fillColor": "#0B83E6",
+      "lineColor": "#0B83E6",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/6psfil0r",
+      "id": "2",
+      "bbox": [
+        1018,
+        0,
+        3,
+        136
+      ],
+      "geometry": "rect",
+      "fillColor": "#0B83E6",
+      "lineColor": "#0B83E6",
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/val87ed8",
+      "id": "3",
+      "bbox": [
+        1118,
+        280,
+        3,
+        288
+      ],
+      "geometry": "rect",
+      "fillColor": "#0B83E6",
+      "lineColor": "#0B83E6",
+      "lineWidth": 0
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/k3q5o7qp",
+      "id": "4",
+      "bbox": [
+        1056,
+        172,
+        142,
+        2
+      ],
+      "geometry": "rect",
+      "fillColor": "#0B579A",
+      "lineColor": "#0B579A",
+      "lineWidth": 0
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/donyd0z6",
+      "id": "5",
+      "bbox": [
+        1056,
+        616,
+        142,
+        2
+      ],
+      "geometry": "rect",
+      "fillColor": "#0B579A",
+      "lineColor": "#0B579A",
+      "lineWidth": 0
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2x4nap4r",
+      "id": "6",
+      "bbox": [
+        70,
+        215,
+        620,
+        76
+      ],
+      "geometry": "rect",
+      "text": "DocuMind",
+      "textPreview": "DocuMind",
+      "resolvedFontSize": 60,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 60,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#FFFFFF",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "DocuMind"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "DocuMind",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 60,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#FFFFFF",
+            "bold": true,
+            "alignment": "left",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "DocuMind",
+              "anchor": 1,
+              "fontSize": 60,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "left",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/vixczed8",
+      "id": "7",
+      "bbox": [
+        74,
+        324,
+        660,
+        42
+      ],
+      "geometry": "rect",
+      "text": "RAG 구조 개선 작업 정리",
+      "textPreview": "RAG 구조 개선 작업 정리",
+      "resolvedFontSize": 32,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 32,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#0B83E6",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "RAG 구조 개선 작업 정리"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "RAG 구조 개선 작업 정리",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 32,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#0B83E6",
+            "bold": true,
+            "alignment": "left",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "RAG 구조 개선 작업 정리",
+              "anchor": 1,
+              "fontSize": 32,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#0B83E6",
+              "bold": true,
+              "alignment": "left",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/kf6dcbul",
+      "id": "8",
+      "bbox": [
+        74,
+        372,
+        640,
+        30
+      ],
+      "geometry": "rect",
+      "text": "문서 구조를 보존하는 검색·출처 분리 설계",
+      "textPreview": "문서 구조를 보존하는 검색·출처 분리 설계",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 20,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#C5CED8",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "문서 구조를 보존하는 검색·출처 분리 설계"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "문서 구조를 보존하는 검색·출처 분리 설계",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 20,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#C5CED8",
+            "alignment": "left",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "문서 구조를 보존하는 검색·출처 분리 설계",
+              "anchor": 1,
+              "fontSize": 20,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#C5CED8",
+              "alignment": "left",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/d0z61032",
+      "id": "9",
+      "bbox": [
+        74,
+        442,
+        710,
+        2
+      ],
+      "geometry": "rect",
+      "fillColor": "#C5CED8",
+      "lineColor": "#C5CED8",
+      "lineWidth": 0
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/dsji5sne",
+      "id": "10",
+      "bbox": [
+        74,
+        472,
+        760,
+        26
+      ],
+      "geometry": "rect",
+      "text": "#73 · Data Contract → Trace 검증 → SourceBlock runtime 연결",
+      "textPreview": "#73 · Data Contract → Trace 검증 → SourceBlock runtime 연결",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 18,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#C5CED8",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "#73 · Data Contract → Trace 검증 → SourceBlock runtime 연결"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "#73 · Data Contract → Trace 검증 → SourceBlock runtime 연결",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 18,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#C5CED8",
+            "alignment": "left",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "#73 · Data Contract → Trace 검증 → SourceBlock runtime 연결",
+              "anchor": 1,
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#C5CED8",
+              "alignment": "left",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/o7qpg3ex",
+      "id": "11",
+      "bbox": [
+        74,
+        515,
+        640,
+        22
+      ],
+      "geometry": "rect",
+      "text": "202244092 김용진   |   2026.05",
+      "textPreview": "202244092 김용진   |   2026.05",
+      "resolvedFontSize": 15,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 15,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#AEB9C4",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "202244092 김용진   |   2026.05"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "202244092 김용진   |   2026.05",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 15,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#AEB9C4",
+            "alignment": "left",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "202244092 김용진   |   2026.05",
+              "anchor": 1,
+              "fontSize": 15,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#AEB9C4",
+              "alignment": "left",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    }
+  ],
+  "composeRuns": []
+}

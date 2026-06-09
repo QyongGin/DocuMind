@@ -1,0 +1,28 @@
+DocuMind RAG improvement presentation deck scorecard
+
+Date: 2026-05-20
+Deck: output/documind-rag-improvement-visuals.pptx
+Slides: 10
+Preview: preview/contact-sheet.png
+
+Comeback deck score
+
+- Narrative clarity: 9/10
+  The deck follows a clear arc: failure diagnosis -> root cause -> external references -> architecture -> implementation layers -> rollback discipline -> conclusion.
+
+- Technical accuracy: 8/10
+  Claims are based on the work summary and cited references. The deck marks table legend and label-value work as local smoke-test/GCP-validation pending where appropriate.
+
+- Beginner readability: 8/10
+  Slides avoid dense code and use diagrams/metrics. Some RAG terms remain in English because they are standard technical vocabulary, but Korean explanations are included in surrounding text.
+
+- Visual quality: 8/10
+  Contact sheet review passed after adjusting slide 5 and slide 10 readability. No obvious overlap or unreadable dark-on-dark text remains.
+
+- Presentation usefulness: 9/10
+  The deck can be used directly as a discussion artifact for issue #18 and as a scaffold for a longer verbal explanation.
+
+Residual risks
+
+- The PPTX is a concise visual deck, not a full script. Use the Markdown report for detailed explanations and source citations.
+- Latest table legend and label-value fixes still need server-side reindex/evaluate verification before being presented as fully deployed.

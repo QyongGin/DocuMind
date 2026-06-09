@@ -1,0 +1,20 @@
+Source notes
+
+- Primary source document: docs/이슈-18-RAG-개선-전체-총정리-발표자료-20260520.md
+- Code and local records: ai-server/main.py, ai-server/evaluate_rag.py, ai-server/check_chunks.py, ai-server/layout_blocks.py, ai-server/layout_confidence.py, memory-bank/activeContext.md, memory-bank/progress.md, memory-bank/decisionLog.md
+- External references:
+  - Microsoft Azure AI Document Intelligence RAG: https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/concept-retrieval-augumented-generation?view=doc-intel-4.0.0
+  - Azure AI Search semantic chunking: https://learn.microsoft.com/en-us/azure/search/search-how-to-semantic-chunking
+  - Google Document AI Layout Parser: https://docs.cloud.google.com/document-ai/docs/layout-parse-chunk
+  - Google Vertex AI Search check grounding: https://cloud.google.com/generative-ai-app-builder/docs/check-grounding
+  - Anthropic Contextual Retrieval: https://www.anthropic.com/research/contextual-retrieval
+  - NVIDIA RAG Blueprint: https://docs.nvidia.com/rag/latest/
+  - IBM Docling Technical Report: https://research.ibm.com/publications/docling-technical-report
+  - OpenDataLoader JSON Schema: https://www.opendataloader.org/docs/json-schema
+  - LangChain text splitters: https://docs.langchain.com/oss/python/integrations/splitters/index
+  - Unstructured chunking: https://docs.unstructured.io/open-source/core-functionality/chunking
+
+Identity assets
+
+- No logos or brand marks are embedded. The deck uses text references only.
+

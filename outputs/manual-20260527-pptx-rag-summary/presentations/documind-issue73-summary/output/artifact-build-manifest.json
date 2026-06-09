@@ -1,0 +1,98 @@
+{
+  "output": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/output/documind-issue73-rag-structure-summary.pptx",
+  "outputBytes": 45391,
+  "slideCount": 8,
+  "slideSize": {
+    "width": 1280,
+    "height": 720
+  },
+  "previewDir": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/preview",
+  "previewPaths": [
+    "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/preview/slide-01.png",
+    "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/preview/slide-02.png",
+    "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/preview/slide-03.png",
+    "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/preview/slide-04.png",
+    "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/preview/slide-05.png",
+    "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/preview/slide-06.png",
+    "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/preview/slide-07.png",
+    "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/preview/slide-08.png"
+  ],
+  "layoutDir": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/layout/final",
+  "layoutResults": [
+    {
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/layout/final/slide-01.layout.json"
+    },
+    {
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/layout/final/slide-02.layout.json"
+    },
+    {
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/layout/final/slide-03.layout.json"
+    },
+    {
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/layout/final/slide-04.layout.json"
+    },
+    {
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/layout/final/slide-05.layout.json"
+    },
+    {
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/layout/final/slide-06.layout.json"
+    },
+    {
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/layout/final/slide-07.layout.json"
+    },
+    {
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/layout/final/slide-08.layout.json"
+    }
+  ],
+  "contactSheet": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/preview/contact-sheet.png",
+  "slides": [
+    {
+      "index": 1,
+      "requestedSlideNumber": 1,
+      "modulePath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/slides/slide-01.mjs",
+      "exportName": "slide01"
+    },
+    {
+      "index": 2,
+      "requestedSlideNumber": 2,
+      "modulePath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/slides/slide-02.mjs",
+      "exportName": "slide02"
+    },
+    {
+      "index": 3,
+      "requestedSlideNumber": 3,
+      "modulePath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/slides/slide-03.mjs",
+      "exportName": "slide03"
+    },
+    {
+      "index": 4,
+      "requestedSlideNumber": 4,
+      "modulePath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/slides/slide-04.mjs",
+      "exportName": "slide04"
+    },
+    {
+      "index": 5,
+      "requestedSlideNumber": 5,
+      "modulePath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/slides/slide-05.mjs",
+      "exportName": "slide05"
+    },
+    {
+      "index": 6,
+      "requestedSlideNumber": 6,
+      "modulePath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/slides/slide-06.mjs",
+      "exportName": "slide06"
+    },
+    {
+      "index": 7,
+      "requestedSlideNumber": 7,
+      "modulePath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/slides/slide-07.mjs",
+      "exportName": "slide07"
+    },
+    {
+      "index": 8,
+      "requestedSlideNumber": 8,
+      "modulePath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260527-pptx-rag-summary/presentations/documind-issue73-summary/slides/slide-08.mjs",
+      "exportName": "slide08"
+    }
+  ]
+}

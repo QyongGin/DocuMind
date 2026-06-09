@@ -1,0 +1,1564 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/29gr2p8n",
+    "id": "29gr2p8n",
+    "slide": 11,
+    "layoutId": "/ppt/slideLayouts/slideLayout2.xml",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "/ppt/slideMasters/slideMaster1.xml",
+    "masterLayoutName": "Master",
+    "backgroundColor": "#F6F1E8",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "+mn-lt",
+      "Apple SD Gothic Neo"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "/ppt/slideLayouts/slideLayout2.xml",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "/ppt/slideMasters/slideMaster1.xml",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "/ppt/slideMasters/slideMaster1.xml",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2p8nqxs7",
+      "id": "1",
+      "bbox": [
+        56,
+        42,
+        28,
+        6
+      ],
+      "geometry": "rect",
+      "fillColor": "#0B5D7E",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/9gr2p8nq",
+      "id": "2",
+      "bbox": [
+        94,
+        30,
+        360,
+        32
+      ],
+      "geometry": "rect",
+      "text": "10 / SCOPE CHAIN",
+      "textPreview": "10 / SCOPE CHAIN",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "10 / SCOPE CHAIN"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "10 / SCOPE CHAIN",
+          "runs": [
+            {
+              "index": 1,
+              "text": "10 / SCOPE CHAIN",
+              "fontSize": 13,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#0B5D7E",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F6F1E8",
+      "lineColor": "#F6F1E8",
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/gvy90je9",
+      "id": "3",
+      "bbox": [
+        56,
+        76,
+        880,
+        64
+      ],
+      "geometry": "rect",
+      "text": "근거는 표의 주소까지 붙여서 만든다",
+      "textPreview": "근거는 표의 주소까지 붙여서 만든다",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "근거는 표의 주소까지 붙여서 만든다"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "근거는 표의 주소까지 붙여서 만든다",
+          "runs": [
+            {
+              "index": 1,
+              "text": "근거는 표의 주소까지 붙여서 만든다",
+              "fontSize": 42,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F6F1E8",
+      "lineColor": "#F6F1E8",
+      "lineWidth": 0
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/r2p8nqxs",
+      "id": "4",
+      "bbox": [
+        58,
+        158,
+        940,
+        32
+      ],
+      "geometry": "rect",
+      "text": "표에서 뽑은 셀 값을 바로 답변에 넣지 않고, 그 셀이 어디에서 나온 값인지 계층을 같이 만든다.",
+      "textPreview": "표에서 뽑은 셀 값을 바로 답변에 넣지 않고, 그 셀이 어디에서 나온 값인지 계층을 같이 만든다.",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "표에서 뽑은 셀 값을 바로 답변에 넣지 않고, 그 셀이 어디에서 나온 값인지 계층을 같이 만든다."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "표에서 뽑은 셀 값을 바로 답변에 넣지 않고, 그 셀이 어디에서 나온 값인지 계층을 같이 만든다.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "표에서 뽑은 셀 값을 바로 답변에 넣지 않고, 그 셀이 어디에서 나온 값인지 계층을 같이 만든다.",
+              "fontSize": 20,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#4B5963",
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F6F1E8",
+      "lineColor": "#F6F1E8",
+      "lineWidth": 0
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2hwfyxob",
+      "id": "5",
+      "bbox": [
+        62,
+        230,
+        190,
+        104
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 1
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/94fu18jq",
+      "id": "6",
+      "bbox": [
+        80,
+        246,
+        124,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#0B5D7E",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 0
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/kjm1cfa9",
+      "id": "7",
+      "bbox": [
+        92,
+        253,
+        100,
+        18
+      ],
+      "geometry": "rect",
+      "text": "section",
+      "textPreview": "section",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "section"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "section",
+          "runs": [
+            {
+              "index": 1,
+              "text": "section",
+              "fontSize": 12,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#0B5D7E",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 0
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/rqd4vmtw",
+      "id": "8",
+      "bbox": [
+        80,
+        288,
+        154,
+        30
+      ],
+      "geometry": "rect",
+      "text": "VI. 성적 반영방법\n> 수시모집",
+      "textPreview": "VI. 성적 반영방법 | > 수시모집",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "VI. 성적 반영방법"
+          },
+          {
+            "index": 2,
+            "text": "> 수시모집"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "VI. 성적 반영방법",
+          "runs": [
+            {
+              "index": 1,
+              "text": "VI. 성적 반영방법",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "text": "> 수시모집",
+          "runs": [
+            {
+              "index": 1,
+              "text": "> 수시모집",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF",
+      "lineColor": "#FFFFFF",
+      "lineWidth": 0
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/25kb6xkf",
+      "id": "9",
+      "bbox": [
+        292,
+        230,
+        210,
+        104
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#2A7A5E",
+      "lineWidth": 1
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/4fu18jqh",
+      "id": "10",
+      "bbox": [
+        310,
+        246,
+        124,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#2A7A5E",
+      "lineColor": "#2A7A5E",
+      "lineWidth": 0
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/x0nuxc3y",
+      "id": "11",
+      "bbox": [
+        322,
+        253,
+        100,
+        18
+      ],
+      "geometry": "rect",
+      "text": "table title",
+      "textPreview": "table title",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "table title"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "table title",
+          "runs": [
+            {
+              "index": 1,
+              "text": "table title",
+              "fontSize": 12,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#2A7A5E",
+      "lineColor": "#2A7A5E",
+      "lineWidth": 0
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/m94fu18j",
+      "id": "12",
+      "bbox": [
+        310,
+        288,
+        174,
+        30
+      ],
+      "geometry": "rect",
+      "text": "라. 출결상황에 따른\n가산점",
+      "textPreview": "라. 출결상황에 따른 | 가산점",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "라. 출결상황에 따른"
+          },
+          {
+            "index": 2,
+            "text": "가산점"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "라. 출결상황에 따른",
+          "runs": [
+            {
+              "index": 1,
+              "text": "라. 출결상황에 따른",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "text": "가산점",
+          "runs": [
+            {
+              "index": 1,
+              "text": "가산점",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF",
+      "lineColor": "#FFFFFF",
+      "lineWidth": 0
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fu18jqh0",
+      "id": "13",
+      "bbox": [
+        542,
+        230,
+        150,
+        104
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#C8952C",
+      "lineWidth": 1
+    },
+    {
+      "order": 14,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/83itgfml",
+      "id": "14",
+      "bbox": [
+        560,
+        246,
+        124,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#C8952C",
+      "lineColor": "#C8952C",
+      "lineWidth": 0
+    },
+    {
+      "order": 15,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xobm58z2",
+      "id": "15",
+      "bbox": [
+        572,
+        253,
+        100,
+        18
+      ],
+      "geometry": "rect",
+      "text": "header",
+      "textPreview": "header",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "header"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "header",
+          "runs": [
+            {
+              "index": 1,
+              "text": "header",
+              "fontSize": 12,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#C8952C",
+      "lineColor": "#C8952C",
+      "lineWidth": 0
+    },
+    {
+      "order": 16,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/qxs72x4n",
+      "id": "16",
+      "bbox": [
+        560,
+        288,
+        114,
+        30
+      ],
+      "geometry": "rect",
+      "text": "결석일수",
+      "textPreview": "결석일수",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "결석일수"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "결석일수",
+          "runs": [
+            {
+              "index": 1,
+              "text": "결석일수",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF",
+      "lineColor": "#FFFFFF",
+      "lineWidth": 0
+    },
+    {
+      "order": 17,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fil0rqd4",
+      "id": "17",
+      "bbox": [
+        732,
+        230,
+        150,
+        104
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#C7553A",
+      "lineWidth": 1
+    },
+    {
+      "order": 18,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/4zidonyd",
+      "id": "18",
+      "bbox": [
+        750,
+        246,
+        124,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#C7553A",
+      "lineColor": "#C7553A",
+      "lineWidth": 0
+    },
+    {
+      "order": 19,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xkf6dcbu",
+      "id": "19",
+      "bbox": [
+        762,
+        253,
+        100,
+        18
+      ],
+      "geometry": "rect",
+      "text": "row label",
+      "textPreview": "row label",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "row label"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "row label",
+          "runs": [
+            {
+              "index": 1,
+              "text": "row label",
+              "fontSize": 12,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#C7553A",
+      "lineColor": "#C7553A",
+      "lineWidth": 0
+    },
+    {
+      "order": 20,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xczed8v6",
+      "id": "20",
+      "bbox": [
+        750,
+        288,
+        114,
+        30
+      ],
+      "geometry": "rect",
+      "text": "가산점",
+      "textPreview": "가산점",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "가산점"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "가산점",
+          "runs": [
+            {
+              "index": 1,
+              "text": "가산점",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF",
+      "lineColor": "#FFFFFF",
+      "lineWidth": 0
+    },
+    {
+      "order": 21,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/8v6psfil",
+      "id": "21",
+      "bbox": [
+        922,
+        230,
+        220,
+        104
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 1
+    },
+    {
+      "order": 22,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fa9w3m94",
+      "id": "22",
+      "bbox": [
+        940,
+        246,
+        124,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#0B5D7E",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 0
+    },
+    {
+      "order": 23,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/qpg3ex0n",
+      "id": "23",
+      "bbox": [
+        952,
+        253,
+        100,
+        18
+      ],
+      "geometry": "rect",
+      "text": "column/value",
+      "textPreview": "column/value",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "column/value"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "column/value",
+          "runs": [
+            {
+              "index": 1,
+              "text": "column/value",
+              "fontSize": 12,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#0B5D7E",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 0
+    },
+    {
+      "order": 24,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/x4nap4r6",
+      "id": "24",
+      "bbox": [
+        940,
+        288,
+        184,
+        30
+      ],
+      "geometry": "rect",
+      "text": "0일=20점\n1일=18점",
+      "textPreview": "0일=20점 | 1일=18점",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "0일=20점"
+          },
+          {
+            "index": 2,
+            "text": "1일=18점"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "0일=20점",
+          "runs": [
+            {
+              "index": 1,
+              "text": "0일=20점",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "text": "1일=18점",
+          "runs": [
+            {
+              "index": 1,
+              "text": "1일=18점",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF",
+      "lineColor": "#FFFFFF",
+      "lineWidth": 0
+    },
+    {
+      "order": 25,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/8jqh0fep",
+      "id": "25",
+      "bbox": [
+        252,
+        282,
+        40,
+        3
+      ],
+      "geometry": "rect",
+      "fillColor": "#4B5963",
+      "lineColor": "#4B5963",
+      "lineWidth": 0
+    },
+    {
+      "order": 26,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fyxobm58",
+      "id": "26",
+      "bbox": [
+        284,
+        277,
+        10,
+        10
+      ],
+      "geometry": "rect",
+      "fillColor": "#4B5963",
+      "lineColor": "#4B5963",
+      "lineWidth": 0
+    },
+    {
+      "order": 27,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/qd4vmtwr",
+      "id": "27",
+      "bbox": [
+        502,
+        282,
+        40,
+        3
+      ],
+      "geometry": "rect",
+      "fillColor": "#4B5963",
+      "lineColor": "#4B5963",
+      "lineWidth": 0
+    },
+    {
+      "order": 28,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xs72x4na",
+      "id": "28",
+      "bbox": [
+        534,
+        277,
+        10,
+        10
+      ],
+      "geometry": "rect",
+      "fillColor": "#4B5963",
+      "lineColor": "#4B5963",
+      "lineWidth": 0
+    },
+    {
+      "order": 29,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/87ed8bat",
+      "id": "29",
+      "bbox": [
+        692,
+        282,
+        40,
+        3
+      ],
+      "geometry": "rect",
+      "fillColor": "#4B5963",
+      "lineColor": "#4B5963",
+      "lineWidth": 0
+    },
+    {
+      "order": 30,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2p8nqxs7",
+      "id": "30",
+      "bbox": [
+        724,
+        277,
+        10,
+        10
+      ],
+      "geometry": "rect",
+      "fillColor": "#4B5963",
+      "lineColor": "#4B5963",
+      "lineWidth": 0
+    },
+    {
+      "order": 31,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ra5gbq1o",
+      "id": "31",
+      "bbox": [
+        882,
+        282,
+        40,
+        3
+      ],
+      "geometry": "rect",
+      "fillColor": "#4B5963",
+      "lineColor": "#4B5963",
+      "lineWidth": 0
+    },
+    {
+      "order": 32,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/gvy90je9",
+      "id": "32",
+      "bbox": [
+        914,
+        277,
+        10,
+        10
+      ],
+      "geometry": "rect",
+      "fillColor": "#4B5963",
+      "lineColor": "#4B5963",
+      "lineWidth": 0
+    },
+    {
+      "order": 33,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/9gr2p8nq",
+      "id": "33",
+      "bbox": [
+        132,
+        414,
+        1018,
+        146
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#B9C1C7",
+      "lineWidth": 1
+    },
+    {
+      "order": 34,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2hwfyxob",
+      "id": "34",
+      "bbox": [
+        168,
+        440,
+        360,
+        26
+      ],
+      "geometry": "rect",
+      "text": "structured fact(구조화된 사실)",
+      "textPreview": "structured fact(구조화된 사실)",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "structured fact(구조화된 사실)"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "structured fact(구조화된 사실)",
+          "runs": [
+            {
+              "index": 1,
+              "text": "structured fact(구조화된 사실)",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#2A7A5E",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF",
+      "lineColor": "#FFFFFF",
+      "lineWidth": 0
+    },
+    {
+      "order": 35,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/r2p8nqxs",
+      "id": "35",
+      "bbox": [
+        168,
+        482,
+        760,
+        42
+      ],
+      "geometry": "rect",
+      "text": "출결상황에 따른 가산점: 0일=20점; 1일=18점; 2일=16점; 3일=14점; 4일=12점; 5일=10점; ...; 10일 이상=0점이다.",
+      "textPreview": "출결상황에 따른 가산점: 0일=20점; 1일=18점; 2일=16점; 3일=14점; 4일=12점; 5일=10점; ...; 10일 이상=0점이다.",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "출결상황에 따른 가산점: 0일=20점; 1일=18점; 2일=16점; 3일=14점; 4일=12점; 5일=10점; ...; 10일"
+          },
+          {
+            "index": 2,
+            "text": "이상=0점이다."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "출결상황에 따른 가산점: 0일=20점; 1일=18점; 2일=16점; 3일=14점; 4일=12점; 5일=10점; ...; 10일 이상=0점이다.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "출결상황에 따른 가산점: 0일=20점; 1일=18점; 2일=16점; 3일=14점; 4일=12점; 5일=10점; ...; 10일 이상=0점이다.",
+              "fontSize": 19,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF",
+      "lineColor": "#FFFFFF",
+      "lineWidth": 0
+    },
+    {
+      "order": 36,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/kjm1cfa9",
+      "id": "36",
+      "bbox": [
+        998,
+        438,
+        104,
+        86
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#DDECE3",
+      "lineColor": "#2A7A5E",
+      "lineWidth": 1
+    },
+    {
+      "order": 37,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/94fu18jq",
+      "id": "37",
+      "bbox": [
+        1014,
+        456,
+        72,
+        52
+      ],
+      "geometry": "rect",
+      "text": "LLM에는\n이 문장만\n우선 전달",
+      "textPreview": "LLM에는 | 이 문장만 | 우선 전달",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 6,
+        "lines": [
+          {
+            "index": 1,
+            "text": "LLM에"
+          },
+          {
+            "index": 2,
+            "text": "는"
+          },
+          {
+            "index": 3,
+            "text": "이"
+          },
+          {
+            "index": 4,
+            "text": "문장만"
+          },
+          {
+            "index": 5,
+            "text": "우선"
+          },
+          {
+            "index": 6,
+            "text": "전달"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "LLM에는",
+          "runs": [
+            {
+              "index": 1,
+              "text": "LLM에는",
+              "fontSize": 16,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#2A7A5E",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "text": "이 문장만",
+          "runs": [
+            {
+              "index": 1,
+              "text": "이 문장만",
+              "fontSize": 16,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#2A7A5E",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "text": "우선 전달",
+          "runs": [
+            {
+              "index": 1,
+              "text": "우선 전달",
+              "fontSize": 16,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#2A7A5E",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#DDECE3",
+      "lineColor": "#DDECE3",
+      "lineWidth": 0
+    },
+    {
+      "order": 38,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/25kb6xkf",
+      "id": "38",
+      "bbox": [
+        176,
+        594,
+        928,
+        44
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#EEF3F5",
+      "lineColor": "#B9C1C7",
+      "lineWidth": 1
+    },
+    {
+      "order": 39,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/rqd4vmtw",
+      "id": "39",
+      "bbox": [
+        210,
+        606,
+        76,
+        22
+      ],
+      "geometry": "rect",
+      "text": "효과",
+      "textPreview": "효과",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "효과"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "효과",
+          "runs": [
+            {
+              "index": 1,
+              "text": "효과",
+              "fontSize": 17,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#0B5D7E",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#EEF3F5",
+      "lineColor": "#EEF3F5",
+      "lineWidth": 0
+    },
+    {
+      "order": 40,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/bulwval8",
+      "id": "40",
+      "bbox": [
+        300,
+        606,
+        760,
+        22
+      ],
+      "geometry": "rect",
+      "text": "질문이 표 전체를 묻더라도 답변 모델은 셀 값이 아니라 ‘표 제목이 붙은 사실 문장’을 읽게 된다.",
+      "textPreview": "질문이 표 전체를 묻더라도 답변 모델은 셀 값이 아니라 ‘표 제목이 붙은 사실 문장’을 읽게 된다.",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "질문이 표 전체를 묻더라도 답변 모델은 셀 값이 아니라 ‘표 제목이 붙은 사실 문장’을 읽게 된다."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "질문이 표 전체를 묻더라도 답변 모델은 셀 값이 아니라 ‘표 제목이 붙은 사실 문장’을 읽게 된다.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "질문이 표 전체를 묻더라도 답변 모델은 셀 값이 아니라 ‘표 제목이 붙은 사실 문장’을 읽게 된다.",
+              "fontSize": 19,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#EEF3F5",
+      "lineColor": "#EEF3F5",
+      "lineWidth": 0
+    },
+    {
+      "order": 41,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/i9s36hcr",
+      "id": "41",
+      "bbox": [
+        56,
+        676,
+        780,
+        24
+      ],
+      "geometry": "rect",
+      "text": "구현 위치: ai-server/main.py의 table evidence 생성 단계. 고정 케이스 문자열이 아니라 문서에서 추출된 표 라벨을 조합한다.",
+      "textPreview": "구현 위치: ai-server/main.py의 table evidence 생성 단계. 고정 케이스 문자열이 아니라 문서에서 추출된 표 라벨을 조합한다.",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "구현 위치: ai-server/main.py의 table evidence 생성 단계. 고정 케이스 문자열이 아니라 문서에서 추출된 표 라벨을 조합한다."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "구현 위치: ai-server/main.py의 table evidence 생성 단계. 고정 케이스 문자열이 아니라 문서에서 추출된 표 라벨을 조합한다.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "구현 위치: ai-server/main.py의 table evidence 생성 단계. 고정 케이스 문자열이 아니라 문서에서 추출된 표 라벨을 조합한다.",
+              "fontSize": 10,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#4B5963",
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F6F1E8",
+      "lineColor": "#F6F1E8",
+      "lineWidth": 0
+    },
+    {
+      "order": 42,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/p0bi9s36",
+      "id": "42",
+      "bbox": [
+        1190,
+        674,
+        34,
+        24
+      ],
+      "geometry": "rect",
+      "text": "10",
+      "textPreview": "10",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "+mn-lt",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "10"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "10",
+          "runs": [
+            {
+              "index": 1,
+              "text": "10",
+              "fontSize": 12,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#4B5963",
+              "alignment": "right"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F6F1E8",
+      "lineColor": "#F6F1E8",
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

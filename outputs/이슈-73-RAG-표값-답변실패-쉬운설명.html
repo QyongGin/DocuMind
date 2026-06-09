@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DocuMind #73 - 표 값은 찾았는데 답변이 틀린 이유</title>
+  <style>
+    :root {
+      --ink: #17202a;
+      --muted: #5b6673;
+      --line: #d8dee6;
+      --panel: #ffffff;
+      --soft: #f6f8fb;
+      --blue: #1f73d1;
+      --green: #16834a;
+      --orange: #b76000;
+      --red: #c0392b;
+      --yellow: #fff4cc;
+      --green-soft: #e8f7ee;
+      --blue-soft: #eaf3ff;
+      --red-soft: #fff0ee;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--soft);
+      line-height: 1.58;
+      letter-spacing: 0;
+    }
+
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 44px 24px 72px;
+    }
+
+    header {
+      padding: 30px 34px;
+      background: linear-gradient(135deg, #fdfefe, #edf5ff);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--blue);
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 46px);
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      margin: 18px 0 0;
+      max-width: 860px;
+      color: var(--muted);
+      font-size: 19px;
+    }
+
+    section {
+      margin-top: 28px;
+      padding: 28px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+
+    h2 {
+      margin: 0 0 18px;
+      font-size: 26px;
+      line-height: 1.28;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .summary-card,
+    .flow-card,
+    .term-card {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    .summary-card strong {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 17px;
+    }
+
+    .ok {
+      border-color: #9bd7b3;
+      background: var(--green-soft);
+    }
+
+    .warn {
+      border-color: #f1c36b;
+      background: var(--yellow);
+    }
+
+    .fail {
+      border-color: #f0b1aa;
+      background: var(--red-soft);
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .flow-card {
+      min-height: 176px;
+      position: relative;
+    }
+
+    .step-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      margin-bottom: 12px;
+      border-radius: 999px;
+      color: #fff;
+      background: var(--blue);
+      font-weight: 800;
+    }
+
+    .flow-card:nth-child(1) .step-number,
+    .flow-card:nth-child(2) .step-number {
+      background: var(--green);
+    }
+
+    .flow-card:nth-child(3) .step-number {
+      background: var(--orange);
+    }
+
+    .flow-card:nth-child(4) .step-number {
+      background: var(--red);
+    }
+
+    .example {
+      padding: 18px 20px;
+      background: #101820;
+      color: #eef7ff;
+      border-radius: 10px;
+      overflow-x: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 15px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 5px 10px;
+      margin-bottom: 8px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .pill.good {
+      color: #0d5d32;
+      background: #dff4e8;
+    }
+
+    .pill.bad {
+      color: #8f2018;
+      background: #ffe2de;
+    }
+
+    .pill.next {
+      color: #124f91;
+      background: #dcecff;
+    }
+
+    .terms {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .term-card b {
+      display: block;
+      margin-bottom: 5px;
+    }
+
+    ol,
+    ul {
+      margin: 0;
+      padding-left: 22px;
+    }
+
+    li {
+      margin: 8px 0;
+    }
+
+    .callout {
+      padding: 18px 20px;
+      border-left: 5px solid var(--blue);
+      background: var(--blue-soft);
+      border-radius: 8px;
+    }
+
+    .answer-box {
+      padding: 18px 20px;
+      border: 1px dashed #9aa7b5;
+      background: #fbfcfe;
+      border-radius: 10px;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    footer {
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: 14px;
+      text-align: center;
+    }
+
+    @media (max-width: 900px) {
+      main {
+        padding: 24px 14px 48px;
+      }
+
+      header,
+      section {
+        padding: 22px;
+      }
+
+      .summary,
+      .flow,
+      .split,
+      .terms {
+        grid-template-columns: 1fr;
+      }
+
+      .flow-card {
+        min-height: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">DocuMind #73 RAG 개선 설명</p>
+      <h1>표 값은 찾았는데,<br>왜 AI 답변은 “없다”고 했을까?</h1>
+      <p class="lead">
+        이번 문제는 “검색 실패”가 아닙니다. 서버는 표 안의 금액을 찾았고, 그 값을 AI에게도 넘겼습니다.
+        그런데 마지막 답변 작성 단계에서 모델이 그 값을 제대로 쓰지 못했습니다.
+      </p>
+    </header>
+
+    <section>
+      <h2>한 줄 결론</h2>
+      <div class="summary">
+        <div class="summary-card ok">
+          <strong>검색은 성공</strong>
+          원서 접수 비용 표를 찾았고, 30,000원과 50,000원도 구조화해서 뽑았습니다.
+        </div>
+        <div class="summary-card ok">
+          <strong>근거 전달도 성공</strong>
+          `/debug/rag-trace`의 `final_context` 안에 표 값 근거가 실제로 들어갔습니다.
+        </div>
+        <div class="summary-card fail">
+          <strong>답변 작성은 실패</strong>
+          AI가 근거를 보고도 “구체적인 금액이 없다”고 잘못 답했습니다.
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>현재 흐름을 쉽게 보면</h2>
+      <div class="flow">
+        <div class="flow-card ok">
+          <span class="step-number">1</span>
+          <h3>문서에서 표를 찾음</h3>
+          <p>모집요강 안의 “전형료 및 면접고사료” 표를 찾았습니다.</p>
+        </div>
+        <div class="flow-card ok">
+          <span class="step-number">2</span>
+          <h3>표 값을 쪼갬</h3>
+          <p>행, 열, 값을 따로 뽑았습니다. 예를 들면 “면접학과 / 계 / 50,000원”입니다.</p>
+        </div>
+        <div class="flow-card warn">
+          <span class="step-number">3</span>
+          <h3>AI에게 근거를 넘김</h3>
+          <p>근거는 들어갔지만, 원문과 설명이 같이 길게 섞여 있습니다.</p>
+        </div>
+        <div class="flow-card fail">
+          <span class="step-number">4</span>
+          <h3>AI가 답변을 잘못 씀</h3>
+          <p>중요한 금액 값을 놓치고 “명시되어 있지 않다”고 답했습니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>우리가 실제로 확인한 근거</h2>
+      <p>GCP에서 `final_context`를 확인했을 때, AI에게 넘어간 내용 맨 앞쪽에 아래 값이 있었습니다.</p>
+      <div class="example">구조화 표 값 근거:
+- 표 제목: 1. 전형료 및 면접고사료 / 행: 비면접학과 / 열: 전형료 / 값: 30,000원
+- 표 제목: 1. 전형료 및 면접고사료 / 행: 비면접학과 / 열: 계 / 값: 30,000원
+- 표 제목: 1. 전형료 및 면접고사료 / 행: 면접학과 / 열: 전형료 / 값: 30,000원
+- 표 제목: 1. 전형료 및 면접고사료 / 행: 면접학과 / 열: 면접고사료 / 값: 20,000원
+- 표 제목: 1. 전형료 및 면접고사료 / 행: 면접학과 / 열: 계 / 값: 50,000원</div>
+      <p class="muted">
+        그래서 지금 실패 원인은 “표를 못 찾음”이 아니라 “찾은 표 값을 답변에 제대로 반영하지 못함”입니다.
+      </p>
+    </section>
+
+    <section>
+      <h2>그럼 왜 답변이 틀렸나?</h2>
+      <div class="split">
+        <div class="answer-box">
+          <span class="pill bad">문제</span>
+          <h3>중요한 값이 다른 글 속에 묻힘</h3>
+          <p>
+            AI에게 주는 입력 안에는 표 값, 원문 발췌, 표 설명, 섹션 정보가 한꺼번에 들어갑니다.
+            모델은 그중 무엇을 가장 먼저 믿어야 하는지 헷갈릴 수 있습니다.
+          </p>
+        </div>
+        <div class="answer-box">
+          <span class="pill bad">문제</span>
+          <h3>이상한 섹션 이름이 섞임</h3>
+          <p>
+            `섹션: 147,000㎡` 같은 값이 아직 prompt 쪽에 남아 있습니다.
+            사용자 출처에서는 제거했지만, AI에게 주는 내부 글에는 일부 남아 있어 혼란을 줄 수 있습니다.
+          </p>
+        </div>
+        <div class="answer-box">
+          <span class="pill bad">문제</span>
+          <h3>모델 입력 방식도 확인 필요</h3>
+          <p>
+            EXAONE 같은 채팅형 모델은 보통 “시스템 지시”와 “사용자 질문”을 나눠 주는 방식이 더 안정적입니다.
+            현재 코드가 평문 하나로 길게 넘기는지, 채팅 형식으로 넘기는지 확인해야 합니다.
+          </p>
+        </div>
+        <div class="answer-box">
+          <span class="pill bad">문제 아님</span>
+          <h3>출처 표시 문제는 아님</h3>
+          <p>
+            화면의 출처에는 이미 전형료 표가 잘 보입니다.
+            따라서 지금 고칠 곳은 출처 카드가 아니라 AI 답변 생성 단계입니다.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>하면 안 되는 해결책</h2>
+      <ul>
+        <li>`원서 접수 비용`이라는 질문만 따로 조건문으로 처리하면 안 됩니다.</li>
+        <li>`전형료`, `면접고사료` 같은 특정 문서의 단어를 계속 코드에 추가하면 유지보수가 어려워집니다.</li>
+        <li>서버가 항상 “비면접학과는 30,000원” 같은 고정 문장을 직접 만들면 다른 문서에서 깨질 수 있습니다.</li>
+        <li>문서를 다시 업로드하거나 DB를 지우는 방식으로만 해결하면 원인을 못 고칩니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>해야 하는 해결책</h2>
+      <div class="callout">
+        핵심은 특정 질문을 맞히는 것이 아니라, “표에서 뽑은 값은 답변에 반드시 반영해야 하는 근거”라는 규칙을 일반화하는 것입니다.
+      </div>
+      <ol>
+        <li>
+          <strong>AI에게 실제로 어떤 형태로 입력되는지 확인합니다.</strong>
+          평문 한 덩어리인지, 채팅형 메시지인지, Ollama의 EXAONE 템플릿이 적용되는지 봐야 합니다.
+        </li>
+        <li>
+          <strong>표 값 근거를 더 눈에 띄는 위치로 올립니다.</strong>
+          “반드시 답변에 반영할 표 값” 영역을 일반 규칙으로 만들고, 표 제목, 행, 열, 값을 짧게 정리합니다.
+        </li>
+        <li>
+          <strong>이상한 섹션 이름을 prompt에서도 제거합니다.</strong>
+          사용자 출처에서만 `147,000㎡`를 숨기는 것이 아니라, AI에게 주는 내부 문맥에서도 같은 필터를 적용합니다.
+        </li>
+        <li>
+          <strong>웹사이트와 ai-server를 따로 검증합니다.</strong>
+          ai-server `/query`가 맞는데 웹사이트만 틀리면 backend 연결 문제이고, 둘 다 틀리면 prompt 또는 모델 입력 방식 문제입니다.
+        </li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>어려운 말 정리</h2>
+      <div class="terms">
+        <div class="term-card">
+          <b>RAG</b>
+          AI가 그냥 기억으로 답하지 않고, 문서에서 찾은 근거를 보고 답하게 하는 방식입니다.
+        </div>
+        <div class="term-card">
+          <b>SourceBlock</b>
+          사용자에게 보여줄 원문 조각입니다. 검색용으로 꾸민 글이 아니라 실제 문서에 가까운 글입니다.
+        </div>
+        <div class="term-card">
+          <b>RetrievalChunk</b>
+          검색이 잘 되도록 만든 조각입니다. 제목이나 문맥을 붙일 수 있지만, 사용자에게 원문처럼 보여주면 안 됩니다.
+        </div>
+        <div class="term-card">
+          <b>TableFact</b>
+          표를 “행 / 열 / 값”으로 풀어낸 정보입니다. 예: 면접학과 / 계 / 50,000원.
+        </div>
+        <div class="term-card">
+          <b>Prompt</b>
+          AI에게 답변하라고 넘기는 입력문입니다. 질문, 규칙, 찾은 근거가 같이 들어갑니다.
+        </div>
+        <div class="term-card">
+          <b>EXAONE</b>
+          현재 답변을 만드는 언어 모델입니다. 좋은 근거가 들어가도 입력 형식이 약하면 중요한 값을 놓칠 수 있습니다.
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>이번 상태를 사람 말로 바꾸면</h2>
+      <div class="answer-box">
+        <p>
+          DocuMind는 이제 문서 안의 표를 찾아서 “비면접학과는 30,000원, 면접학과는 총 50,000원”이라는 값까지 뽑을 수 있습니다.
+          하지만 그 값을 AI가 답변에서 반드시 쓰도록 만드는 마지막 전달 방식이 아직 약합니다.
+          다음 작업은 검색을 더 고치는 것이 아니라, 찾은 표 값을 AI가 놓치지 않도록 입력 형식을 정리하는 것입니다.
+        </p>
+      </div>
+    </section>
+
+    <section>
+      <h2>다음 작업 한 문장</h2>
+      <p>
+        <strong>EXAONE에 넘기는 입력을 점검하고, 구조화된 표 값을 “반드시 답변에 반영할 근거”로 분리해서 전달하도록 바꾼다.</strong>
+      </p>
+    </section>
+
+    <footer>
+      DocuMind #73 설명용 HTML · 로컬 작업 산출물
+    </footer>
+  </main>
+</body>
+</html>

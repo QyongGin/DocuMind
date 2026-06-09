@@ -1,0 +1,28 @@
+Contact-sheet plan
+
+1. Cover with large metric bridge and short thesis.
+2. Diagnostic decision tree.
+3. Problem matrix with three failure surfaces.
+4. Reference map with source-to-principle rows.
+5. Full architecture flow.
+6. Tooling board with counters.
+7. Layout layer technical diagram.
+8. Table/evidence transformation diagram.
+9. Rollback matrix.
+10. Conclusion roadmap.
+
+Macro layout families
+
+- Cover metric bridge
+- Decision tree
+- Matrix table
+- Reference map
+- Architecture map
+- Tooling board
+- Layered system diagram
+- Transformation example
+- Risk/rollback table
+- Roadmap
+
+No more than two slides share the same macro layout.
+

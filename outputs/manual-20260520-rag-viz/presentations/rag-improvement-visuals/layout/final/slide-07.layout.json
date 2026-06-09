@@ -1,0 +1,1012 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/02cefx",
+    "id": "02cefx",
+    "slide": 7,
+    "layoutId": "94ce2157-e5b7-4707-b7ef-a4255d8b6c02",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "2a564652-4150-4f31-9868-ed79f815a227",
+    "masterLayoutName": "Master",
+    "backgroundColor": "#F6F1E8",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Apple SD Gothic Neo"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "94ce2157-e5b7-4707-b7ef-a4255d8b6c02",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "2a564652-4150-4f31-9868-ed79f815a227",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "2a564652-4150-4f31-9868-ed79f815a227",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/i5sneloj",
+      "id": "1",
+      "bbox": [
+        56,
+        42,
+        28,
+        6
+      ],
+      "geometry": "rect",
+      "fillColor": "#0B5D7E",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/pwb2hwfy",
+      "id": "2",
+      "bbox": [
+        94,
+        30,
+        360,
+        32
+      ],
+      "geometry": "rect",
+      "text": "07 / LAYOUT LAYER",
+      "textPreview": "07 / LAYOUT LAYER",
+      "resolvedFontSize": 13,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "07 / LAYOUT LAYER"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "07 / LAYOUT LAYER",
+          "runs": [
+            {
+              "index": 1,
+              "text": "07 / LAYOUT LAYER",
+              "fontSize": 13,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#0B5D7E",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F6F1E8",
+      "lineColor": "#F6F1E8",
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/0bi9s36h",
+      "id": "3",
+      "bbox": [
+        56,
+        76,
+        880,
+        90
+      ],
+      "geometry": "rect",
+      "text": "2단 카드 문제는 layout 보조 청크로 풀었다",
+      "textPreview": "2단 카드 문제는 layout 보조 청크로 풀었다",
+      "resolvedFontSize": 42,
+      "resolvedTextStyle": {
+        "fontSize": 42,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "2단 카드 문제는 layout 보조 청크로 풀었다"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "2단 카드 문제는 layout 보조 청크로 풀었다",
+          "runs": [
+            {
+              "index": 1,
+              "text": "2단 카드 문제는 layout 보조 청크로 풀었다",
+              "fontSize": 42,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F6F1E8",
+      "lineColor": "#F6F1E8",
+      "lineWidth": 0
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/7y1kre1w",
+      "id": "4",
+      "bbox": [
+        92,
+        196,
+        468,
+        300
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#B9C1C7",
+      "lineWidth": 1
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ed8v6psf",
+      "id": "5",
+      "bbox": [
+        126,
+        222,
+        220,
+        24
+      ],
+      "geometry": "rect",
+      "text": "PDF 51페이지 구조",
+      "textPreview": "PDF 51페이지 구조",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "PDF 51페이지 구조"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "PDF 51페이지 구조",
+          "runs": [
+            {
+              "index": 1,
+              "text": "PDF 51페이지 구조",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#0B5D7E",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF",
+      "lineColor": "#FFFFFF",
+      "lineWidth": 0
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/p4r65wju",
+      "id": "6",
+      "bbox": [
+        128,
+        274,
+        176,
+        142
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#DDEBF2",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 2
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/wjudg7ad",
+      "id": "7",
+      "bbox": [
+        346,
+        274,
+        176,
+        142
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#F1DED8",
+      "lineColor": "#C7553A",
+      "lineWidth": 2
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/72x4nap4",
+      "id": "8",
+      "bbox": [
+        150,
+        304,
+        132,
+        64
+      ],
+      "geometry": "rect",
+      "text": "컴퓨터정보공학과\n주요 교과목\n주요 취업처",
+      "textPreview": "컴퓨터정보공학과 | 주요 교과목 | 주요 취업처",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "center"
+      },
+      "textLayout": {
+        "lineCount": 4,
+        "lines": [
+          {
+            "index": 1,
+            "text": "컴퓨터정보공학"
+          },
+          {
+            "index": 2,
+            "text": "과"
+          },
+          {
+            "index": 3,
+            "text": "주요 교과목"
+          },
+          {
+            "index": 4,
+            "text": "주요 취업처"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "컴퓨터정보공학과",
+          "runs": [
+            {
+              "index": 1,
+              "text": "컴퓨터정보공학과",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "text": "주요 교과목",
+          "runs": [
+            {
+              "index": 1,
+              "text": "주요 교과목",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "text": "주요 취업처",
+          "runs": [
+            {
+              "index": 1,
+              "text": "주요 취업처",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#DDEBF2",
+      "lineColor": "#DDEBF2",
+      "lineWidth": 0
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ih4byhgn",
+      "id": "9",
+      "bbox": [
+        368,
+        304,
+        132,
+        64
+      ],
+      "geometry": "rect",
+      "text": "컴퓨터시스템공학과\n주요 교과목\n주요 취업처",
+      "textPreview": "컴퓨터시스템공학과 | 주요 교과목 | 주요 취업처",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "center"
+      },
+      "textLayout": {
+        "lineCount": 4,
+        "lines": [
+          {
+            "index": 1,
+            "text": "컴퓨터시스템공"
+          },
+          {
+            "index": 2,
+            "text": "학과"
+          },
+          {
+            "index": 3,
+            "text": "주요 교과목"
+          },
+          {
+            "index": 4,
+            "text": "주요 취업처"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "컴퓨터시스템공학과",
+          "runs": [
+            {
+              "index": 1,
+              "text": "컴퓨터시스템공학과",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "text": "주요 교과목",
+          "runs": [
+            {
+              "index": 1,
+              "text": "주요 교과목",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "text": "주요 취업처",
+          "runs": [
+            {
+              "index": 1,
+              "text": "주요 취업처",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F1DED8",
+      "lineColor": "#F1DED8",
+      "lineWidth": 0
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/032lszqt",
+      "id": "10",
+      "bbox": [
+        132,
+        444,
+        360,
+        28
+      ],
+      "geometry": "rect",
+      "text": "raw Markdown에서는 좌우가 한 문단처럼 섞였다.",
+      "textPreview": "raw Markdown에서는 좌우가 한 문단처럼 섞였다.",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "Apple SD Gothic Neo",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "raw Markdown에서는 좌우가 한 문단처럼 섞였다."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "raw Markdown에서는 좌우가 한 문단처럼 섞였다.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "raw Markdown에서는 좌우가 한 문단처럼 섞였다.",
+              "fontSize": 17,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#4B5963",
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF",
+      "lineColor": "#FFFFFF",
+      "lineWidth": 0
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/tovahoza",
+      "id": "11",
+      "bbox": [
+        560,
+        346,
+        104,
+        3
+      ],
+      "geometry": "rect",
+      "fillColor": "#4B5963",
+      "lineColor": "#4B5963",
+      "lineWidth": 0
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ixczed8v",
+      "id": "12",
+      "bbox": [
+        656,
+        341,
+        10,
+        10
+      ],
+      "geometry": "rect",
+      "fillColor": "#4B5963",
+      "lineColor": "#4B5963",
+      "lineWidth": 0
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/bi9s36hc",
+      "id": "13",
+      "bbox": [
+        664,
+        190,
+        500,
+        312
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "#B9C1C7",
+      "lineWidth": 1
+    },
+    {
+      "order": 14,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/0fepkzup",
+      "id": "14",
+      "bbox": [
+        700,
+        218,
+        260,
+        24
+      ],
+      "geometry": "rect",
+      "text": "layout_parallel evidence",
+      "textPreview": "layout_parallel evidence",
+      "resolvedFontSize": 18,
+      "resolvedTextStyle": {
+        "fontSize": 18,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "layout_parallel evidence"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "layout_parallel evidence",
+          "runs": [
+            {
+              "index": 1,
+              "text": "layout_parallel evidence",
+              "fontSize": 18,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#2A7A5E",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF",
+      "lineColor": "#FFFFFF",
+      "lineWidth": 0
+    },
+    {
+      "order": 15,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/p0bi9s36",
+      "id": "15",
+      "bbox": [
+        706,
+        260,
+        390,
+        154
+      ],
+      "geometry": "rect",
+      "text": "열 1 제목: 컴퓨터정보공학과\n- 주요 교과목: 자료구조, 데이터베이스...\n- 주요 취업처: 레인보우 브레인, 퀸텟시스템즈...\n\n열 2 제목: 컴퓨터시스템공학과\n- 주요 교과목: C/C++/자바...\n- 주요 취업처: 제너셈, 와이즈와이어즈...",
+      "textPreview": "열 1 제목: 컴퓨터정보공학과 | - 주요 교과목: 자료구조, 데이터베이스... | - 주요 취업처: 레인보우 브레인, 퀸텟시스템즈... |  | 열 2 제목: 컴퓨터시스템공학과 | - 주요 교과목: C/C++/자바... | - 주요 취업처: 제...",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "Apple SD Gothic Neo",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 7,
+        "lines": [
+          {
+            "index": 1,
+            "text": "열 1 제목: 컴퓨터정보공학과"
+          },
+          {
+            "index": 2,
+            "text": "- 주요 교과목: 자료구조, 데이터베이스..."
+          },
+          {
+            "index": 3,
+            "text": "- 주요 취업처: 레인보우 브레인, 퀸텟시스템즈..."
+          },
+          {
+            "index": 4,
+            "text": ""
+          },
+          {
+            "index": 5,
+            "text": "열 2 제목: 컴퓨터시스템공학과"
+          },
+          {
+            "index": 6,
+            "text": "- 주요 교과목: C/C++/자바..."
+          },
+          {
+            "index": 7,
+            "text": "- 주요 취업처: 제너셈, 와이즈와이어즈..."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "열 1 제목: 컴퓨터정보공학과",
+          "runs": [
+            {
+              "index": 1,
+              "text": "열 1 제목: 컴퓨터정보공학과",
+              "fontSize": 17,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "alignment": "left"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "text": "- 주요 교과목: 자료구조, 데이터베이스...",
+          "runs": [
+            {
+              "index": 1,
+              "text": "- 주요 교과목: 자료구조, 데이터베이스...",
+              "fontSize": 17,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "alignment": "left"
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "text": "- 주요 취업처: 레인보우 브레인, 퀸텟시스템즈...",
+          "runs": [
+            {
+              "index": 1,
+              "text": "- 주요 취업처: 레인보우 브레인, 퀸텟시스템즈...",
+              "fontSize": 17,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "alignment": "left"
+            }
+          ]
+        },
+        {
+          "index": 5,
+          "text": "열 2 제목: 컴퓨터시스템공학과",
+          "runs": [
+            {
+              "index": 1,
+              "text": "열 2 제목: 컴퓨터시스템공학과",
+              "fontSize": 17,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "alignment": "left"
+            }
+          ]
+        },
+        {
+          "index": 6,
+          "text": "- 주요 교과목: C/C++/자바...",
+          "runs": [
+            {
+              "index": 1,
+              "text": "- 주요 교과목: C/C++/자바...",
+              "fontSize": 17,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "alignment": "left"
+            }
+          ]
+        },
+        {
+          "index": 7,
+          "text": "- 주요 취업처: 제너셈, 와이즈와이어즈...",
+          "runs": [
+            {
+              "index": 1,
+              "text": "- 주요 취업처: 제너셈, 와이즈와이어즈...",
+              "fontSize": 17,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#13202A",
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#FFFFFF",
+      "lineColor": "#FFFFFF",
+      "lineWidth": 0
+    },
+    {
+      "order": 16,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/i9s36hcr",
+      "id": "16",
+      "bbox": [
+        704,
+        438,
+        160,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#0B5D7E",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 0
+    },
+    {
+      "order": 17,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/bulwval8",
+      "id": "17",
+      "bbox": [
+        716,
+        445,
+        136,
+        18
+      ],
+      "geometry": "rect",
+      "text": "bbox coverage 1.0",
+      "textPreview": "bbox coverage 1.0",
+      "resolvedFontSize": 12,
+      "resolvedTextStyle": {
+        "fontSize": 12,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "center"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "bbox coverage 1.0"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "bbox coverage 1.0",
+          "runs": [
+            {
+              "index": 1,
+              "text": "bbox coverage 1.0",
+              "fontSize": 12,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#0B5D7E",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 0
+    },
+    {
+      "order": 18,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/0je9cvix",
+      "id": "18",
+      "bbox": [
+        882,
+        438,
+        154,
+        34
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#2A7A5E",
+      "lineColor": "#2A7A5E",
+      "lineWidth": 0
+    },
+    {
+      "order": 19,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/t47y1kre",
+      "id": "19",
+      "bbox": [
+        894,
+        445,
+        130,
+        18
+      ],
+      "geometry": "rect",
+      "text": "confidence gate",
+      "textPreview": "confidence gate",
+      "resolvedFontSize": 12,
+      "resolvedTextStyle": {
+        "fontSize": 12,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "center"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "confidence gate"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "confidence gate",
+          "runs": [
+            {
+              "index": 1,
+              "text": "confidence gate",
+              "fontSize": 12,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#2A7A5E",
+      "lineColor": "#2A7A5E",
+      "lineWidth": 0
+    },
+    {
+      "order": 20,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xobm58z2",
+      "id": "20",
+      "bbox": [
+        56,
+        676,
+        780,
+        24
+      ],
+      "geometry": "rect",
+      "text": "구현 원칙: 기존 raw chunk를 지우지 않고, 안전 판정된 layout 보조 청크를 추가했다.",
+      "textPreview": "구현 원칙: 기존 raw chunk를 지우지 않고, 안전 판정된 layout 보조 청크를 추가했다.",
+      "resolvedFontSize": 10,
+      "resolvedTextStyle": {
+        "fontSize": 10,
+        "typeface": "Apple SD Gothic Neo",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "구현 원칙: 기존 raw chunk를 지우지 않고, 안전 판정된 layout 보조 청크를 추가했다."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "구현 원칙: 기존 raw chunk를 지우지 않고, 안전 판정된 layout 보조 청크를 추가했다.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "구현 원칙: 기존 raw chunk를 지우지 않고, 안전 판정된 layout 보조 청크를 추가했다.",
+              "fontSize": 10,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#4B5963",
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F6F1E8",
+      "lineColor": "#F6F1E8",
+      "lineWidth": 0
+    },
+    {
+      "order": 21,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/83itgfml",
+      "id": "21",
+      "bbox": [
+        1190,
+        674,
+        34,
+        24
+      ],
+      "geometry": "rect",
+      "text": "07",
+      "textPreview": "07",
+      "resolvedFontSize": 12,
+      "resolvedTextStyle": {
+        "fontSize": 12,
+        "typeface": "Apple SD Gothic Neo",
+        "alignment": "right"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "07"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "07",
+          "runs": [
+            {
+              "index": 1,
+              "text": "07",
+              "fontSize": 12,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#4B5963",
+              "alignment": "right"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#F6F1E8",
+      "lineColor": "#F6F1E8",
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

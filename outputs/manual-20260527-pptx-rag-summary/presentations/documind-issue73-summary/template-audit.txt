@@ -1,0 +1,16 @@
+source deck: Assets/발표 PPT/DocuMind_3주차.pptx
+slide count: 8
+preserve:
+- navy cover, white DocuMind title, blue Korean subtitle, thin horizontal rule
+- content slide grammar: page number at top left, title at top, thin separator line
+- diagram-heavy explanation style using rounded boxes and directional arrows
+- muted technical palette with blue/green/orange/yellow accents
+improve:
+- make #73 work understandable to general viewers and junior developers
+- avoid text-heavy slides; each slide gets one claim and one visual object
+- avoid overlapping shapes by leaving wide margins and using rendered QA
+do not imitate:
+- overly dense architecture images that are difficult to read in presentation mode
+- tiny labels that require zooming
+deviation:
+- Exact clone/edit through artifact-tool was blocked by CanvasPattern rendering error. The final deck is an editable artifact-tool deck built to preserve the visible source style rather than a byte-level template clone.

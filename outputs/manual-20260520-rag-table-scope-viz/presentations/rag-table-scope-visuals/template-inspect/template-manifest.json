@@ -1,0 +1,106 @@
+{
+  "sourcePptx": "/Users/gim-yongjin/Developer/Project/DocuMind/Assets/발표 12주차-예비.pptx",
+  "workspace": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals",
+  "outDir": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect",
+  "generatedAt": "2026-05-20T03:45:35.964Z",
+  "slideCount": 8,
+  "slideArtifacts": [
+    {
+      "slide": 1,
+      "previewPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/source-slides/source-slide-01.png",
+      "previewRelativePath": "template-inspect/source-slides/source-slide-01.png",
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/layouts/source-slide-01.layout.json",
+      "layoutRelativePath": "template-inspect/layouts/source-slide-01.layout.json"
+    },
+    {
+      "slide": 2,
+      "previewPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/source-slides/source-slide-02.png",
+      "previewRelativePath": "template-inspect/source-slides/source-slide-02.png",
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/layouts/source-slide-02.layout.json",
+      "layoutRelativePath": "template-inspect/layouts/source-slide-02.layout.json"
+    },
+    {
+      "slide": 3,
+      "previewPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/source-slides/source-slide-03.png",
+      "previewRelativePath": "template-inspect/source-slides/source-slide-03.png",
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/layouts/source-slide-03.layout.json",
+      "layoutRelativePath": "template-inspect/layouts/source-slide-03.layout.json"
+    },
+    {
+      "slide": 4,
+      "previewPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/source-slides/source-slide-04.png",
+      "previewRelativePath": "template-inspect/source-slides/source-slide-04.png",
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/layouts/source-slide-04.layout.json",
+      "layoutRelativePath": "template-inspect/layouts/source-slide-04.layout.json"
+    },
+    {
+      "slide": 5,
+      "previewPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/source-slides/source-slide-05.png",
+      "previewRelativePath": "template-inspect/source-slides/source-slide-05.png",
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/layouts/source-slide-05.layout.json",
+      "layoutRelativePath": "template-inspect/layouts/source-slide-05.layout.json"
+    },
+    {
+      "slide": 6,
+      "previewPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/source-slides/source-slide-06.png",
+      "previewRelativePath": "template-inspect/source-slides/source-slide-06.png",
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/layouts/source-slide-06.layout.json",
+      "layoutRelativePath": "template-inspect/layouts/source-slide-06.layout.json"
+    },
+    {
+      "slide": 7,
+      "previewPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/source-slides/source-slide-07.png",
+      "previewRelativePath": "template-inspect/source-slides/source-slide-07.png",
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/layouts/source-slide-07.layout.json",
+      "layoutRelativePath": "template-inspect/layouts/source-slide-07.layout.json"
+    },
+    {
+      "slide": 8,
+      "previewPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/source-slides/source-slide-08.png",
+      "previewRelativePath": "template-inspect/source-slides/source-slide-08.png",
+      "layoutPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/layouts/source-slide-08.layout.json",
+      "layoutRelativePath": "template-inspect/layouts/source-slide-08.layout.json"
+    }
+  ],
+  "inspectPath": "/Users/gim-yongjin/Developer/Project/DocuMind/outputs/manual-20260520-rag-table-scope-viz/presentations/rag-table-scope-visuals/template-inspect/template-inspect.ndjson",
+  "inspectRelativePath": "template-inspect/template-inspect.ndjson",
+  "inspectTruncated": true,
+  "inspectMetadata": {
+    "revision": "igrqbn",
+    "target": {
+      "id": "pr/ckupel"
+    },
+    "kind": {
+      "requested": "slide,textbox,shape,image,table,chart",
+      "tokens": [
+        "slide",
+        "textbox",
+        "shape",
+        "image",
+        "table",
+        "chart"
+      ]
+    },
+    "include": {
+      "tokens": []
+    },
+    "exclude": {
+      "tokens": []
+    },
+    "notices": []
+  },
+  "extractedMedia": [],
+  "fonts": [
+    "+mj-lt",
+    "+mn-lt",
+    "Apple SD Gothic Neo",
+    "Calibri",
+    "Calibri Light"
+  ],
+  "packageParts": {
+    "mediaCount": 0,
+    "slideXmlCount": 8,
+    "chartCount": 0,
+    "tableSlideCount": 0
+  }
+}

@@ -1,0 +1,1170 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/qxn39a",
+    "id": "qxn39a",
+    "slide": 10,
+    "layoutId": "94ce2157-e5b7-4707-b7ef-a4255d8b6c02",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "2a564652-4150-4f31-9868-ed79f815a227",
+    "masterLayoutName": "Master",
+    "backgroundColor": "#13202A",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Apple SD Gothic Neo"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "94ce2157-e5b7-4707-b7ef-a4255d8b6c02",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "2a564652-4150-4f31-9868-ed79f815a227",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "2a564652-4150-4f31-9868-ed79f815a227",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ahoza1gv",
+      "id": "1",
+      "bbox": [
+        56,
+        42,
+        28,
+        6
+      ],
+      "geometry": "rect",
+      "fillColor": "#F6F1E8",
+      "lineColor": "#F6F1E8",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/l87ed8ba",
+      "id": "2",
+      "bbox": [
+        94,
+        30,
+        360,
+        32
+      ],
+      "geometry": "rect",
+      "text": "10 / 결론",
+      "textPreview": "10 / 결론",
+      "resolvedFontSize": 13,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "10 / 결론"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "10 / 결론",
+          "runs": [
+            {
+              "index": 1,
+              "text": "10 / 결론",
+              "fontSize": 13,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#F6F1E8",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#13202A",
+      "lineColor": "#13202A",
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/sneloj2t",
+      "id": "3",
+      "bbox": [
+        56,
+        76,
+        880,
+        92
+      ],
+      "geometry": "rect",
+      "text": "결론: RAG 품질은 근거 구조가 결정한다",
+      "textPreview": "결론: RAG 품질은 근거 구조가 결정한다",
+      "resolvedFontSize": 42,
+      "resolvedTextStyle": {
+        "fontSize": 42,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "결론: RAG 품질은 근거 구조가 결정한다"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "결론: RAG 품질은 근거 구조가 결정한다",
+          "runs": [
+            {
+              "index": 1,
+              "text": "결론: RAG 품질은 근거 구조가 결정한다",
+              "fontSize": 42,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#F6F1E8",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#13202A",
+      "lineColor": "#13202A",
+      "lineWidth": 0
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3ex0nuxc",
+      "id": "4",
+      "bbox": [
+        82,
+        216,
+        188,
+        96
+      ],
+      "geometry": "rect",
+      "fillColor": "#2A7A5E",
+      "lineColor": "#2A7A5E",
+      "lineWidth": 0
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/at47y1kr",
+      "id": "5",
+      "bbox": [
+        100,
+        231,
+        152,
+        38
+      ],
+      "geometry": "rect",
+      "text": "7/8",
+      "textPreview": "7/8",
+      "resolvedFontSize": 33,
+      "resolvedTextStyle": {
+        "fontSize": 33,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "7/8"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "7/8",
+          "runs": [
+            {
+              "index": 1,
+              "text": "7/8",
+              "fontSize": 33,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#2A7A5E",
+      "lineColor": "#2A7A5E",
+      "lineWidth": 0
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/lkjm1cfa",
+      "id": "6",
+      "bbox": [
+        100,
+        273,
+        152,
+        28
+      ],
+      "geometry": "rect",
+      "text": "대표 평가 통과",
+      "textPreview": "대표 평가 통과",
+      "resolvedFontSize": 13,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Apple SD Gothic Neo",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "대표 평가 통과"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "대표 평가 통과",
+          "runs": [
+            {
+              "index": 1,
+              "text": "대표 평가 통과",
+              "fontSize": 13,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#2A7A5E",
+      "lineColor": "#2A7A5E",
+      "lineWidth": 0
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/szqtcj6t",
+      "id": "7",
+      "bbox": [
+        300,
+        216,
+        238,
+        96
+      ],
+      "geometry": "rect",
+      "fillColor": "#C7553A",
+      "lineColor": "#C7553A",
+      "lineWidth": 0
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3itgfmlk",
+      "id": "8",
+      "bbox": [
+        318,
+        231,
+        202,
+        38
+      ],
+      "geometry": "rect",
+      "text": "1개",
+      "textPreview": "1개",
+      "resolvedFontSize": 33,
+      "resolvedTextStyle": {
+        "fontSize": 33,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "1개"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "1개",
+          "runs": [
+            {
+              "index": 1,
+              "text": "1개",
+              "fontSize": 33,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#C7553A",
+      "lineColor": "#C7553A",
+      "lineWidth": 0
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ex0nuxc3",
+      "id": "9",
+      "bbox": [
+        318,
+        273,
+        202,
+        28
+      ],
+      "geometry": "rect",
+      "text": "남은 실패: 약어/모집정원",
+      "textPreview": "남은 실패: 약어/모집정원",
+      "resolvedFontSize": 13,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Apple SD Gothic Neo",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "남은 실패: 약어/모집정원"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "남은 실패: 약어/모집정원",
+          "runs": [
+            {
+              "index": 1,
+              "text": "남은 실패: 약어/모집정원",
+              "fontSize": 13,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#C7553A",
+      "lineColor": "#C7553A",
+      "lineWidth": 0
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/wfyxobm5",
+      "id": "10",
+      "bbox": [
+        568,
+        216,
+        226,
+        96
+      ],
+      "geometry": "rect",
+      "fillColor": "#0B5D7E",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 0
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/l0rqd4vm",
+      "id": "11",
+      "bbox": [
+        586,
+        231,
+        190,
+        38
+      ],
+      "geometry": "rect",
+      "text": "3계층",
+      "textPreview": "3계층",
+      "resolvedFontSize": 33,
+      "resolvedTextStyle": {
+        "fontSize": 33,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "3계층"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "3계층",
+          "runs": [
+            {
+              "index": 1,
+              "text": "3계층",
+              "fontSize": 33,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#0B5D7E",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 0
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ed8bat47",
+      "id": "12",
+      "bbox": [
+        586,
+        273,
+        190,
+        28
+      ],
+      "geometry": "rect",
+      "text": "raw + table + layout",
+      "textPreview": "raw + table + layout",
+      "resolvedFontSize": 13,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Apple SD Gothic Neo",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "raw + table + layout"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "raw + table + layout",
+          "runs": [
+            {
+              "index": 1,
+              "text": "raw + table + layout",
+              "fontSize": 13,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#0B5D7E",
+      "lineColor": "#0B5D7E",
+      "lineWidth": 0
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/7u54zido",
+      "id": "13",
+      "bbox": [
+        824,
+        216,
+        208,
+        96
+      ],
+      "geometry": "rect",
+      "fillColor": "#C8952C",
+      "lineColor": "#C8952C",
+      "lineWidth": 0
+    },
+    {
+      "order": 14,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/wra5gbq1",
+      "id": "14",
+      "bbox": [
+        842,
+        231,
+        172,
+        38
+      ],
+      "geometry": "rect",
+      "text": "0",
+      "textPreview": "0",
+      "resolvedFontSize": 33,
+      "resolvedTextStyle": {
+        "fontSize": 33,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "0"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "0",
+          "runs": [
+            {
+              "index": 1,
+              "text": "0",
+              "fontSize": 33,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#C8952C",
+      "lineColor": "#C8952C",
+      "lineWidth": 0
+    },
+    {
+      "order": 15,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/lc7u54zi",
+      "id": "15",
+      "bbox": [
+        842,
+        273,
+        172,
+        28
+      ],
+      "geometry": "rect",
+      "text": "남길 하드코딩 원칙",
+      "textPreview": "남길 하드코딩 원칙",
+      "resolvedFontSize": 13,
+      "resolvedTextStyle": {
+        "fontSize": 13,
+        "typeface": "Apple SD Gothic Neo",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "남길 하드코딩 원칙"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "남길 하드코딩 원칙",
+          "runs": [
+            {
+              "index": 1,
+              "text": "남길 하드코딩 원칙",
+              "fontSize": 13,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#C8952C",
+      "lineColor": "#C8952C",
+      "lineWidth": 0
+    },
+    {
+      "order": 16,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/eloj2t83",
+      "id": "16",
+      "bbox": [
+        108,
+        398,
+        236,
+        72
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#20323D",
+      "lineColor": "#526B78",
+      "lineWidth": 1
+    },
+    {
+      "order": 17,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/36hcrmhk",
+      "id": "17",
+      "bbox": [
+        124,
+        418,
+        204,
+        28
+      ],
+      "geometry": "rect",
+      "text": "1. GCP 최신 코드 재색인",
+      "textPreview": "1. GCP 최신 코드 재색인",
+      "resolvedFontSize": 19,
+      "resolvedTextStyle": {
+        "fontSize": 19,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "center"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "1. GCP 최신 코드 재색인"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "1. GCP 최신 코드 재색인",
+          "runs": [
+            {
+              "index": 1,
+              "text": "1. GCP 최신 코드 재색인",
+              "fontSize": 19,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#F6F1E8",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#20323D",
+      "lineColor": "#20323D",
+      "lineWidth": 0
+    },
+    {
+      "order": 18,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/wval87ed",
+      "id": "18",
+      "bbox": [
+        344,
+        434,
+        76,
+        3
+      ],
+      "geometry": "rect",
+      "fillColor": "#8096A3",
+      "lineColor": "#8096A3",
+      "lineWidth": 0
+    },
+    {
+      "order": 19,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/pg3ex0nu",
+      "id": "19",
+      "bbox": [
+        412,
+        429,
+        10,
+        10
+      ],
+      "geometry": "rect",
+      "fillColor": "#8096A3",
+      "lineColor": "#8096A3",
+      "lineWidth": 0
+    },
+    {
+      "order": 20,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/9knih4by",
+      "id": "20",
+      "bbox": [
+        420,
+        398,
+        252,
+        72
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#20323D",
+      "lineColor": "#526B78",
+      "lineWidth": 1
+    },
+    {
+      "order": 21,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/kzupwb2h",
+      "id": "21",
+      "bbox": [
+        436,
+        418,
+        220,
+        28
+      ],
+      "geometry": "rect",
+      "text": "2. 표/범례 평가 케이스 확대",
+      "textPreview": "2. 표/범례 평가 케이스 확대",
+      "resolvedFontSize": 19,
+      "resolvedTextStyle": {
+        "fontSize": 19,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "center"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "2. 표/범례 평가 케이스"
+          },
+          {
+            "index": 2,
+            "text": "확대"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "2. 표/범례 평가 케이스 확대",
+          "runs": [
+            {
+              "index": 1,
+              "text": "2. 표/범례 평가 케이스 확대",
+              "fontSize": 19,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#F6F1E8",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#20323D",
+      "lineColor": "#20323D",
+      "lineWidth": 0
+    },
+    {
+      "order": 22,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/re1w7mp0",
+      "id": "22",
+      "bbox": [
+        672,
+        434,
+        76,
+        3
+      ],
+      "geometry": "rect",
+      "fillColor": "#8096A3",
+      "lineColor": "#8096A3",
+      "lineWidth": 0
+    },
+    {
+      "order": 23,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2t83itgf",
+      "id": "23",
+      "bbox": [
+        740,
+        429,
+        10,
+        10
+      ],
+      "geometry": "rect",
+      "fillColor": "#8096A3",
+      "lineColor": "#8096A3",
+      "lineWidth": 0
+    },
+    {
+      "order": 24,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/9w3m94fu",
+      "id": "24",
+      "bbox": [
+        748,
+        398,
+        252,
+        72
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#20323D",
+      "lineColor": "#526B78",
+      "lineWidth": 1
+    },
+    {
+      "order": 25,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/kb6xkf6d",
+      "id": "25",
+      "bbox": [
+        764,
+        418,
+        220,
+        28
+      ],
+      "geometry": "rect",
+      "text": "3. subject catalog로 약어 해결",
+      "textPreview": "3. subject catalog로 약어 해결",
+      "resolvedFontSize": 19,
+      "resolvedTextStyle": {
+        "fontSize": 19,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "center"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "3. subject catalog로"
+          },
+          {
+            "index": 2,
+            "text": "약어 해결"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "3. subject catalog로 약어 해결",
+          "runs": [
+            {
+              "index": 1,
+              "text": "3. subject catalog로 약어 해결",
+              "fontSize": 19,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#F6F1E8",
+              "bold": true,
+              "alignment": "center"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#20323D",
+      "lineColor": "#20323D",
+      "lineWidth": 0
+    },
+    {
+      "order": 26,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/rqd4vmtw",
+      "id": "26",
+      "bbox": [
+        108,
+        536,
+        912,
+        66
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#1C2B36",
+      "lineColor": "#334753",
+      "lineWidth": 1
+    },
+    {
+      "order": 27,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/25kb6xkf",
+      "id": "27",
+      "bbox": [
+        138,
+        554,
+        150,
+        20
+      ],
+      "geometry": "rect",
+      "text": "다음 발표 메시지",
+      "textPreview": "다음 발표 메시지",
+      "resolvedFontSize": 16,
+      "resolvedTextStyle": {
+        "fontSize": 16,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "다음 발표 메시지"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "다음 발표 메시지",
+          "runs": [
+            {
+              "index": 1,
+              "text": "다음 발표 메시지",
+              "fontSize": 16,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#C8952C",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#1C2B36",
+      "lineColor": "#1C2B36",
+      "lineWidth": 0
+    },
+    {
+      "order": 28,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/94fu18jq",
+      "id": "28",
+      "bbox": [
+        300,
+        550,
+        610,
+        28
+      ],
+      "geometry": "rect",
+      "text": "DocuMind는 LLM 튜닝보다 먼저 문서 구조화와 평가 루프를 갖춘 RAG 시스템으로 개선되고 있다.",
+      "textPreview": "DocuMind는 LLM 튜닝보다 먼저 문서 구조화와 평가 루프를 갖춘 RAG 시스템으로 개선되고 있다.",
+      "resolvedFontSize": 22,
+      "resolvedTextStyle": {
+        "fontSize": 22,
+        "typeface": "Apple SD Gothic Neo",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "DocuMind는 LLM 튜닝보다 먼저 문서 구조화와 평가 루프를 갖춘"
+          },
+          {
+            "index": 2,
+            "text": "RAG 시스템으로 개선되고 있다."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "DocuMind는 LLM 튜닝보다 먼저 문서 구조화와 평가 루프를 갖춘 RAG 시스템으로 개선되고 있다.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "DocuMind는 LLM 튜닝보다 먼저 문서 구조화와 평가 루프를 갖춘 RAG 시스템으로 개선되고 있다.",
+              "fontSize": 22,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#F6F1E8",
+              "bold": true,
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#1C2B36",
+      "lineColor": "#1C2B36",
+      "lineWidth": 0
+    },
+    {
+      "order": 29,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/kjm1cfa9",
+      "id": "29",
+      "bbox": [
+        56,
+        676,
+        780,
+        24
+      ],
+      "geometry": "rect",
+      "text": "남은 일: 실서버 pull/build, 재업로드 후 evaluate_rag 재실행, table question suite 확장",
+      "textPreview": "남은 일: 실서버 pull/build, 재업로드 후 evaluate_rag 재실행, table question suite 확장",
+      "resolvedFontSize": 10,
+      "resolvedTextStyle": {
+        "fontSize": 10,
+        "typeface": "Apple SD Gothic Neo",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "남은 일: 실서버 pull/build, 재업로드 후 evaluate_rag 재실행, table question suite 확장"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "남은 일: 실서버 pull/build, 재업로드 후 evaluate_rag 재실행, table question suite 확장",
+          "runs": [
+            {
+              "index": 1,
+              "text": "남은 일: 실서버 pull/build, 재업로드 후 evaluate_rag 재실행, table question suite 확장",
+              "fontSize": 10,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#B7C6CE",
+              "alignment": "left"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#13202A",
+      "lineColor": "#13202A",
+      "lineWidth": 0
+    },
+    {
+      "order": 30,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/udg7adsj",
+      "id": "30",
+      "bbox": [
+        1190,
+        674,
+        34,
+        24
+      ],
+      "geometry": "rect",
+      "text": "10",
+      "textPreview": "10",
+      "resolvedFontSize": 12,
+      "resolvedTextStyle": {
+        "fontSize": 12,
+        "typeface": "Apple SD Gothic Neo",
+        "alignment": "right"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "10"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "10",
+          "runs": [
+            {
+              "index": 1,
+              "text": "10",
+              "fontSize": 12,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#B7C6CE",
+              "alignment": "right"
+            }
+          ]
+        }
+      ],
+      "fillColor": "#13202A",
+      "lineColor": "#13202A",
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

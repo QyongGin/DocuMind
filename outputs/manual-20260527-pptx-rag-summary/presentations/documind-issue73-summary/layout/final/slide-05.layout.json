@@ -1,0 +1,1173 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/ktn828",
+    "id": "ktn828",
+    "slide": 5,
+    "layoutId": "b2b779c1-d5ea-4f9e-bdc5-b242435851c3",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "9cf55182-c676-4403-88c0-7df21b72a5ad",
+    "masterLayoutName": "Master",
+    "backgroundColor": "#FFFFFF",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Apple SD Gothic Neo"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "b2b779c1-d5ea-4f9e-bdc5-b242435851c3",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "9cf55182-c676-4403-88c0-7df21b72a5ad",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "9cf55182-c676-4403-88c0-7df21b72a5ad",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/v6psfil0",
+      "id": "1",
+      "bbox": [
+        0,
+        0,
+        1280,
+        126
+      ],
+      "geometry": "rect",
+      "fillColor": "#18304B",
+      "lineColor": "#18304B",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/knih4byh",
+      "id": "2",
+      "bbox": [
+        0,
+        126,
+        1280,
+        6
+      ],
+      "geometry": "rect",
+      "fillColor": "#0B83E6",
+      "lineColor": "#0B83E6",
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/d8bat47y",
+      "id": "3",
+      "bbox": [
+        58,
+        48,
+        72,
+        40
+      ],
+      "geometry": "rect",
+      "text": "04",
+      "textPreview": "04",
+      "resolvedFontSize": 28,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 28,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#0B83E6",
+        "bold": true,
+        "alignment": "center",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "04"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "04",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 28,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#0B83E6",
+            "bold": true,
+            "alignment": "center",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "04",
+              "anchor": 1,
+              "fontSize": 28,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#0B83E6",
+              "bold": true,
+              "alignment": "center",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/29gr2p8n",
+      "id": "4",
+      "bbox": [
+        150,
+        38,
+        980,
+        58
+      ],
+      "geometry": "rect",
+      "text": "값과 제목 구분",
+      "textPreview": "값과 제목 구분",
+      "resolvedFontSize": 42,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 42,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#FFFFFF",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "값과 제목 구분"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "값과 제목 구분",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 42,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#FFFFFF",
+            "bold": true,
+            "alignment": "left",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "값과 제목 구분",
+              "anchor": 1,
+              "fontSize": 42,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "left",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/vu9knih4",
+      "id": "5",
+      "bbox": [
+        82,
+        148,
+        500,
+        360
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FAFBFD",
+      "lineColor": "#D9DEE8",
+      "lineWidth": 1
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/kf6dcbul",
+      "id": "6",
+      "bbox": [
+        112,
+        176,
+        160,
+        24
+      ],
+      "geometry": "rect",
+      "text": "문제 상황",
+      "textPreview": "문제 상황",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 20,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#E25B5B",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "문제 상황"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "문제 상황",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 20,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#E25B5B",
+            "bold": true,
+            "alignment": "left",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "문제 상황",
+              "anchor": 1,
+              "fontSize": 20,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#E25B5B",
+              "bold": true,
+              "alignment": "left",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/d0z61032",
+      "id": "7",
+      "bbox": [
+        112,
+        216,
+        400,
+        48
+      ],
+      "geometry": "rect",
+      "text": "표 안의 금액이나 인원수가 제목처럼 저장되면, 검색할 때 엉뚱한 제목처럼 앞에 붙을 수 있다.",
+      "textPreview": "표 안의 금액이나 인원수가 제목처럼 저장되면, 검색할 때 엉뚱한 제목처럼 앞에 붙을 수 있다.",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 17,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#5F6572",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "표 안의 금액이나 인원수가 제목처럼 저장되면, 검색할 때"
+          },
+          {
+            "index": 2,
+            "text": "엉뚱한 제목처럼 앞에 붙을 수 있다."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "표 안의 금액이나 인원수가 제목처럼 저장되면, 검색할 때 엉뚱한 제목처럼 앞에 붙을 수 있다.",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 17,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#5F6572",
+            "alignment": "left",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "표 안의 금액이나 인원수가 제목처럼 저장되면, 검색할 때 엉뚱한 제목처럼 앞에 붙을 수 있다.",
+              "anchor": 1,
+              "fontSize": 17,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#5F6572",
+              "alignment": "left",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2x4nap4r",
+      "id": "8",
+      "bbox": [
+        152,
+        306,
+        360,
+        62
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FFF4F4",
+      "lineColor": "#E25B5B",
+      "lineWidth": 2
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/vixczed8",
+      "id": "9",
+      "bbox": [
+        172,
+        326,
+        320,
+        22
+      ],
+      "geometry": "rect",
+      "text": "section_path = [\"423만원\"]",
+      "textPreview": "section_path = [\"423만원\"]",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 20,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#E25B5B",
+        "bold": true,
+        "alignment": "center",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "section_path = [\"423만원\"]"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "section_path = [\"423만원\"]",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 20,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#E25B5B",
+            "bold": true,
+            "alignment": "center",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "section_path = [\"423만원\"]",
+              "anchor": 1,
+              "fontSize": 20,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#E25B5B",
+              "bold": true,
+              "alignment": "center",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/vmtwra5g",
+      "id": "10",
+      "bbox": [
+        150,
+        388,
+        364,
+        18
+      ],
+      "geometry": "rect",
+      "text": "값처럼 보이는 문자열이 제목 역할을 하려는 상태",
+      "textPreview": "값처럼 보이는 문자열이 제목 역할을 하려는 상태",
+      "resolvedFontSize": 13,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 13,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#5F6572",
+        "alignment": "center",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "값처럼 보이는 문자열이 제목 역할을 하려는 상태"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "값처럼 보이는 문자열이 제목 역할을 하려는 상태",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 13,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#5F6572",
+            "alignment": "center",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "값처럼 보이는 문자열이 제목 역할을 하려는 상태",
+              "anchor": 1,
+              "fontSize": 13,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#5F6572",
+              "alignment": "center",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/61032lsz",
+      "id": "11",
+      "bbox": [
+        582,
+        328,
+        107,
+        2
+      ],
+      "geometry": "rect",
+      "fillColor": "#7A8190",
+      "lineColor": "#7A8190",
+      "lineWidth": 0
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/dsji5sne",
+      "id": "12",
+      "bbox": [
+        689,
+        323,
+        9,
+        10
+      ],
+      "geometry": "rect",
+      "fillColor": "#7A8190",
+      "lineColor": "#7A8190",
+      "lineWidth": 0
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/o7qpg3ex",
+      "id": "13",
+      "bbox": [
+        698,
+        148,
+        500,
+        360
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FAFBFD",
+      "lineColor": "#D9DEE8",
+      "lineWidth": 1
+    },
+    {
+      "order": 14,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/vy90je9c",
+      "id": "14",
+      "bbox": [
+        728,
+        176,
+        180,
+        24
+      ],
+      "geometry": "rect",
+      "text": "일반화된 방어",
+      "textPreview": "일반화된 방어",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 20,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#3BCB6D",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "일반화된 방어"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "일반화된 방어",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 20,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#3BCB6D",
+            "bold": true,
+            "alignment": "left",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "일반화된 방어",
+              "anchor": 1,
+              "fontSize": 20,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#3BCB6D",
+              "bold": true,
+              "alignment": "left",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 15,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/6dcbulwv",
+      "id": "15",
+      "bbox": [
+        728,
+        216,
+        410,
+        66
+      ],
+      "geometry": "rect",
+      "text": "특정 금액이나 학과명을 코드에 박지 않았다. 대신 숫자·금액·인원수처럼 “값”으로 보이면 제목 후보에서 조심스럽게 다룬다.",
+      "textPreview": "특정 금액이나 학과명을 코드에 박지 않았다. 대신 숫자·금액·인원수처럼 “값”으로 보이면 제목 후보에서 조심스럽게 다룬다.",
+      "resolvedFontSize": 16,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 16,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#5F6572",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 3,
+        "lines": [
+          {
+            "index": 1,
+            "text": "특정 금액이나 학과명을 코드에 박지 않았다. 대신"
+          },
+          {
+            "index": 2,
+            "text": "숫자·금액·인원수처럼 “값”으로 보이면 제목 후보에서 조심스럽게"
+          },
+          {
+            "index": 3,
+            "text": "다룬다."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "특정 금액이나 학과명을 코드에 박지 않았다. 대신 숫자·금액·인원수처럼 “값”으로 보이면 제목 후보에서 조심스럽게 다룬다.",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 16,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#5F6572",
+            "alignment": "left",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "특정 금액이나 학과명을 코드에 박지 않았다. 대신 숫자·금액·인원수처럼 “값”으로 보이면 제목 후보에서 조심스럽게 다룬다.",
+              "anchor": 1,
+              "fontSize": 16,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#5F6572",
+              "alignment": "left",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 16,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/d4vmtwra",
+      "id": "16",
+      "bbox": [
+        764,
+        306,
+        310,
+        32
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#FF914D",
+      "lineColor": "#FF914D",
+      "lineWidth": 0
+    },
+    {
+      "order": 17,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/oj2t83it",
+      "id": "17",
+      "bbox": [
+        774,
+        313,
+        290,
+        18
+      ],
+      "geometry": "rect",
+      "text": "제목 후보: 의심 상태",
+      "textPreview": "제목 후보: 의심 상태",
+      "resolvedFontSize": 13,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 13,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#FFFFFF",
+        "bold": true,
+        "alignment": "center",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "제목 후보: 의심 상태"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "제목 후보: 의심 상태",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 13,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#FFFFFF",
+            "bold": true,
+            "alignment": "center",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "제목 후보: 의심 상태",
+              "anchor": 1,
+              "fontSize": 13,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#FFFFFF",
+              "bold": true,
+              "alignment": "center",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 18,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/z25kb6xk",
+      "id": "18",
+      "bbox": [
+        764,
+        356,
+        310,
+        64
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#EAF7EE",
+      "lineColor": "#3BCB6D",
+      "lineWidth": 1
+    },
+    {
+      "order": 19,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/6hcrmhk3",
+      "id": "19",
+      "bbox": [
+        792,
+        374,
+        254,
+        28
+      ],
+      "geometry": "rect",
+      "text": "검색용 제목으로 붙이지 않고\n원문 그대로 사용",
+      "textPreview": "검색용 제목으로 붙이지 않고 | 원문 그대로 사용",
+      "resolvedFontSize": 16,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 16,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#161B2C",
+        "bold": true,
+        "alignment": "center",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "검색용 제목으로 붙이지 않고"
+          },
+          {
+            "index": 2,
+            "text": "원문 그대로 사용"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "검색용 제목으로 붙이지 않고",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 16,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#161B2C",
+            "bold": true,
+            "alignment": "center",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "검색용 제목으로 붙이지 않고",
+              "anchor": 1,
+              "fontSize": 16,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#161B2C",
+              "bold": true,
+              "alignment": "center",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        },
+        {
+          "index": 2,
+          "text": "원문 그대로 사용",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 16,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#161B2C",
+            "bold": true,
+            "alignment": "center",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "원문 그대로 사용",
+              "anchor": 1,
+              "fontSize": 16,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#161B2C",
+              "bold": true,
+              "alignment": "center",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 20,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/at47y1kr",
+      "id": "20",
+      "bbox": [
+        166,
+        572,
+        948,
+        44
+      ],
+      "geometry": "roundRect",
+      "fillColor": "#EEF6FF",
+      "lineColor": "#C9E5FF",
+      "lineWidth": 1
+    },
+    {
+      "order": 21,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3ex0nuxc",
+      "id": "21",
+      "bbox": [
+        192,
+        585,
+        896,
+        18
+      ],
+      "geometry": "rect",
+      "text": "의미: 표 안의 값을 제목으로 착각하지 않게 해서, 출처와 검색 내용이 더 덜 섞이게 만들었다.",
+      "textPreview": "의미: 표 안의 값을 제목으로 착각하지 않게 해서, 출처와 검색 내용이 더 덜 섞이게 만들었다.",
+      "resolvedFontSize": 16,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 16,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#161B2C",
+        "bold": true,
+        "alignment": "center",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "의미: 표 안의 값을 제목으로 착각하지 않게 해서, 출처와 검색 내용이 더 덜 섞이게 만들었다."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "의미: 표 안의 값을 제목으로 착각하지 않게 해서, 출처와 검색 내용이 더 덜 섞이게 만들었다.",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 16,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#161B2C",
+            "bold": true,
+            "alignment": "center",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "의미: 표 안의 값을 제목으로 착각하지 않게 해서, 출처와 검색 내용이 더 덜 섞이게 만들었다.",
+              "anchor": 1,
+              "fontSize": 16,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#161B2C",
+              "bold": true,
+              "alignment": "center",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 22,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/szqtcj6t",
+      "id": "22",
+      "bbox": [
+        44,
+        688,
+        700,
+        18
+      ],
+      "geometry": "rect",
+      "text": "DocuMind #73 RAG 구조 개선 작업 정리",
+      "textPreview": "DocuMind #73 RAG 구조 개선 작업 정리",
+      "resolvedFontSize": 10,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 10,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#5F6572",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "DocuMind #73 RAG 구조 개선 작업 정리"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "DocuMind #73 RAG 구조 개선 작업 정리",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 10,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#5F6572",
+            "alignment": "left",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "DocuMind #73 RAG 구조 개선 작업 정리",
+              "anchor": 1,
+              "fontSize": 10,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#5F6572",
+              "alignment": "left",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    },
+    {
+      "order": 23,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/lkjm1cfa",
+      "id": "23",
+      "bbox": [
+        1155,
+        686,
+        38,
+        18
+      ],
+      "geometry": "rect",
+      "text": "05",
+      "textPreview": "05",
+      "resolvedFontSize": 10,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 10,
+        "typeface": "Apple SD Gothic Neo",
+        "color": "#5F6572",
+        "alignment": "right",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "05"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "05",
+          "resolvedTextStyle": {
+            "anchor": 1,
+            "fontSize": 10,
+            "typeface": "Apple SD Gothic Neo",
+            "color": "#5F6572",
+            "alignment": "right",
+            "verticalAlignment": "top"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "05",
+              "anchor": 1,
+              "fontSize": 10,
+              "typeface": "Apple SD Gothic Neo",
+              "color": "#5F6572",
+              "alignment": "right",
+              "verticalAlignment": "top"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ]
+    }
+  ],
+  "composeRuns": []
+}

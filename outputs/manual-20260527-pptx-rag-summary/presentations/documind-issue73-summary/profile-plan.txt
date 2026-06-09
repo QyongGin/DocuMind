@@ -1,0 +1,18 @@
+task mode: template-following requested; exact artifact-tool import/render of source PPTX failed on CanvasPattern.
+primary deck-profile: engineering-platform
+fallback authoring mode: artifact-tool editable rebuild that preserves the visible source style family.
+required proof objects:
+- chunk role overload diagram
+- before/after data contract separation diagram
+- safe connection point comparison
+- section_path suspect fallback example
+- documents/source_blocks split storage diagram
+- Codex review consistency fixes
+- next-step roadmap
+brand/style constraints:
+- 16:9 slide size
+- dark navy cover with right-side circular chrome
+- content slides use top-left section number and title
+- simple white background, thin rules, rounded system boxes, blue/green/orange accents
+known missing inputs:
+- artifact-tool could not render the provided PPTX because the source contains a pattern fill unsupported by the current renderer.

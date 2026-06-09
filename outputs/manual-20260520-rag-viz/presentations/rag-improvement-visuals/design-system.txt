@@ -1,0 +1,45 @@
+Slide size: 1280x720
+
+Background system
+
+- Warm paper base: #F6F1E8
+- Occasional deep ink band: #13202A
+
+Typography
+
+- Display/claim: Apple SD Gothic Neo, semibold or bold
+- Labels and body: Apple SD Gothic Neo
+- Fallback: Arial
+
+Palette
+
+- Ink: #13202A
+- Muted ink: #4B5963
+- Deep blue: #0B5D7E
+- Green: #2A7A5E
+- Rust: #C7553A
+- Gold: #C8952C
+- Pale blue: #DDEBF2
+- Pale green: #DDECE3
+- Pale rust: #F1DED8
+- Hairline: #B9C1C7
+
+Chart and diagram grammar
+
+- Use editable primitives, not screenshots.
+- Use thick left-to-right flows with compact labels.
+- Use hairline rules and lanes instead of decorative card grids.
+- Use direct labels instead of legends.
+
+Footer/source grammar
+
+- Every slide has a small source/note footer.
+- Sources are named quietly, not as large logos.
+
+Banned motifs
+
+- No pseudo logos.
+- No decorative icons that imply a brand identity.
+- No one-note blue/purple dashboard theme.
+- No repeated three-card layout cadence.
+

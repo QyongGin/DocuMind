@@ -1,0 +1,8 @@
+1. Cover: source-style navy title slide.
+2. Problem: chunk role overload as hub-and-spoke diagram.
+3. Design: before/after split between shared chunk and data contracts.
+4. Safety: three candidate code positions and why trace was safest.
+5. Trace finding: section_path suspect fallback example.
+6. Runtime: documents and source_blocks split storage.
+7. Review hardening: storage order, rollback, delete compensation.
+8. Roadmap: completed work and next implementation boundary.

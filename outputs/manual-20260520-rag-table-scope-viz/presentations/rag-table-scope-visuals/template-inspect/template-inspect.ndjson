@@ -1,0 +1,145 @@
+{"kind":"slide","id":"sl/2x4nap4r","slide":2,"title":"01 / DOCUMIND RAG 개선","textShapes":18}
+{"kind":"shape","id":"sh/87ed8bat","slide":2,"name":"직사각형 30","bbox":[56,42,28,6]}
+{"kind":"textbox","id":"sh/cvixczed","slide":2,"textChars":20,"textLines":1}
+{"kind":"textbox","id":"sh/5gbq1ory","slide":2,"textChars":18,"textLines":2}
+{"kind":"textbox","id":"sh/udg7adsj","slide":2,"textChars":32,"textLines":1}
+{"kind":"shape","id":"sh/nyd0z610","slide":2,"name":"직사각형 4","bbox":[760,118,178,96]}
+{"kind":"textbox","id":"sh/cj6tovah","slide":2,"textChars":5,"textLines":1}
+{"kind":"textbox","id":"sh/54zidony","slide":2,"textChars":9,"textLines":1}
+{"kind":"shape","id":"sh/u9knih4b","slide":2,"name":"직사각형 7","bbox":[950,166,50,3]}
+{"kind":"shape","id":"sh/judg7ads","slide":2,"name":"직사각형 8","bbox":[992,161,10,10]}
+{"kind":"shape","id":"sh/nyd0z610","slide":2,"name":"직사각형 9","bbox":[1012,118,178,96]}
+{"kind":"textbox","id":"sh/udg7adsj","slide":2,"textChars":3,"textLines":1}
+{"kind":"textbox","id":"sh/54zidony","slide":2,"textChars":10,"textLines":1}
+{"kind":"shape","id":"sh/cj6tovah","slide":2,"name":"직사각형 12","bbox":[760,250,430,96]}
+{"kind":"textbox","id":"sh/nap4r65w","slide":2,"textChars":3,"textLines":1}
+{"kind":"textbox","id":"sh/upwb2hwf","slide":2,"textChars":15,"textLines":1}
+{"kind":"shape","id":"sh/5gbq1ory","slide":2,"name":"모서리가 둥근 직사각형 15","bbox":[76,384,1110,180]}
+{"kind":"textbox","id":"sh/cvixczed","slide":2,"textChars":13,"textLines":1}
+{"kind":"textbox","id":"sh/jm1cfa9w","slide":2,"textChars":87,"textLines":2}
+{"kind":"shape","id":"sh/u18jqh0f","slide":2,"name":"모서리가 둥근 직사각형 18","bbox":[104,586,120,34]}
+{"kind":"textbox","id":"sh/25kb6xkf","slide":2,"textChars":8,"textLines":1}
+{"kind":"shape","id":"sh/rqd4vmtw","slide":2,"name":"모서리가 둥근 직사각형 20","bbox":[242,586,128,34]}
+{"kind":"textbox","id":"sh/kb6xkf6d","slide":2,"textChars":8,"textLines":1}
+{"kind":"shape","id":"sh/9w3m94fu","slide":2,"name":"모서리가 둥근 직사각형 22","bbox":[388,586,102,34]}
+{"kind":"textbox","id":"sh/2t83itgf","slide":2,"textChars":6,"textLines":1}
+{"kind":"shape","id":"sh/re1w7mp0","slide":2,"name":"모서리가 둥근 직사각형 24","bbox":[508,586,128,34]}
+{"kind":"textbox","id":"sh/kzupwb2h","slide":2,"textChars":10,"textLines":1}
+{"kind":"shape","id":"sh/9knih4by","slide":2,"name":"모서리가 둥근 직사각형 26","bbox":[654,586,168,34]}
+{"kind":"textbox","id":"sh/2p8nqxs7","slide":2,"textChars":14,"textLines":1}
+{"kind":"textbox","id":"sh/ra5gbq1o","slide":2,"textChars":62,"textLines":1}
+{"kind":"textbox","id":"sh/xs72x4na","slide":2,"textChars":2,"textLines":1}
+{"kind":"slide","id":"sl/pg3ex0nu","slide":3,"title":"02 / 진단","textShapes":13}
+{"kind":"shape","id":"sh/6xkf6dcb","slide":3,"name":"직사각형 33","bbox":[56,42,28,6]}
+{"kind":"textbox","id":"sh/5o7qpg3e","slide":3,"textChars":7,"textLines":1}
+{"kind":"textbox","id":"sh/g3ex0nux","slide":3,"textChars":22,"textLines":1}
+{"kind":"shape","id":"sh/r65wjudg","slide":3,"name":"모서리가 둥근 직사각형 3","bbox":[94,226,170,74]}
+{"kind":"textbox","id":"sh/ylc7u54z","slide":3,"textChars":5,"textLines":1}
+{"kind":"shape","id":"sh/9cvixcze","slide":3,"name":"직사각형 5","bbox":[264,263,66,3]}
+{"kind":"shape","id":"sh/gr2p8nqx","slide":3,"name":"직사각형 6","bbox":[322,258,10,10]}
+{"kind":"shape","id":"sh/rytsvu9k","slide":3,"name":"모서리가 둥근 직사각형 7","bbox":[330,206,178,112]}
+{"kind":"textbox","id":"sh/yd0z6103","slide":3,"textChars":12,"textLines":2}
+{"kind":"shape","id":"sh/wb2hwfyx","slide":3,"name":"직사각형 9","bbox":[508,263,41,3]}
+{"kind":"shape","id":"sh/lwval87e","slide":3,"name":"직사각형 10","bbox":[549,202,3,61]}
+{"kind":"shape","id":"sh/e9cvixcz","slide":3,"name":"직사각형 11","bbox":[549,202,41,3]}
+{"kind":"shape","id":"sh/3q5o7qpg","slide":3,"name":"직사각형 12","bbox":[582,197,10,10]}
+{"kind":"shape","id":"sh/w3m94fu1","slide":3,"name":"직사각형 13","bbox":[508,263,41,3]}
+{"kind":"shape","id":"sh/loj2t83i","slide":3,"name":"직사각형 14","bbox":[549,263,3,63]}
+{"kind":"shape","id":"sh/ex0nuxc3","slide":3,"name":"직사각형 15","bbox":[549,326,41,3]}
+{"kind":"shape","id":"sh/3itgfmlk","slide":3,"name":"직사각형 16","bbox":[582,321,10,10]}
+{"kind":"shape","id":"sh/szqtcj6t","slide":3,"name":"모서리가 둥근 직사각형 17","bbox":[590,164,196,78]}
+{"kind":"textbox","id":"sh/lkjm1cfa","slide":3,"textChars":16,"textLines":2}
+{"kind":"shape","id":"sh/lc7u54zi","slide":3,"name":"모서리가 둥근 직사각형 19","bbox":[590,290,196,78]}
+{"kind":"textbox","id":"sh/wra5gbq1","slide":3,"textChars":14,"textLines":2}
+{"kind":"shape","id":"sh/36hcrmhk","slide":3,"name":"직사각형 21","bbox":[786,329,92,3]}
+{"kind":"shape","id":"sh/eloj2t83","slide":3,"name":"직사각형 22","bbox":[870,324,10,10]}
+{"kind":"shape","id":"sh/l0rqd4vm","slide":3,"name":"모서리가 둥근 직사각형 23","bbox":[878,286,230,86]}
+{"kind":"textbox","id":"sh/wfyxobm5","slide":3,"textChars":14,"textLines":2}
+{"kind":"shape","id":"sh/7u54zido","slide":3,"name":"모서리가 둥근 직사각형 25","bbox":[92,430,1022,126]}
+{"kind":"textbox","id":"sh/ed8bat47","slide":3,"textChars":5,"textLines":1}
+{"kind":"textbox","id":"sh/psfil0rq","slide":3,"textChars":120,"textLines":2}
+{"kind":"shape","id":"sh/w7mp0bi9","slide":3,"name":"직사각형 28","bbox":[944,448,154,96]}
+{"kind":"textbox","id":"sh/65wjudg7","slide":3,"textChars":9,"textLines":1}
+{"kind":"textbox","id":"sh/zqtcj6to","slide":3,"textChars":8,"textLines":1}
+{"kind":"textbox","id":"sh/obm58z25","slide":3,"textChars":75,"textLines":1}
+{"kind":"textbox","id":"sh/hwfyxobm","slide":3,"textChars":2,"textLines":1}
+{"kind":"slide","id":"sl/s72x4nap","slide":4,"title":"03 / 원인","textShapes":22}
+{"kind":"shape","id":"sh/tgfmlkjm","slide":4,"name":"직사각형 37","bbox":[56,42,28,6]}
+{"kind":"textbox","id":"sh/o7qpg3ex","slide":4,"textChars":7,"textLines":1}
+{"kind":"textbox","id":"sh/dsji5sne","slide":4,"textChars":25,"textLines":1}
+{"kind":"textbox","id":"sh/6dcbulwv","slide":4,"textChars":44,"textLines":1}
+{"kind":"shape","id":"sh/vy90je9c","slide":4,"name":"직사각형 4","bbox":[82,218,1030,44]}
+{"kind":"textbox","id":"sh/oj2t83it","slide":4,"textChars":5,"textLines":1}
+{"kind":"textbox","id":"sh/d4vmtwra","slide":4,"textChars":20,"textLines":1}
+{"kind":"textbox","id":"sh/6hcrmhk3","slide":4,"textChars":9,"textLines":1}
+{"kind":"shape","id":"sh/z25kb6xk","slide":4,"name":"직사각형 8","bbox":[82,262,270,64]}
+{"kind":"shape","id":"sh/vy90je9c","slide":4,"name":"직사각형 9","bbox":[352,262,360,64]}
+{"kind":"shape","id":"sh/6dcbulwv","slide":4,"name":"직사각형 10","bbox":[712,262,400,64]}
+{"kind":"textbox","id":"sh/d4vmtwra","slide":4,"textChars":8,"textLines":1}
+{"kind":"textbox","id":"sh/oj2t83it","slide":4,"textChars":26,"textLines":1}
+{"kind":"textbox","id":"sh/vmtwra5g","slide":4,"textChars":21,"textLines":1}
+{"kind":"shape","id":"sh/61032lsz","slide":4,"name":"직사각형 14","bbox":[82,326,270,64]}
+{"kind":"shape","id":"sh/dsji5sne","slide":4,"name":"직사각형 15","bbox":[352,326,360,64]}
+{"kind":"shape","id":"sh/o7qpg3ex","slide":4,"name":"직사각형 16","bbox":[712,326,400,64]}
+{"kind":"textbox","id":"sh/vahoza1g","slide":4,"textChars":6,"textLines":1}
+{"kind":"textbox","id":"sh/6tovahoz","slide":4,"textChars":26,"textLines":1}
+{"kind":"textbox","id":"sh/epkzupwb","slide":4,"textChars":21,"textLines":1}
+{"kind":"shape","id":"sh/7adsji5s","slide":4,"name":"직사각형 20","bbox":[82,390,270,64]}
+{"kind":"shape","id":"sh/wval87ed","slide":4,"name":"직사각형 21","bbox":[352,390,360,64]}
+{"kind":"shape","id":"sh/pg3ex0nu","slide":4,"name":"직사각형 22","bbox":[712,390,400,64]}
+{"kind":"textbox","id":"sh/e1w7mp0b","slide":4,"textChars":2,"textLines":1}
+{"kind":"textbox","id":"sh/7mp0bi9s","slide":4,"textChars":22,"textLines":1}
+{"kind":"textbox","id":"sh/w7mp0bi9","slide":4,"textChars":26,"textLines":1}
+{"kind":"shape","id":"sh/psfil0rq","slide":4,"name":"직사각형 26","bbox":[82,454,270,64]}
+{"kind":"shape","id":"sh/ed8bat47","slide":4,"name":"직사각형 27","bbox":[352,454,360,64]}
+{"kind":"shape","id":"sh/7u54zido","slide":4,"name":"직사각형 28","bbox":[712,454,400,64]}
+{"kind":"textbox","id":"sh/twra5gbq","slide":4,"textChars":6,"textLines":1}
+{"kind":"textbox","id":"sh/4byhgn29","slide":4,"textChars":25,"textLines":1}
+{"kind":"textbox","id":"sh/bq1oryts","slide":4,"textChars":33,"textLines":1}
+{"kind":"shape","id":"sh/m58z25kb","slide":4,"name":"직사각형 32","bbox":[82,554,1030,2]}
+{"kind":"textbox","id":"sh/t83itgfm","slide":4,"textChars":5,"textLines":1}
+{"kind":"textbox","id":"sh/4nap4r65","slide":4,"textChars":31,"textLines":1}
+{"kind":"textbox","id":"sh/b2hwfyxo","slide":4,"textChars":51,"textLines":1}
+{"kind":"textbox","id":"sh/mhk3q5o7","slide":4,"textChars":2,"textLines":1}
+{"kind":"slide","id":"sl/val87ed8","slide":5,"title":"04 / 참고 사례","textShapes":18}
+{"kind":"shape","id":"sh/w7mp0bi9","slide":5,"name":"직사각형 32","bbox":[56,42,28,6]}
+{"kind":"textbox","id":"sh/qtcj6tov","slide":5,"textChars":10,"textLines":1}
+{"kind":"textbox","id":"sh/je9cvixc","slide":5,"textChars":18,"textLines":1}
+{"kind":"shape","id":"sh/87ed8bat","slide":5,"name":"모서리가 둥근 직사각형 3","bbox":[82,188,340,122]}
+{"kind":"shape","id":"sh/xs72x4na","slide":5,"name":"모서리가 둥근 직사각형 4","bbox":[100,204,132,34]}
+{"kind":"textbox","id":"sh/q1orytsv","slide":5,"textChars":9,"textLines":1}
+{"kind":"textbox","id":"sh/fmlkjm1c","slide":5,"textChars":49,"textLines":1}
+{"kind":"shape","id":"sh/8jqh0fep","slide":5,"name":"모서리가 둥근 직사각형 7","bbox":[470,188,340,122]}
+{"kind":"shape","id":"sh/x4nap4r6","slide":5,"name":"모서리가 둥근 직사각형 8","bbox":[488,204,132,34]}
+{"kind":"textbox","id":"sh/1w7mp0bi","slide":5,"textChars":6,"textLines":1}
+{"kind":"textbox","id":"sh/8bat47y1","slide":5,"textChars":66,"textLines":1}
+{"kind":"shape","id":"sh/jqh0fepk","slide":5,"name":"모서리가 둥근 직사각형 11","bbox":[858,188,340,122]}
+{"kind":"shape","id":"sh/q5o7qpg3","slide":5,"name":"모서리가 둥근 직사각형 12","bbox":[876,204,132,34]}
+{"kind":"textbox","id":"sh/18jqh0fe","slide":5,"textChars":9,"textLines":1}
+{"kind":"textbox","id":"sh/8nqxs72x","slide":5,"textChars":54,"textLines":1}
+{"kind":"shape","id":"sh/j2t83itg","slide":5,"name":"모서리가 둥근 직사각형 15","bbox":[82,344,340,122]}
+{"kind":"shape","id":"sh/qh0fepkz","slide":5,"name":"모서리가 둥근 직사각형 16","bbox":[100,360,132,34]}
+{"kind":"textbox","id":"sh/1cfa9w3m","slide":5,"textChars":6,"textLines":1}
+{"kind":"textbox","id":"sh/crmhk3q5","slide":5,"textChars":58,"textLines":1}
+{"kind":"shape","id":"sh/sfil0rqd","slide":5,"name":"모서리가 둥근 직사각형 19","bbox":[470,344,340,122]}
+{"kind":"shape","id":"sh/h0fepkzu","slide":5,"name":"모서리가 둥근 직사각형 20","bbox":[488,360,132,34]}
+{"kind":"textbox","id":"sh/a9w3m94f","slide":5,"textChars":11,"textLines":1}
+{"kind":"textbox","id":"sh/zupwb2hw","slide":5,"textChars":56,"textLines":1}
+{"kind":"shape","id":"sh/orytsvu9","slide":5,"name":"모서리가 둥근 직사각형 23","bbox":[858,344,340,122]}
+{"kind":"shape","id":"sh/hcrmhk3q","slide":5,"name":"모서리가 둥근 직사각형 24","bbox":[876,360,176,34]}
+{"kind":"textbox","id":"sh/al87ed8b","slide":5,"textChars":16,"textLines":1}
+{"kind":"textbox","id":"sh/z61032ls","slide":5,"textChars":26,"textLines":1}
+{"kind":"shape","id":"sh/oza1gvy9","slide":5,"name":"모서리가 둥근 직사각형 27","bbox":[120,540,1010,72]}
+{"kind":"textbox","id":"sh/hk3q5o7q","slide":5,"textChars":14,"textLines":1}
+{"kind":"textbox","id":"sh/7mp0bi9s","slide":5,"textChars":73,"textLines":1}
+{"kind":"textbox","id":"sh/e1w7mp0b","slide":5,"textChars":138,"textLines":1}
+{"kind":"textbox","id":"sh/psfil0rq","slide":5,"textChars":2,"textLines":1}
+{"kind":"slide","id":"sl/mlkjm1cf","slide":6,"title":"05 / 아키텍처","textShapes":14}
+{"kind":"shape","id":"sh/mhk3q5o7","slide":6,"name":"직사각형 50","bbox":[56,42,28,6]}
+{"kind":"textbox","id":"sh/ovahoza1","slide":6,"textChars":9,"textLines":1}
+{"kind":"textbox","id":"sh/dg7adsji","slide":6,"textChars":18,"textLines":1}
+{"kind":"shape","id":"sh/6hcrmhk3","slide":6,"name":"모서리가 둥근 직사각형 3","bbox":[62,214,130,62]}
+{"kind":"textbox","id":"sh/z25kb6xk","slide":6,"textChars":7,"textLines":1}
+{"kind":"shape","id":"sh/onyd0z61","slide":6,"name":"직사각형 5","bbox":[192,245,56,3]}
+{"kind":"shape","id":"sh/d8v6psfi","slide":6,"name":"직사각형 6","bbox":[240,240,10,10]}
+{"kind":"notice","message":"Truncated: omitted 136 lines. Increase maxChars or narrow target."}
