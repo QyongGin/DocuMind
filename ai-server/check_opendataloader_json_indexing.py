@@ -3,18 +3,31 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 
 from langchain_core.documents import Document
 
-from main import (
-    OPENDATALOADER_JSON_TABLE_FACT_SOURCE,
-    _build_index_document_id,
-    _build_index_documents,
-    _build_opendataloader_json_index_artifacts,
-    _expand_table_fact_results,
-    _priority_table_fact_evidence_for_prompt,
-    _typed_table_fact_contract_candidates,
-)
+# main.py initializes a Chroma PersistentClient at import time. Keep that import
+# in a temporary cwd so root-level smoke runs do not create ./chroma_db.
+_ORIGINAL_CWD = os.getcwd()
+_SMOKE_WORKDIR = tempfile.TemporaryDirectory(prefix="documind-chroma-smoke-")
+_SMOKE_CHROMA_HOST = os.environ.pop("CHROMA_HOST", None)
+os.chdir(_SMOKE_WORKDIR.name)
+try:
+    from main import (
+        OPENDATALOADER_JSON_TABLE_FACT_SOURCE,
+        _build_index_document_id,
+        _build_index_documents,
+        _build_opendataloader_json_index_artifacts,
+        _expand_table_fact_results,
+        _priority_table_fact_evidence_for_prompt,
+        _typed_table_fact_contract_candidates,
+    )
+finally:
+    os.chdir(_ORIGINAL_CWD)
+    if _SMOKE_CHROMA_HOST is not None:
+        os.environ["CHROMA_HOST"] = _SMOKE_CHROMA_HOST
 
 
 def _cell(text: str, *, row: int, column: int) -> dict:

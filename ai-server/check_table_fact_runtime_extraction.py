@@ -2,16 +2,30 @@
 
 from __future__ import annotations
 
-from main import (
-    _build_priority_table_fact_answer,
-    _build_rag_prompt,
-    _extract_table_fact_pairs,
-    _extract_table_fact_row_subject,
-    _extract_table_facts,
-    _priority_table_fact_answer_for_request,
-    _priority_table_fact_evidence_for_prompt,
-    _typed_table_fact_contract_candidates,
-)
+import os
+import tempfile
+
+# main.py initializes a Chroma PersistentClient at import time. Keep that import
+# in a temporary cwd so root-level smoke runs do not create ./chroma_db.
+_ORIGINAL_CWD = os.getcwd()
+_SMOKE_WORKDIR = tempfile.TemporaryDirectory(prefix="documind-chroma-smoke-")
+_SMOKE_CHROMA_HOST = os.environ.pop("CHROMA_HOST", None)
+os.chdir(_SMOKE_WORKDIR.name)
+try:
+    from main import (
+        _build_priority_table_fact_answer,
+        _build_rag_prompt,
+        _extract_table_fact_pairs,
+        _extract_table_fact_row_subject,
+        _extract_table_facts,
+        _priority_table_fact_answer_for_request,
+        _priority_table_fact_evidence_for_prompt,
+        _typed_table_fact_contract_candidates,
+    )
+finally:
+    os.chdir(_ORIGINAL_CWD)
+    if _SMOKE_CHROMA_HOST is not None:
+        os.environ["CHROMA_HOST"] = _SMOKE_CHROMA_HOST
 
 
 def main() -> None:
