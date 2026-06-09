@@ -13,6 +13,7 @@ _SMOKE_CHROMA_HOST = os.environ.pop("CHROMA_HOST", None)
 os.chdir(_SMOKE_WORKDIR.name)
 try:
     from main import (
+        DEFAULT_SYSTEM_PROMPT,
         _build_priority_table_fact_answer,
         _build_rag_prompt,
         _extract_table_fact_pairs,
@@ -144,6 +145,10 @@ def main() -> None:
     assert "유형Ⅰ: 중학교 입학일부터 고등학교 졸업일까지 거주한 지원자" in priority_answer
     assert "유형Ⅱ: 초등학교 입학일부터 고등학교 졸업일까지 거주한 지원자" in priority_answer
     assert _priority_table_fact_answer_for_request(priority_evidence, None) == priority_answer
+    assert _priority_table_fact_answer_for_request(
+        priority_evidence,
+        DEFAULT_SYSTEM_PROMPT,
+    ) == priority_answer
     assert _priority_table_fact_answer_for_request(
         priority_evidence,
         "JSON 형식으로만 답하세요.",
