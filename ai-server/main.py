@@ -4432,7 +4432,11 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
     if relevant_excerpt:
-        return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
+        # [#110 실험1] 발췌가 있으면 같은 청크의 원문 전체 덤프(전체 내용)는
+        # 표 검색 정보/질문 의도 추출 정보/질문 관련 발췌와 중복되고 노이즈를 더해
+        # 7.8B 모델이 정답을 놓치게 한다. 발췌가 있을 때는 전체 내용을 제외한다.
+        return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}"
+    # 발췌가 없으면 원문에만 답이 있을 수 있으므로 전체 내용을 fallback으로 유지한다.
     return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n전체 내용:\n{doc.strip()}"
 
 
