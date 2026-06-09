@@ -30,13 +30,16 @@ finally:
         os.environ["CHROMA_HOST"] = _SMOKE_CHROMA_HOST
 
 
-def _cell(text: str, *, row: int, column: int) -> dict:
-    return {
+def _cell(text: str, *, row: int, column: int, row_span: int = 1) -> dict:
+    cell = {
         "type": "table cell",
         "row number": row,
         "column number": column,
         "content": text,
     }
+    if row_span > 1:
+        cell["row span"] = row_span
+    return cell
 
 
 def _json_page(page: int, title: str, rows: list[tuple[str, str]]) -> Document:
@@ -80,6 +83,55 @@ def _json_page(page: int, title: str, rows: list[tuple[str, str]]) -> Document:
         ],
     }
     return Document(page_content=json.dumps(page_json, ensure_ascii=False), metadata={"page": page})
+
+
+def _rowspan_json_page() -> Document:
+    table_rows = [
+        {
+            "type": "table row",
+            "row number": 1,
+            "cells": [
+                _cell("구분", row=1, column=1),
+                _cell("유형", row=1, column=2),
+                _cell("지원자격", row=1, column=3),
+            ],
+        },
+        {
+            "type": "table row",
+            "row number": 2,
+            "cells": [
+                _cell("지역전형", row=2, column=1, row_span=2),
+                _cell("유형Ⅰ", row=2, column=2),
+                _cell("중학교 입학일부터 고등학교 졸업일까지 거주", row=2, column=3),
+            ],
+        },
+        {
+            "type": "table row",
+            "row number": 3,
+            "cells": [
+                _cell("유형Ⅱ", row=3, column=2),
+                _cell("초등학교 입학일부터 고등학교 졸업일까지 거주", row=3, column=3),
+            ],
+        },
+    ]
+    page_json = {
+        "page number": 3,
+        "kids": [
+            {
+                "type": "heading",
+                "heading level": 1,
+                "page number": 3,
+                "content": "지역전형 지원자격",
+            },
+            {
+                "type": "table",
+                "id": 30,
+                "page number": 3,
+                "rows": table_rows,
+            },
+        ],
+    }
+    return Document(page_content=json.dumps(page_json, ensure_ascii=False), metadata={"page": 3})
 
 
 def main() -> None:
@@ -163,6 +215,43 @@ def main() -> None:
     assert priority_evidence is not None
     assert "행: 유형Ⅰ / 열: 지원자격" in priority_evidence.evidence_text
     assert "행: 유형Ⅱ / 열: 지원자격" in priority_evidence.evidence_text
+
+    rowspan_artifacts = _build_opendataloader_json_index_artifacts(
+        [_rowspan_json_page()],
+        filename="sample.pdf",
+        document_id=104,
+    )
+    support_docs = [
+        doc
+        for doc in rowspan_artifacts.table_fact_docs
+        if doc.metadata["table_fact_column_label"] == "지원자격"
+    ]
+    assert len(support_docs) == 2
+    support_by_row = {
+        doc.metadata["table_fact_row_label"]: doc
+        for doc in support_docs
+    }
+    assert set(support_by_row) == {"유형Ⅰ", "유형Ⅱ"}
+    assert json.loads(support_by_row["유형Ⅰ"].metadata["table_fact_row_header_path"]) == [
+        "지역전형",
+        "유형Ⅰ",
+    ]
+    assert "행 경로=지역전형 > 유형Ⅰ" in support_by_row["유형Ⅰ"].page_content
+
+    rowspan_expanded_docs, rowspan_expanded_metadatas, rowspan_expanded_ids = _expand_table_fact_results(
+        [doc.page_content for doc in support_docs],
+        [doc.metadata for doc in support_docs],
+        [doc.metadata["table_fact_lookup_id"] for doc in support_docs],
+    )
+    rowspan_evidence = _priority_table_fact_evidence_for_prompt(
+        "지역전형 유형 I과 유형 II의 지원자격은?",
+        rowspan_expanded_docs,
+        rowspan_expanded_metadatas,
+        rowspan_expanded_ids,
+    )
+    assert rowspan_evidence is not None
+    assert "행: 지역전형 > 유형Ⅰ / 열: 지원자격" in rowspan_evidence.evidence_text
+    assert "행: 지역전형 > 유형Ⅱ / 열: 지원자격" in rowspan_evidence.evidence_text
 
     print("opendataloader json indexing smoke ok")
 

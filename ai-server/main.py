@@ -16,7 +16,7 @@ import asyncio
 import logging
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import Lock
 
 from rag_contract_builders import (
@@ -141,6 +141,29 @@ SOURCE_BLOCK_COLLECTION_NAME = "source_blocks"
 RETRIEVAL_CHUNK_COLLECTION_NAME = "retrieval_chunks"
 OPENDATALOADER_JSON_TABLE_FACT_SOURCE = "opendataloader_json"
 OPENDATALOADER_JSON_PARENT_CHUNK_INDEX_OFFSET = 1_000_000
+OPENDATALOADER_JSON_RUNTIME_TABLE_FACT_METADATA_KEYS = (
+    "document_id",
+    "source_block_id",
+    "source_lookup_id",
+    "table_fact_source",
+    "table_fact_id",
+    "table_fact_type",
+    "table_fact_table_id",
+    "table_fact_row_label",
+    "table_fact_column_label",
+    "table_fact_value",
+    "table_fact_value_type",
+    "table_fact_unit",
+    "table_fact_row_index",
+    "table_fact_column_index",
+    "table_fact_row_header_path",
+    "table_fact_column_path",
+    "table_fact_header_path",
+    "table_fact_caption",
+    "table_fact_legend",
+    "table_fact_note",
+    "table_fact_confidence",
+)
 collection = client.get_or_create_collection(DOCUMENT_COLLECTION_NAME)
 source_block_collection = client.get_or_create_collection(SOURCE_BLOCK_COLLECTION_NAME)
 retrieval_chunk_collection = client.get_or_create_collection(RETRIEVAL_CHUNK_COLLECTION_NAME)
@@ -1717,6 +1740,120 @@ def _build_opendataloader_table_fact_document(
     return Document(page_content=_format_table_fact_index_text(table_fact), metadata=metadata)
 
 
+def _opendataloader_fact_group_key(table_fact: TableFact) -> tuple[str, str, str]:
+    """같은 OpenDataLoader 표 안에서 반복되는 행 그룹을 찾기 위한 key를 만든다."""
+    return (
+        str(table_fact.table_id),
+        str(table_fact.source_block_id),
+        str(table_fact.row_label).strip(),
+    )
+
+
+def _opendataloader_fact_row_key(table_fact: TableFact) -> tuple[str, str, int]:
+    """같은 원문 표 row에서 나온 fact를 묶기 위한 key를 만든다."""
+    row_index = table_fact.row_index if table_fact.row_index is not None else -1
+    return (str(table_fact.table_id), str(table_fact.source_block_id), row_index)
+
+
+def _opendataloader_fact_column_sort_key(table_fact: TableFact) -> int:
+    """column_index가 없는 fact도 안정적으로 정렬한다."""
+    return table_fact.column_index if table_fact.column_index is not None else 10**9
+
+
+def _opendataloader_value_can_extend_row_header(value: str) -> bool:
+    """반복 group label 아래의 세부 행 라벨로 쓸 수 있는 짧은 text인지 본다."""
+    cleaned = re.sub(r"\s+", " ", str(value or "").strip())
+    if not cleaned:
+        return False
+    if len(cleaned) > 40 or len(cleaned.split()) > 4:
+        return False
+    if re.search(r"[.!?。]|다$", cleaned):
+        return False
+    return True
+
+
+def _opendataloader_extend_row_header_path(
+    table_fact: TableFact,
+    detail_label: str,
+) -> TableFact:
+    """반복 group label과 세부 행 라벨을 TableFact row_header_path에 함께 보존한다."""
+    cleaned_detail_label = str(detail_label or "").strip()
+    if not cleaned_detail_label:
+        return table_fact
+
+    path: list[str] = []
+    for value in (*table_fact.row_header_path, table_fact.row_label):
+        cleaned = str(value or "").strip()
+        if cleaned and cleaned != cleaned_detail_label and cleaned not in path:
+            path.append(cleaned)
+    path.append(cleaned_detail_label)
+
+    return replace(
+        table_fact,
+        row_label=cleaned_detail_label,
+        row_header_path=tuple(path),
+    )
+
+
+def _preserve_opendataloader_repeated_row_headers(
+    table_facts: list[TableFact],
+) -> list[TableFact]:
+    """row span으로 반복된 group label과 세부 행 라벨을 색인 전에 합친다."""
+    if not table_facts:
+        return []
+
+    rows_by_group: dict[tuple[str, str, str], set[int]] = {}
+    facts_by_row: dict[tuple[str, str, int], list[TableFact]] = {}
+    for table_fact in table_facts:
+        row_key = _opendataloader_fact_row_key(table_fact)
+        facts_by_row.setdefault(row_key, []).append(table_fact)
+        if table_fact.row_index is not None:
+            rows_by_group.setdefault(
+                _opendataloader_fact_group_key(table_fact),
+                set(),
+            ).add(table_fact.row_index)
+
+    detail_label_by_row: dict[tuple[str, str, int], str] = {}
+    for row_key, row_facts in facts_by_row.items():
+        sorted_facts = sorted(row_facts, key=_opendataloader_fact_column_sort_key)
+        if len(sorted_facts) < 2:
+            continue
+
+        first_fact = sorted_facts[0]
+        repeated_rows = rows_by_group.get(_opendataloader_fact_group_key(first_fact), set())
+        if len(repeated_rows) < 2:
+            continue
+
+        detail_label = str(first_fact.value or "").strip()
+        if detail_label == first_fact.row_label:
+            continue
+        if first_fact.value_type != "text":
+            continue
+        if not _opendataloader_value_can_extend_row_header(detail_label):
+            continue
+
+        later_facts = [
+            fact for fact in sorted_facts[1:]
+            if _opendataloader_fact_column_sort_key(fact) > _opendataloader_fact_column_sort_key(first_fact)
+        ]
+        if not later_facts:
+            continue
+
+        detail_label_by_row[row_key] = detail_label
+
+    if not detail_label_by_row:
+        return table_facts
+
+    normalized: list[TableFact] = []
+    for table_fact in table_facts:
+        detail_label = detail_label_by_row.get(_opendataloader_fact_row_key(table_fact))
+        if detail_label:
+            normalized.append(_opendataloader_extend_row_header_path(table_fact, detail_label))
+        else:
+            normalized.append(table_fact)
+    return normalized
+
+
 def _build_opendataloader_json_index_artifacts(
     json_docs: list[Document],
     filename: str,
@@ -1745,6 +1882,7 @@ def _build_opendataloader_json_index_artifacts(
             source_blocks_by_id[source_block.source_block_id] = source_block
         table_facts.extend(result.table_facts)
 
+    table_facts = _preserve_opendataloader_repeated_row_headers(table_facts)
     required_source_ids = {table_fact.source_block_id for table_fact in table_facts}
     source_docs_by_id = {
         source_block_id: _build_opendataloader_source_block_document(
@@ -4359,6 +4497,52 @@ def _append_runtime_table_fact(meta: dict, fact_text: str) -> dict:
     return next_meta
 
 
+def _runtime_typed_table_fact_metadata(fact_meta: dict) -> dict | None:
+    """OpenDataLoader typed table_fact 복원에 필요한 metadata만 runtime에 보존한다."""
+    if fact_meta.get("table_fact_source") != OPENDATALOADER_JSON_TABLE_FACT_SOURCE:
+        return None
+    runtime_meta = {
+        key: fact_meta[key]
+        for key in OPENDATALOADER_JSON_RUNTIME_TABLE_FACT_METADATA_KEYS
+        if key in fact_meta
+    }
+    if not runtime_meta.get("table_fact_row_label") or not runtime_meta.get("table_fact_value"):
+        return None
+    return runtime_meta
+
+
+def _append_runtime_typed_table_fact(meta: dict, fact_meta: dict) -> dict:
+    """부모 청크로 합쳐진 OpenDataLoader table_fact metadata를 누적한다."""
+    typed_meta = _runtime_typed_table_fact_metadata(fact_meta)
+    if typed_meta is None:
+        return meta
+
+    next_meta = dict(meta)
+    existing = next_meta.get("matched_typed_table_fact_metadatas")
+    if isinstance(existing, list):
+        items = list(existing)
+    else:
+        items = []
+    fact_key = str(typed_meta.get("table_fact_id") or typed_meta.get("table_fact_lookup_id") or typed_meta)
+    existing_keys = {
+        str(item.get("table_fact_id") or item.get("table_fact_lookup_id") or item)
+        for item in items
+        if isinstance(item, dict)
+    }
+    if fact_key not in existing_keys:
+        items.append(typed_meta)
+    next_meta["matched_typed_table_fact_metadatas"] = items
+    return next_meta
+
+
+def _get_runtime_typed_table_fact_metadatas(meta: dict) -> list[dict]:
+    """부모 청크 runtime metadata에 누적된 typed table_fact metadata를 반환한다."""
+    matched = meta.get("matched_typed_table_fact_metadatas")
+    if not isinstance(matched, list):
+        return []
+    return [item for item in matched if isinstance(item, dict)]
+
+
 def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list[str]) -> tuple[list[str], list[dict], list[str]]:
     """검색된 table_fact를 부모 원본 청크와 연결해 답변 context를 구성한다."""
     expanded_docs: list[str] = []
@@ -4395,12 +4579,15 @@ def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list
         fact_text = doc.strip()
         if result_id in seen_indexes:
             existing_index = seen_indexes[result_id]
-            expanded_metadatas[existing_index] = _append_runtime_table_fact(expanded_metadatas[existing_index], fact_text)
+            runtime_meta = _append_runtime_table_fact(expanded_metadatas[existing_index], fact_text)
+            runtime_meta = _append_runtime_typed_table_fact(runtime_meta, meta)
+            expanded_metadatas[existing_index] = runtime_meta
             continue
 
         runtime_meta = dict(parent_meta or {})
         runtime_meta["matched_chunk_role"] = "table_fact"
         runtime_meta = _append_runtime_table_fact(runtime_meta, fact_text)
+        runtime_meta = _append_runtime_typed_table_fact(runtime_meta, meta)
         seen_indexes[result_id] = len(expanded_docs)
         expanded_docs.append(parent_doc)
         expanded_metadatas.append(runtime_meta)
@@ -4820,13 +5007,22 @@ def _typed_table_fact_contract_candidates(
     """runtime table_fact 문자열을 typed TableFact 후보로 변환한다."""
     typed_table_fact = _typed_table_fact_from_metadata(meta, source_block_id)
     candidates: list[tuple[TableFact, str]] = []
+    seen_typed_fact_ids: set[str] = set()
     if typed_table_fact is not None:
         candidates.append((typed_table_fact, "typed_table_fact_metadata"))
+        seen_typed_fact_ids.add(typed_table_fact.fact_id)
+
+    for typed_meta in _get_runtime_typed_table_fact_metadatas(meta):
+        runtime_typed_fact = _typed_table_fact_from_metadata(typed_meta, source_block_id)
+        if runtime_typed_fact is None or runtime_typed_fact.fact_id in seen_typed_fact_ids:
+            continue
+        candidates.append((runtime_typed_fact, "matched_typed_table_fact_metadata"))
+        seen_typed_fact_ids.add(runtime_typed_fact.fact_id)
 
     fact_entries: list[tuple[str, str]] = []
     seen_facts: set[str] = set()
-    if typed_table_fact is not None:
-        seen_facts.add(_format_table_fact_index_text(typed_table_fact))
+    for table_fact, _ in candidates:
+        seen_facts.add(_format_table_fact_index_text(table_fact))
 
     def append_facts(facts: list[str], fact_source: str) -> None:
         for fact in facts:
