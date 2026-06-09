@@ -309,7 +309,14 @@
     "group": "p0_table",
     "document_hint": "모집요강 PDF",
     "question": "수시 합격자는 정시나 자율모집에 지원할 수 있나요?",
-    "variants": ["수시모집 합격 후 정시모집 지원 가능한가요?"],
+    "variants": [],
+    "scope_variant_cases": [
+      {
+        "name": "regular_only",
+        "question": "수시모집 합격 후 정시모집 지원 가능한가요?",
+        "expected_answer_keywords": ["지원할 수 없음", "정시"]
+      }
+    ],
     "expected_evidence": "모집인원 표 아래 주의사항과 안내사항의 수시 합격자 정시·자율모집 지원 불가 문구",
     "expected_evidence_keywords": ["수시모집에 합격한 자", "등록여부", "정시", "자율모집", "지원할 수 없음"],
     "expected_pages": [26],
@@ -351,7 +358,14 @@
     "group": "p0_table",
     "document_hint": "모집요강 PDF",
     "question": "원서 접수 비용은 얼마인가요?",
-    "variants": ["입학 원서비가 얼마인지 알려줘", "면접학과 원서접수 비용 총액은 얼마인가요?"],
+    "variants": ["입학 원서비가 얼마인지 알려줘"],
+    "scope_variant_cases": [
+      {
+        "name": "interview_dept_total",
+        "question": "면접학과 원서접수 비용 총액은 얼마인가요?",
+        "expected_answer_keywords": ["면접학과", "50,000원"]
+      }
+    ],
     "expected_evidence": "원서접수 비용 표의 비면접학과와 면접학과 전형료, 면접고사료, 계",
     "expected_evidence_keywords": ["원서접수 비용", "비면접학과", "30,000원", "면접학과", "20,000원", "50,000원"],
     "expected_pages": [36],
