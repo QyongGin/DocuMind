@@ -2591,6 +2591,20 @@ DEFAULT_SYSTEM_PROMPT = (
     "너는 인하공업전문대학 문서를 근거로 답변하는 안내 챗봇이다."
 )
 
+
+def _normalize_system_prompt_for_comparison(system_prompt: str | None) -> str:
+    """기본 prompt와 사용자 prompt를 비교하기 위해 공백 차이를 정규화한다."""
+    return " ".join(str(system_prompt or "").strip().split())
+
+
+def _has_custom_system_prompt(system_prompt: str | None) -> bool:
+    """Spring이 보내는 기본 prompt와 관리자가 바꾼 custom prompt를 구분한다."""
+    normalized_prompt = _normalize_system_prompt_for_comparison(system_prompt)
+    if not normalized_prompt:
+        return False
+    return normalized_prompt != _normalize_system_prompt_for_comparison(DEFAULT_SYSTEM_PROMPT)
+
+
 MANDATORY_RAG_PROMPT = (
     "필수 답변 규칙:\n"
     "1. 반드시 [검색 근거]에 있는 내용만 사용한다.\n"
@@ -5378,8 +5392,8 @@ def _priority_table_fact_answer_for_request(
     evidence: PriorityTableFactEvidence | None,
     system_prompt: str | None,
 ) -> str | None:
-    """관리자 prompt가 있으면 고정 답변 대신 LLM이 형식 지시를 적용하게 둔다."""
-    if system_prompt and system_prompt.strip():
+    """관리자가 기본값과 다른 prompt를 설정했으면 LLM이 형식 지시를 적용하게 둔다."""
+    if _has_custom_system_prompt(system_prompt):
         return None
     return _build_priority_table_fact_answer(evidence)
 
@@ -5388,7 +5402,7 @@ def _priority_table_fact_answer_disabled_reason(
     evidence: PriorityTableFactEvidence | None,
     system_prompt: str | None,
 ) -> str | None:
-    if evidence is not None and system_prompt and system_prompt.strip():
+    if evidence is not None and _has_custom_system_prompt(system_prompt):
         return "custom_system_prompt"
     return None
 
@@ -5453,8 +5467,8 @@ def _priority_query_evidence_answer_for_request(
     system_prompt: str | None,
     analysis: QueryAnalysis,
 ) -> str | None:
-    """관리자 prompt가 있으면 고정 답변 대신 LLM이 형식 지시를 적용하게 둔다."""
-    if system_prompt and system_prompt.strip():
+    """관리자가 기본값과 다른 prompt를 설정했으면 LLM이 형식 지시를 적용하게 둔다."""
+    if _has_custom_system_prompt(system_prompt):
         return None
     return _build_priority_query_evidence_answer(evidence, analysis)
 
@@ -5466,7 +5480,7 @@ def _priority_query_evidence_answer_disabled_reason(
 ) -> str | None:
     if evidence is None:
         return None
-    if system_prompt and system_prompt.strip():
+    if _has_custom_system_prompt(system_prompt):
         return "custom_system_prompt"
     if evidence.intent not in PRIORITY_QUERY_ANSWER_INTENTS:
         return "unsupported_intent"

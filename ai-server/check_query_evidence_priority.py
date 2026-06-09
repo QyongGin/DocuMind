@@ -13,6 +13,7 @@ _SMOKE_CHROMA_HOST = os.environ.pop("CHROMA_HOST", None)
 os.chdir(_SMOKE_WORKDIR.name)
 try:
     from main import (
+        DEFAULT_SYSTEM_PROMPT,
         _analyze_query,
         _build_rag_prompt,
         _priority_query_evidence_answer_disabled_reason,
@@ -64,6 +65,16 @@ def main() -> None:
     assert "입학 홈페이지" in answer
     assert "임의로 배정" in answer
     assert _priority_query_evidence_answer_disabled_reason(priority_evidence, None, analysis) is None
+    assert _priority_query_evidence_answer_for_request(
+        priority_evidence,
+        DEFAULT_SYSTEM_PROMPT,
+        analysis,
+    ) == answer
+    assert _priority_query_evidence_answer_disabled_reason(
+        priority_evidence,
+        DEFAULT_SYSTEM_PROMPT,
+        analysis,
+    ) is None
     assert _priority_query_evidence_answer_for_request(
         priority_evidence,
         "JSON 형식으로만 답하세요.",
