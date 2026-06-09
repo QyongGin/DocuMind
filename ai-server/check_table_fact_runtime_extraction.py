@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from main import (
+    _build_priority_table_fact_answer,
+    _build_rag_prompt,
     _extract_table_fact_pairs,
     _extract_table_fact_row_subject,
     _extract_table_facts,
+    _priority_table_fact_answer_for_request,
+    _priority_table_fact_evidence_for_prompt,
     _typed_table_fact_contract_candidates,
 )
 
@@ -99,6 +103,66 @@ def main() -> None:
     }
     assert stale_fact_sources == {"extracted_from_candidate_doc"}
     assert "오래된행" not in stale_fact_rows
+
+    priority_evidence = _priority_table_fact_evidence_for_prompt(
+        "지역전형 지원 자격은",
+        [sample],
+        [{"document_id": "runtime-table-smoke"}],
+        ["runtime-table-smoke_1"],
+    )
+    assert priority_evidence is not None
+    assert "공통 맥락: 전형=지역전형" in priority_evidence.evidence_text
+    assert "행: 유형Ⅰ / 열: 지원자격" in priority_evidence.evidence_text
+    assert "행: 유형Ⅱ / 열: 지원자격" in priority_evidence.evidence_text
+    assert "행: 공통" not in priority_evidence.evidence_text
+
+    prompt = _build_rag_prompt(
+        None,
+        "[출처 1]\n표 원문",
+        "지역전형 지원 자격은",
+        priority_evidence.evidence_text,
+    )
+    assert "[우선 표 근거]" in prompt
+    assert "공통 맥락: 전형=지역전형" in prompt
+
+    priority_answer = _build_priority_table_fact_answer(priority_evidence)
+    assert priority_answer is not None
+    assert "유형Ⅰ: 중학교 입학일부터 고등학교 졸업일까지 거주한 지원자" in priority_answer
+    assert "유형Ⅱ: 초등학교 입학일부터 고등학교 졸업일까지 거주한 지원자" in priority_answer
+    assert _priority_table_fact_answer_for_request(priority_evidence, None) == priority_answer
+    assert _priority_table_fact_answer_for_request(
+        priority_evidence,
+        "JSON 형식으로만 답하세요.",
+    ) is None
+
+    type_priority_evidence = _priority_table_fact_evidence_for_prompt(
+        "지역전형 유형 지원자격은",
+        [sample],
+        [{"document_id": "runtime-table-smoke"}],
+        ["runtime-table-smoke_1"],
+    )
+    assert type_priority_evidence is not None
+    assert "공통 맥락: 전형=지역전형" in type_priority_evidence.evidence_text
+    type_priority_answer = _build_priority_table_fact_answer(type_priority_evidence)
+    assert type_priority_answer is not None
+    assert "유형Ⅰ: 중학교 입학일부터 고등학교 졸업일까지 거주한 지원자" in type_priority_answer
+    assert "유형Ⅱ: 초등학교 입학일부터 고등학교 졸업일까지 거주한 지원자" in type_priority_answer
+
+    repeated_answer_sample = """
+###### 학과별 지원자격
+
+|구분|지원자격|
+|---|---|
+|일반고|고등학교 졸업자|
+|특성화고|고등학교 졸업자|
+"""
+    ambiguous_priority_evidence = _priority_table_fact_evidence_for_prompt(
+        "지원자격은 무엇인가요?",
+        [repeated_answer_sample],
+        [{"document_id": "runtime-table-smoke"}],
+        ["runtime-table-smoke_2"],
+    )
+    assert ambiguous_priority_evidence is None
 
     print("table fact runtime extraction smoke ok")
 
