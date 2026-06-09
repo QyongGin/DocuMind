@@ -70,6 +70,7 @@ def adapt_opendataloader_json_page(
     document_id: str | int,
     source: str,
     document_format: str = "pdf",
+    block_index_offset: int = 0,
 ) -> OpenDataLoaderAdapterResult:
     """Convert one OpenDataLoader JSON page into RAG contract candidates."""
     page_data = _load_page_data(page_content)
@@ -85,7 +86,8 @@ def adapt_opendataloader_json_page(
     heading_path: list[str] = []
     linked_caption_by_content_id = _linked_caption_by_content_id(candidates)
 
-    for block_index, candidate in enumerate(candidates, start=1):
+    start_index = max(0, block_index_offset) + 1
+    for block_index, candidate in enumerate(candidates, start=start_index):
         level = _heading_level(candidate.element)
         if candidate.element_type == "heading" and level is not None:
             heading_path = _updated_heading_path(heading_path, level, candidate.text)

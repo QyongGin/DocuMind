@@ -24,8 +24,32 @@ DocuMind는 사내 문서를 외부로 보내지 않는 on-premise(내부 설치
 - feature(기능 추가), fix(버그 수정), refactor(동작 유지 구조 개선), docs(문서), chore(잡무성 변경)를 한 PR에 과도하게 섞지 않는다.
 - 관련 없는 대규모 리팩토링은 현재 작업에 끼워 넣지 않고 별도 issue로 분리한다.
 - 기존 사용자 동작, API response contract(응답 계약), DB schema(스키마), RAG evidence(근거) 품질을 바꾸는 작업은 테스트 또는 수동 검증 기록을 남긴다.
+- 큰 작업은 parent issue(상위 이슈) 또는 Epic(상위 관리 이슈)로 만들고, 실제 구현은 child issue(파생 이슈) 단위로 나눈다.
+- child issue PR은 `Closes #child`, 필요하면 `Related #parent`를 함께 적는다.
 
-## 3. 브랜치 이름
+## 3. 브랜치 전략
+
+기본 개발 branch는 `develop`이다.
+
+| branch | 역할 |
+|---|---|
+| `main` | 안정 릴리스 기준 |
+| `develop` | 기능 PR이 먼저 모이는 통합 개발 기준 |
+| `feat/#이슈번호-작업명` | 기능 추가 |
+| `fix/#이슈번호-작업명` | 버그 수정 |
+| `refactor/#이슈번호-작업명` | 구조 개선 |
+| `docs/#이슈번호-작업명` | 공개 문서 변경 |
+| `release/YYYY-MM-DD` | `develop`을 `main`으로 올리는 릴리스 준비 |
+
+원칙:
+
+- 일반 작업 branch는 최신 `develop`에서 만든다.
+- 일반 PR target은 `develop`이다.
+- `main`으로 직접 PR을 만들지 않는다. 예외는 release PR과 긴급 hotfix(긴급 수정)뿐이다.
+- `develop`에 모인 작업을 충분히 검증한 뒤 release PR로 `main`에 병합한다.
+- merge된 작업 branch는 원격과 로컬에서 정리한다.
+
+## 4. 브랜치 이름
 
 이슈가 있으면 아래 형식을 사용한다.
 
@@ -35,6 +59,7 @@ fix/#18-login-token-refresh
 refactor/#21-rag-retrieval-contract
 docs/#24-api-guide
 chore/#30-docker-env-example
+release/2026-06-06
 ```
 
 이슈가 없고 로컬에서 작은 문서 또는 정리 작업을 할 때는 의미가 드러나는 이름을 사용한다.
@@ -44,7 +69,7 @@ docs/contributing-guide
 chore/update-env-example
 ```
 
-## 4. 커밋 메시지
+## 5. 커밋 메시지
 
 커밋 메시지는 Conventional Commits(커밋 메시지 표준) 형식을 따른다.
 
@@ -72,14 +97,18 @@ docs(api): 문서 업로드 API 설명 추가 (#24)
 | `docs` | 공개 문서 수정 |
 | `chore` | 빌드, 설정, 의존성, 운영 보조 작업 |
 
-## 5. PR 작성 기준
+## 6. PR 작성 기준
 
-PR은 리뷰어가 위험 지점을 빠르게 찾을 수 있어야 한다. 아래 구조를 기본으로 사용한다.
+PR은 리뷰어가 위험 지점을 빠르게 찾을 수 있어야 한다. 기본 target branch는 `develop`이다. 아래 구조를 기본으로 사용한다.
 
 ```markdown
 ## 배경
 
 왜 이 변경이 필요한지 적는다.
+
+## 대상 브랜치
+
+develop
 
 ## 변경 내용
 
@@ -105,7 +134,7 @@ Closes #이슈번호
 
 이슈를 완전히 끝내면 `Closes #이슈번호`를 사용한다. 일부 범위만 처리했거나 후속 검증이 남으면 `Related #이슈번호`를 사용한다.
 
-## 6. 공통 코드 작성 원칙
+## 7. 공통 코드 작성 원칙
 
 - 기존 코드 스타일과 파일 구조를 먼저 따른다.
 - public class(공개 클래스)와 public method(공개 메서드)에는 Javadoc(`/** */`)을 작성한다.
@@ -115,7 +144,7 @@ Closes #이슈번호
 - 같은 로직이 반복되면 작은 함수, 값 객체, command object(명령 객체), DTO(데이터 전달 객체)로 책임을 분리한다.
 - null(값 없음), 빈 값, 권한 없음, 외부 서버 실패, 중복 요청 같은 edge case(경계 사례)를 함께 고려한다.
 
-## 7. Backend 규칙
+## 8. Backend 규칙
 
 Backend는 Spring Boot와 Java를 사용한다.
 
@@ -133,7 +162,7 @@ cd backend
 ./gradlew test
 ```
 
-## 8. Frontend 규칙
+## 9. Frontend 규칙
 
 Frontend는 React와 Vite를 사용한다.
 
@@ -151,7 +180,7 @@ npm run lint
 npm run build
 ```
 
-## 9. AI Server와 RAG 규칙
+## 10. AI Server와 RAG 규칙
 
 AI server는 FastAPI와 Python을 사용한다. RAG 관련 변경은 특정 문서명, 특정 질문, 특정 페이지 번호에 맞춘 hard coding(하드코딩)으로 만들지 않는다.
 
@@ -171,7 +200,7 @@ python3 evaluate_rag.py --help
 python3 check_chunks.py --help
 ```
 
-## 10. Docker와 환경 변수
+## 11. Docker와 환경 변수
 
 - 실제 `.env` 파일은 커밋하지 않는다.
 - 새 환경 변수를 추가하면 `.env.example`에도 공개 가능한 예시 값을 추가한다.
@@ -181,7 +210,7 @@ python3 check_chunks.py --help
 docker compose -f docker-compose.yml --env-file .env.example config --quiet
 ```
 
-## 11. 테스트와 검증 기준
+## 12. 테스트와 검증 기준
 
 작업 유형별 최소 확인 범위는 다음과 같다.
 
@@ -196,7 +225,7 @@ docker compose -f docker-compose.yml --env-file .env.example config --quiet
 
 모든 테스트를 항상 실행할 수는 없다. 실행하지 못한 테스트가 있으면 PR 본문에 이유와 남은 위험을 적는다.
 
-## 12. 리뷰 전 자체 점검
+## 13. 리뷰 전 자체 점검
 
 PR을 올리기 전 아래 항목을 확인한다.
 

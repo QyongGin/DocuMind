@@ -32,11 +32,12 @@ from rag_contract_builders import (
     section_path_quality,
     section_path_warnings,
 )
-from rag_contracts import TableFact, contract_to_dict
+from rag_contracts import SourceBlock, TableFact, contract_to_dict
 from rag_table_fact_selector import (
     build_table_fact_evidence_preview,
     select_table_facts_for_question,
 )
+from opendataloader_contract_adapter import adapt_opendataloader_json_page
 
 try:
     from kiwipiepy import Kiwi
@@ -103,6 +104,7 @@ TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
 TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
 EMBED_TABLE_RAW_CHUNKS = _env_bool("EMBED_TABLE_RAW_CHUNKS", True)
 QUERY_RETRIEVAL_CHUNKS_ENABLED = _env_bool("QUERY_RETRIEVAL_CHUNKS_ENABLED", True)
+OPENDATALOADER_JSON_TABLE_FACTS_ENABLED = _env_bool("OPENDATALOADER_JSON_TABLE_FACTS_ENABLED", False)
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
     logger.warning(
@@ -137,6 +139,8 @@ else:
 DOCUMENT_COLLECTION_NAME = "documents"
 SOURCE_BLOCK_COLLECTION_NAME = "source_blocks"
 RETRIEVAL_CHUNK_COLLECTION_NAME = "retrieval_chunks"
+OPENDATALOADER_JSON_TABLE_FACT_SOURCE = "opendataloader_json"
+OPENDATALOADER_JSON_PARENT_CHUNK_INDEX_OFFSET = 1_000_000
 collection = client.get_or_create_collection(DOCUMENT_COLLECTION_NAME)
 source_block_collection = client.get_or_create_collection(SOURCE_BLOCK_COLLECTION_NAME)
 retrieval_chunk_collection = client.get_or_create_collection(RETRIEVAL_CHUNK_COLLECTION_NAME)
@@ -149,7 +153,7 @@ _bm25_sparse_index = None
 _document_progress: dict[int, dict] = {}
 
 logger.info(
-    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s query_retrieval_chunks_enabled=%s chroma_host=%s chroma_port=%s",
+    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s query_retrieval_chunks_enabled=%s opendataloader_json_table_facts_enabled=%s chroma_host=%s chroma_port=%s",
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
     OLLAMA_EMBEDDING_MODEL,
@@ -166,6 +170,7 @@ logger.info(
     BM25_INDEX_MAX_ENTRIES,
     EMBED_TABLE_RAW_CHUNKS,
     QUERY_RETRIEVAL_CHUNKS_ENABLED,
+    OPENDATALOADER_JSON_TABLE_FACTS_ENABLED,
     CHROMA_HOST or "persistent",
     CHROMA_PORT
 )
@@ -224,6 +229,16 @@ def _load_documents(tmp_path: str, filename: str) -> list[Document]:
         from markitdown import MarkItDown
         markdown = MarkItDown().convert(tmp_path).text_content
         return [Document(page_content=markdown)]
+    return loader.load()
+
+
+def _load_opendataloader_json_documents(tmp_path: str, filename: str) -> list[Document]:
+    """PDF를 OpenDataLoader JSON 구조 문서로 추가 로딩한다."""
+    ext = filename.rsplit(".", 1)[-1].lower()
+    if ext != "pdf" or not OPENDATALOADER_JSON_TABLE_FACTS_ENABLED:
+        return []
+
+    loader = OpenDataLoaderPDFLoader(file_path=tmp_path, format="json")
     return loader.load()
 
 
@@ -1555,6 +1570,15 @@ def _warm_up_embedding_model() -> None:
     )
 
 
+@dataclass(frozen=True)
+class OpenDataLoaderJsonIndexArtifacts:
+    """OpenDataLoader JSON에서 만든 추가 source/table_fact 색인 문서 묶음."""
+
+    source_docs: list[Document]
+    table_fact_docs: list[Document]
+    diagnostics_count: int = 0
+
+
 @app.on_event("startup")
 async def warm_up_embedding_model_on_startup() -> None:
     """옵션이 켜져 있으면 앱 시작 시 임베딩 모델 로딩까지 완료한다."""
@@ -1569,11 +1593,195 @@ async def warm_up_embedding_model_on_startup() -> None:
     await asyncio.to_thread(_warm_up_embedding_model)
 
 
+def _empty_opendataloader_json_index_artifacts() -> OpenDataLoaderJsonIndexArtifacts:
+    return OpenDataLoaderJsonIndexArtifacts(source_docs=[], table_fact_docs=[])
+
+
+def _opendataloader_source_index(source_block_id: str) -> int:
+    """OpenDataLoader SourceBlock id에서 전역 source 순번을 복원한다."""
+    match = re.search(r":source-(\d+)$", str(source_block_id))
+    if not match:
+        return 0
+    return int(match.group(1))
+
+
+def _opendataloader_source_lookup_id(document_id: int | str, source_index: int) -> str:
+    """OpenDataLoader source block을 source_blocks collection에서 찾을 id로 바꾼다."""
+    return f"{document_id}_odl_{source_index}_source"
+
+
+def _opendataloader_parent_chunk_id(document_id: int | str, source_index: int) -> str:
+    """OpenDataLoader table_fact가 fallback 부모 원문을 가리킬 stable id를 만든다."""
+    return f"{document_id}_odl_{source_index}"
+
+
+def _metadata_json_array(values: tuple[str, ...] | list[str]) -> str:
+    """ChromaDB metadata에 tuple/list 값을 작고 안전한 JSON 문자열로 저장한다."""
+    return json.dumps([str(value) for value in values if str(value).strip()], ensure_ascii=False)
+
+
+def _set_optional_metadata(metadata: dict, key: str, value: object) -> None:
+    """ChromaDB가 받을 수 있는 scalar metadata만 선택적으로 넣는다."""
+    if value is None:
+        return
+    if isinstance(value, (str, int, float, bool)):
+        metadata[key] = value
+
+
+def _table_fact_header_metadata(header_path: tuple[str, ...]) -> dict:
+    """TableFact header_path를 기존 Header 1..6 metadata 형식으로 보존한다."""
+    metadata: dict = {}
+    for index, value in enumerate(header_path[:6], start=1):
+        if str(value).strip():
+            metadata[f"Header {index}"] = str(value).strip()
+    return metadata
+
+
+def _build_opendataloader_source_block_document(
+    source_block: SourceBlock,
+    filename: str,
+    document_id: int,
+) -> Document:
+    """OpenDataLoader table source block을 source_blocks collection 문서로 만든다."""
+    source_index = _opendataloader_source_index(source_block.source_block_id)
+    source_lookup_id = _opendataloader_source_lookup_id(document_id, source_index)
+    parent_chunk_id = _opendataloader_parent_chunk_id(document_id, source_index)
+    parent_chunk_index = OPENDATALOADER_JSON_PARENT_CHUNK_INDEX_OFFSET + source_index
+    metadata: dict = {
+        "document_id": str(document_id),
+        "source": filename,
+        "chunk_role": "source_block",
+        "parser_name": OPENDATALOADER_JSON_TABLE_FACT_SOURCE,
+        "source_block_id": source_block.source_block_id,
+        "source_lookup_id": source_lookup_id,
+        "source_collection": SOURCE_BLOCK_COLLECTION_NAME,
+        "source_parent_chunk_id": parent_chunk_id,
+        "source_parent_chunk_index": parent_chunk_index,
+    }
+    if source_block.page_span is not None:
+        metadata["page"] = source_block.page_span.start
+        metadata["page_start"] = source_block.page_span.start
+        metadata["page_end"] = source_block.page_span.end
+    return Document(page_content=source_block.raw_text, metadata=metadata)
+
+
+def _format_table_fact_index_text(table_fact: TableFact) -> str:
+    """Typed TableFact를 기존 lexical table_fact 검색이 읽을 수 있는 문장으로 만든다."""
+    caption = table_fact.caption or " > ".join(table_fact.header_path) or "문서 표"
+    row_path = " > ".join(table_fact.row_header_path) if table_fact.row_header_path else table_fact.row_label
+    column_path = " > ".join(table_fact.column_path) if table_fact.column_path else table_fact.column_label
+    pairs = []
+    if row_path and row_path != table_fact.row_label:
+        pairs.append(f"행 경로={row_path}")
+    pairs.append(f"{column_path}={table_fact.value}")
+    return f"{caption}: {table_fact.row_label} 행 정보는 {'; '.join(pairs)}이다."
+
+
+def _build_opendataloader_table_fact_document(
+    table_fact: TableFact,
+    fact_index: int,
+    source_doc: Document,
+) -> Document:
+    """OpenDataLoader TableFact를 documents collection의 table_fact entry로 만든다."""
+    source_metadata = source_doc.metadata
+    source_index = _opendataloader_source_index(table_fact.source_block_id)
+    metadata = dict(source_metadata)
+    metadata.update(_table_fact_header_metadata(table_fact.header_path))
+    metadata.update({
+        "chunk_role": "table_fact",
+        "parent_chunk_id": source_metadata["source_parent_chunk_id"],
+        "parent_chunk_index": source_metadata["source_parent_chunk_index"],
+        "parent_content": source_doc.page_content,
+        "fact_index": fact_index,
+        "table_fact_lookup_id": f"{source_metadata['document_id']}_odl_fact_{fact_index}",
+        "table_fact_source": OPENDATALOADER_JSON_TABLE_FACT_SOURCE,
+        "table_fact_id": table_fact.fact_id,
+        "table_fact_type": table_fact.fact_type,
+        "table_fact_table_id": table_fact.table_id,
+        "table_fact_row_label": table_fact.row_label,
+        "table_fact_column_label": table_fact.column_label,
+        "table_fact_value": table_fact.value,
+        "table_fact_value_type": table_fact.value_type,
+        "table_fact_row_header_path": _metadata_json_array(table_fact.row_header_path),
+        "table_fact_column_path": _metadata_json_array(table_fact.column_path),
+        "table_fact_header_path": _metadata_json_array(table_fact.header_path),
+        "table_fact_source_block_index": source_index,
+    })
+    _set_optional_metadata(metadata, "table_fact_unit", table_fact.unit)
+    _set_optional_metadata(metadata, "table_fact_row_index", table_fact.row_index)
+    _set_optional_metadata(metadata, "table_fact_column_index", table_fact.column_index)
+    _set_optional_metadata(metadata, "table_fact_caption", table_fact.caption)
+    _set_optional_metadata(metadata, "table_fact_legend", table_fact.legend)
+    _set_optional_metadata(metadata, "table_fact_note", table_fact.note)
+    _set_optional_metadata(metadata, "table_fact_confidence", table_fact.confidence)
+    return Document(page_content=_format_table_fact_index_text(table_fact), metadata=metadata)
+
+
+def _build_opendataloader_json_index_artifacts(
+    json_docs: list[Document],
+    filename: str,
+    document_id: int,
+) -> OpenDataLoaderJsonIndexArtifacts:
+    """OpenDataLoader JSON page 문서를 source/table_fact 색인 문서로 변환한다."""
+    if not json_docs:
+        return _empty_opendataloader_json_index_artifacts()
+
+    block_index_offset = 0
+    diagnostics_count = 0
+    source_blocks_by_id: dict[str, SourceBlock] = {}
+    table_facts: list[TableFact] = []
+
+    for json_doc in json_docs:
+        result = adapt_opendataloader_json_page(
+            json_doc.page_content,
+            document_id=document_id,
+            source=filename,
+            document_format=_document_format_from_filename(filename),
+            block_index_offset=block_index_offset,
+        )
+        block_index_offset += len(result.parsed_blocks)
+        diagnostics_count += len(result.diagnostics)
+        for source_block in result.source_blocks:
+            source_blocks_by_id[source_block.source_block_id] = source_block
+        table_facts.extend(result.table_facts)
+
+    required_source_ids = {table_fact.source_block_id for table_fact in table_facts}
+    source_docs_by_id = {
+        source_block_id: _build_opendataloader_source_block_document(
+            source_block,
+            filename,
+            document_id,
+        )
+        for source_block_id, source_block in source_blocks_by_id.items()
+        if source_block_id in required_source_ids
+    }
+
+    table_fact_docs: list[Document] = []
+    for fact_index, table_fact in enumerate(table_facts):
+        source_doc = source_docs_by_id.get(table_fact.source_block_id)
+        if source_doc is None:
+            continue
+        table_fact_docs.append(
+            _build_opendataloader_table_fact_document(
+                table_fact,
+                fact_index,
+                source_doc,
+            )
+        )
+
+    return OpenDataLoaderJsonIndexArtifacts(
+        source_docs=list(source_docs_by_id.values()),
+        table_fact_docs=table_fact_docs,
+        diagnostics_count=diagnostics_count,
+    )
+
+
 def _build_index_documents(
     final_docs: list[Document],
     filename: str,
     document_id: int,
     page_lookup: list[dict],
+    opendataloader_json_artifacts: OpenDataLoaderJsonIndexArtifacts | None = None,
 ) -> tuple[list[Document], list[Document], list[Document], float, int]:
     """원본 청크, 검색용 table fact, source block, retrieval chunk 문서를 함께 만든다."""
     index_docs: list[Document] = []
@@ -1617,6 +1825,11 @@ def _build_index_documents(
                 fact_metadata["parent_content"] = doc.page_content
             index_docs.append(Document(page_content=fact, metadata=fact_metadata))
             table_fact_count += 1
+
+    if opendataloader_json_artifacts is not None:
+        source_docs.extend(opendataloader_json_artifacts.source_docs)
+        index_docs.extend(opendataloader_json_artifacts.table_fact_docs)
+        table_fact_count += len(opendataloader_json_artifacts.table_fact_docs)
 
     return index_docs, source_docs, retrieval_docs, page_match_elapsed, table_fact_count
 
@@ -1721,6 +1934,9 @@ def _build_retrieval_chunk_document(
 def _build_index_document_id(document_id: int, metadata: dict, fallback_index: int) -> str:
     """ChromaDB에 저장할 원본 청크와 파생 fact id를 만든다."""
     if metadata.get("chunk_role") == "table_fact":
+        table_fact_lookup_id = str(metadata.get("table_fact_lookup_id") or "").strip()
+        if table_fact_lookup_id:
+            return table_fact_lookup_id
         parent_index = metadata.get("parent_chunk_index", fallback_index)
         fact_index = metadata.get("fact_index", 0)
         return f"{document_id}_{parent_index}_fact_{fact_index}"
@@ -1728,7 +1944,13 @@ def _build_index_document_id(document_id: int, metadata: dict, fallback_index: i
     return f"{document_id}_{chunk_index}"
 
 
-def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float, int, int, int]:
+def _store_document_chunks(
+    final_docs: list[Document],
+    filename: str,
+    document_id: int,
+    page_lookup: list[dict],
+    opendataloader_json_artifacts: OpenDataLoaderJsonIndexArtifacts | None = None,
+) -> tuple[float, float, float, int, int, int]:
     """
     문서 청크를 batch embedding 후 ChromaDB에 batch 저장한다.
     청크별 HTTP 호출을 피하기 위해 EMBEDDING_BATCH_SIZE 단위로 묶어 처리한다.
@@ -1738,6 +1960,7 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
         filename,
         document_id,
         page_lookup,
+        opendataloader_json_artifacts,
     )
     embedding_elapsed = 0.0
     chroma_elapsed = 0.0
@@ -2024,6 +2247,35 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         parse_elapsed = time.perf_counter() - parse_start
         _set_document_progress(document_id, 18, "parse", "문서 파싱을 완료했습니다.")
 
+        opendataloader_json_start = time.perf_counter()
+        opendataloader_json_artifacts = _empty_opendataloader_json_index_artifacts()
+        if OPENDATALOADER_JSON_TABLE_FACTS_ENABLED:
+            try:
+                opendataloader_json_docs = _load_opendataloader_json_documents(tmp_path, filename)
+                opendataloader_json_artifacts = _build_opendataloader_json_index_artifacts(
+                    opendataloader_json_docs,
+                    filename,
+                    document_id,
+                )
+            except Exception:
+                logger.exception(
+                    "[opendataloader_json_table_facts] document_id=%s filename=%s failed; continuing with markdown table facts",
+                    document_id,
+                    filename,
+                )
+                opendataloader_json_artifacts = _empty_opendataloader_json_index_artifacts()
+        opendataloader_json_elapsed = time.perf_counter() - opendataloader_json_start
+        if OPENDATALOADER_JSON_TABLE_FACTS_ENABLED:
+            logger.info(
+                "[opendataloader_json_table_facts] document_id=%s filename=%s source_blocks=%s table_facts=%s diagnostics=%s elapsed=%.2fs",
+                document_id,
+                filename,
+                len(opendataloader_json_artifacts.source_docs),
+                len(opendataloader_json_artifacts.table_fact_docs),
+                opendataloader_json_artifacts.diagnostics_count,
+                opendataloader_json_elapsed,
+            )
+
         page_lookup_start = time.perf_counter()
         page_lookup = _build_page_lookup(raw_docs)
         page_lookup_elapsed = time.perf_counter() - page_lookup_start
@@ -2063,12 +2315,13 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             final_docs,
             filename,
             document_id,
-            page_lookup
+            page_lookup,
+            opendataloader_json_artifacts,
         )
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
-            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s retrieval_chunk_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s opendataloader_json_table_fact_entries=%s retrieval_chunk_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs opendataloader_json=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
             len(raw_docs),
@@ -2078,6 +2331,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             len(final_docs),
             index_entries,
             table_fact_entries,
+            len(opendataloader_json_artifacts.table_fact_docs),
             retrieval_chunk_entries,
             CHUNK_SIZE,
             CHUNK_OVERLAP,
@@ -2086,6 +2340,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             EMBED_TABLE_RAW_CHUNKS,
             EMBEDDING_BATCH_SIZE,
             parse_elapsed,
+            opendataloader_json_elapsed,
             page_lookup_elapsed,
             normalize_elapsed,
             split_elapsed,
@@ -4237,6 +4492,78 @@ def _metadata_int(value: object) -> int | None:
         return None
 
 
+def _metadata_float(value: object) -> float | None:
+    """metadata 값이 실수로 해석될 때만 float로 반환한다."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _metadata_json_tuple(meta: dict, key: str) -> tuple[str, ...]:
+    """JSON 문자열 metadata를 tuple[str]로 복원한다."""
+    value = meta.get(key)
+    if isinstance(value, list):
+        return tuple(str(item).strip() for item in value if str(item).strip())
+    if not isinstance(value, str) or not value.strip():
+        return ()
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return tuple(part.strip() for part in value.split(">") if part.strip())
+    if not isinstance(decoded, list):
+        return ()
+    return tuple(str(item).strip() for item in decoded if str(item).strip())
+
+
+def _typed_table_fact_from_metadata(meta: dict, source_block_id: str) -> TableFact | None:
+    """OpenDataLoader JSON 기반 typed table_fact metadata를 TableFact로 복원한다."""
+    if meta.get("table_fact_source") != OPENDATALOADER_JSON_TABLE_FACT_SOURCE:
+        return None
+
+    row_label = str(meta.get("table_fact_row_label") or "").strip()
+    column_label = str(meta.get("table_fact_column_label") or "").strip()
+    value = str(meta.get("table_fact_value") or "").strip()
+    if not row_label or not column_label or not value:
+        return None
+
+    resolved_source_block_id = str(meta.get("source_block_id") or source_block_id or "").strip()
+    if not resolved_source_block_id:
+        return None
+
+    return TableFact(
+        fact_id=str(meta.get("table_fact_id") or meta.get("table_fact_lookup_id") or ""),
+        fact_type=str(meta.get("table_fact_type") or "cell"),
+        table_id=str(meta.get("table_fact_table_id") or ""),
+        row_label=row_label,
+        column_label=column_label,
+        value=value,
+        source_block_id=resolved_source_block_id,
+        value_type=str(meta.get("table_fact_value_type") or "text"),
+        unit=str(meta.get("table_fact_unit")).strip() if meta.get("table_fact_unit") else None,
+        row_index=_metadata_int(meta.get("table_fact_row_index")),
+        column_index=_metadata_int(meta.get("table_fact_column_index")),
+        row_header_path=_metadata_json_tuple(meta, "table_fact_row_header_path"),
+        column_path=_metadata_json_tuple(meta, "table_fact_column_path"),
+        header_path=_metadata_json_tuple(meta, "table_fact_header_path"),
+        caption=str(meta.get("table_fact_caption")).strip() if meta.get("table_fact_caption") else None,
+        legend=str(meta.get("table_fact_legend")).strip() if meta.get("table_fact_legend") else None,
+        note=str(meta.get("table_fact_note")).strip() if meta.get("table_fact_note") else None,
+        confidence=_metadata_float(meta.get("table_fact_confidence")),
+    )
+
+
+def _table_fact_table_index_from_metadata(meta: dict) -> int | None:
+    """typed table_fact metadata의 table_id에서 contract table index를 복원한다."""
+    table_id = str(meta.get("table_fact_table_id") or meta.get("table_fact_id") or "")
+    match = re.search(r":table-(\d+)", table_id)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
 def _contract_block_index(chunk_id: str, meta: dict) -> int:
     """contract preview용 block index를 기존 chunk metadata에서 복원한다."""
     chunk_index = _metadata_int(meta.get("chunk_index"))
@@ -4491,8 +4818,15 @@ def _typed_table_fact_contract_candidates(
     source_block_id: str,
 ) -> list[tuple[TableFact, str]]:
     """runtime table_fact 문자열을 typed TableFact 후보로 변환한다."""
+    typed_table_fact = _typed_table_fact_from_metadata(meta, source_block_id)
+    candidates: list[tuple[TableFact, str]] = []
+    if typed_table_fact is not None:
+        candidates.append((typed_table_fact, "typed_table_fact_metadata"))
+
     fact_entries: list[tuple[str, str]] = []
     seen_facts: set[str] = set()
+    if typed_table_fact is not None:
+        seen_facts.add(_format_table_fact_index_text(typed_table_fact))
 
     def append_facts(facts: list[str], fact_source: str) -> None:
         for fact in facts:
@@ -4502,17 +4836,18 @@ def _typed_table_fact_contract_candidates(
             seen_facts.add(normalized_fact)
             fact_entries.append((normalized_fact, fact_source))
 
-    extracted_facts = (
-        _extract_table_facts(doc, meta)
-        if "|" in doc and meta.get("chunk_role") != "table_fact"
-        else []
-    )
-    append_facts(extracted_facts, "extracted_from_candidate_doc")
+    if typed_table_fact is None:
+        extracted_facts = (
+            _extract_table_facts(doc, meta)
+            if "|" in doc and meta.get("chunk_role") != "table_fact"
+            else []
+        )
+        append_facts(extracted_facts, "extracted_from_candidate_doc")
 
     if not fact_entries:
         append_facts(_get_matched_table_facts(meta), "matched_table_facts")
 
-    if not fact_entries and meta.get("chunk_role") == "table_fact":
+    if not fact_entries and typed_table_fact is None and meta.get("chunk_role") == "table_fact":
         append_facts([doc.strip()] if doc.strip() else [], "candidate_table_fact_document")
 
     header_path = tuple(
@@ -4520,9 +4855,10 @@ def _typed_table_fact_contract_candidates(
         for header_key in HEADER_METADATA_KEYS
         if str(meta.get(header_key) or "").strip()
     )
-    table_index = _contract_block_index(chunk_id, meta)
+    table_index = _table_fact_table_index_from_metadata(meta)
+    if table_index is None:
+        table_index = _contract_block_index(chunk_id, meta)
     resolved_source_block_id = str(meta.get("source_block_id") or source_block_id)
-    candidates: list[tuple[TableFact, str]] = []
     for row_index, (fact, fact_source) in enumerate(fact_entries):
         row_label = _extract_table_fact_row_subject(fact)
         if not row_label:
