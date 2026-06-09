@@ -15,10 +15,12 @@ _SMOKE_WORKDIR = tempfile.TemporaryDirectory(prefix="documind-chroma-smoke-")
 _SMOKE_CHROMA_HOST = os.environ.pop("CHROMA_HOST", None)
 os.chdir(_SMOKE_WORKDIR.name)
 try:
+    import main as runtime_main
     from main import (
         OPENDATALOADER_JSON_TABLE_FACT_SOURCE,
         _build_index_document_id,
         _build_index_documents,
+        _build_bm25_sparse_index,
         _build_opendataloader_json_index_artifacts,
         _expand_table_fact_results,
         _priority_table_fact_evidence_for_prompt,
@@ -132,6 +134,55 @@ def _rowspan_json_page() -> Document:
         ],
     }
     return Document(page_content=json.dumps(page_json, ensure_ascii=False), metadata={"page": 3})
+
+
+class _FakeBm25Collection:
+    def __init__(self, raw_count: int) -> None:
+        self.raw_count = raw_count
+        self.get_calls: list[dict] = []
+
+    def count(self) -> int:
+        raise AssertionError("BM25 raw limit must not use total collection.count()")
+
+    def get(self, **kwargs) -> dict:
+        self.get_calls.append(kwargs)
+        assert kwargs["where"] == {"chunk_role": "raw"}
+        assert kwargs["include"] == ["documents", "metadatas"]
+        assert kwargs["limit"] == 3
+        ids = [f"raw-{index}" for index in range(self.raw_count)]
+        return {
+            "ids": ids,
+            "documents": [f"alpha beta {index}" for index in range(self.raw_count)],
+            "metadatas": [
+                {
+                    "chunk_role": "raw",
+                    "Header 1": "BM25",
+                }
+                for _ in range(self.raw_count)
+            ],
+        }
+
+
+def _check_bm25_limit_uses_raw_records() -> None:
+    original_collection = runtime_main.collection
+    original_max_entries = runtime_main.BM25_INDEX_MAX_ENTRIES
+    try:
+        runtime_main.BM25_INDEX_MAX_ENTRIES = 2
+
+        within_limit_collection = _FakeBm25Collection(raw_count=2)
+        runtime_main.collection = within_limit_collection
+        sparse_index = _build_bm25_sparse_index()
+        assert len(sparse_index.records) == 2
+        assert len(within_limit_collection.get_calls) == 1
+
+        over_limit_collection = _FakeBm25Collection(raw_count=3)
+        runtime_main.collection = over_limit_collection
+        sparse_index = _build_bm25_sparse_index()
+        assert sparse_index.records == []
+        assert len(over_limit_collection.get_calls) == 1
+    finally:
+        runtime_main.collection = original_collection
+        runtime_main.BM25_INDEX_MAX_ENTRIES = original_max_entries
 
 
 def main() -> None:
@@ -252,6 +303,8 @@ def main() -> None:
     assert rowspan_evidence is not None
     assert "행: 지역전형 > 유형Ⅰ / 열: 지원자격" in rowspan_evidence.evidence_text
     assert "행: 지역전형 > 유형Ⅱ / 열: 지원자격" in rowspan_evidence.evidence_text
+
+    _check_bm25_limit_uses_raw_records()
 
     print("opendataloader json indexing smoke ok")
 

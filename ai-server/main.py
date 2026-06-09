@@ -3165,16 +3165,20 @@ def _build_bm25_sparse_index() -> SparseSearchIndex:
     Chroma raw chunk를 한 번 읽어 인메모리 BM25 inverted index를 만든다.
     매 질의마다 collection 전체를 다시 전송받지 않기 위한 query-time cache다.
     """
-    collection_count = collection.count()
-    if collection_count > BM25_INDEX_MAX_ENTRIES:
+    results = collection.get(
+        where={"chunk_role": "raw"},
+        include=["documents", "metadatas"],
+        limit=BM25_INDEX_MAX_ENTRIES + 1,
+    )
+    raw_result_count = len(results.get("ids", []))
+    if raw_result_count > BM25_INDEX_MAX_ENTRIES:
         logger.warning(
-            "[query_bm25_index_skip] collection_count=%s max_entries=%s",
-            collection_count,
+            "[query_bm25_index_skip] raw_records_exceed_limit=%s max_entries=%s",
+            raw_result_count,
             BM25_INDEX_MAX_ENTRIES,
         )
         return SparseSearchIndex(records=[], document_frequencies={}, postings={}, average_length=0.0)
 
-    results = collection.get(include=["documents", "metadatas"])
     records: list[SparseIndexRecord] = []
     document_frequencies: dict[str, int] = {}
     postings: dict[str, set[int]] = {}
@@ -3200,8 +3204,8 @@ def _build_bm25_sparse_index() -> SparseSearchIndex:
 
     average_length = sum(record.document_length for record in records) / len(records) if records else 0.0
     logger.info(
-        "[query_bm25_index_built] collection_count=%s raw_records=%s terms=%s avg_length=%.2f",
-        collection_count,
+        "[query_bm25_index_built] raw_result_count=%s raw_records=%s terms=%s avg_length=%.2f",
+        raw_result_count,
         len(records),
         len(document_frequencies),
         average_length,
