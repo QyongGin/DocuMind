@@ -5548,6 +5548,24 @@ def _priority_query_evidence_answer_disabled_reason(
     return None
 
 
+def _prompt_priority_query_evidence_text(evidence: PriorityQueryEvidence | None) -> str:
+    """[우선 질의 근거] 블록은 deterministic 답변까지 신뢰하는 intent에만 프롬프트 최우선으로 승격한다.
+
+    [#110 실험4 레버③] count/list 같은 표값 조회 intent는 추출기가 질문 행이 아닌 다른 열·다른 행
+    값을 질문 행으로 오인한다(trace 확인: '수시1차 일반고'(53) 대신 '모집 정원'(93)을 뽑고 타 학과
+    행 값까지 같은 라벨로 오염). 이 추출은 deterministic 답변으로 신뢰할 수 없어 이미 거부되는데
+    (unsupported_intent), 정작 프롬프트 최우선 블록 '[우선 질의 근거]'로는 올라가 정확한 [검색 근거]의
+    '표 검색 정보'(53) 위에 오답을 "먼저 쓰라"고 박아 7.8B를 오도한다. 신뢰 못 할 추출은 최우선
+    블록으로 승격하지 않고 [검색 근거]의 '표 검색 정보'/'질문 의도 추출 정보'에 맡긴다. 검증된
+    method/schedule(PRIORITY_QUERY_ANSWER_INTENTS)만 승격해 회귀를 막는다.
+    """
+    if evidence is None:
+        return ""
+    if evidence.intent not in PRIORITY_QUERY_ANSWER_INTENTS:
+        return ""
+    return evidence.evidence_text
+
+
 def _contract_trace_preview(
     chunk_id: str,
     doc: str,
@@ -6210,7 +6228,7 @@ def _trace_query_retrieval(
             context,
             question,
             priority_table_evidence.evidence_text if priority_table_evidence else "",
-            priority_query_evidence.evidence_text if priority_query_evidence else "",
+            _prompt_priority_query_evidence_text(priority_query_evidence),
         )
         if final_docs
         else ""
@@ -6436,7 +6454,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         context,
         question,
         priority_table_evidence.evidence_text if priority_table_evidence else "",
-        priority_query_evidence.evidence_text if priority_query_evidence else "",
+        _prompt_priority_query_evidence_text(priority_query_evidence),
     )
     priority_table_fact_answer = _priority_table_fact_answer_for_request(
         priority_table_evidence,
