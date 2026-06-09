@@ -2732,6 +2732,10 @@ QUERY_NON_SUBJECT_PATTERNS = (
     r"^(있어|있나요|있습니까|돼|되나요|될까|인가요)$",
 )
 STRICT_LOCAL_EVIDENCE_INTENTS = {"location", "time", "cost", "count", "attire"}
+# [#110 실험2] 답이 typed value(금액·인원·시간·위치·복장)인 intent.
+# 이 intent들에서는 우선 질의 근거가 그 값 모양을 실제로 담아야 한다.
+# (값 없는 안내/부정형 근거가 우선 블록에 올라가 실제 표 값을 가리는 오도 방지)
+VALUE_TYPED_PRIORITY_INTENTS = STRICT_LOCAL_EVIDENCE_INTENTS & set(INTENT_EVIDENCE_PATTERNS)
 EVIDENCE_FOCUSED_INTENTS = {
     "location", "time", "cost", "count", "list", "attire",
     "documents", "eligibility", "method", "schedule", "formula",
@@ -4317,6 +4321,23 @@ def _query_evidence_has_intent_terms(fact: str, analysis: QueryAnalysis) -> bool
     return any(term.lower() in normalized_fact for term in intent_terms)
 
 
+def _fact_has_intent_value(fact: str, intent: str | None) -> bool:
+    """값을 찾는 intent의 기대 값 모양(금액·인원·시간·위치·복장)이 근거 안에 실제로 있는지 본다.
+
+    intent 용어(예: '비용')가 아니라 값 모양(예: '30,000원')을 요구한다. '전형료는 반환하지
+    않음'처럼 주제어는 맞지만 값이 없는 안내/부정형 근거를 우선 블록에서 가려낸다.
+    """
+    if not intent:
+        return False
+    normalized = fact.lower()
+    if intent == "attire":
+        return _looks_like_attire_value(normalized)
+    for pattern in INTENT_EVIDENCE_PATTERNS.get(intent, []):
+        if re.search(pattern, normalized, flags=re.MULTILINE):
+            return True
+    return False
+
+
 def _priority_query_evidence_safety_reason(fact: str, analysis: QueryAnalysis) -> str | None:
     """우선 질의 근거로 올릴 수 없으면 사유 code를 반환한다."""
     stripped = fact.strip()
@@ -4328,6 +4349,12 @@ def _priority_query_evidence_safety_reason(fact: str, analysis: QueryAnalysis) -
 
     if analysis.subject_terms and not _subject_matches_text(stripped, analysis):
         return "subject_mismatch"
+
+    # [#110 실험2] 값을 찾는 intent(cost/count/time/location/attire)에서는 우선 질의 근거가
+    # 그 intent의 값 모양(cost→금액, count→인원 등)을 담아야 한다. 값이 없는 안내/부정형 근거가
+    # 우선 블록에 올라가 [검색 근거]의 실제 표 값을 가리는 오도(예: '전형료는 반환하지 않음')를 막는다.
+    if analysis.intent in VALUE_TYPED_PRIORITY_INTENTS and not _fact_has_intent_value(stripped, analysis.intent):
+        return "missing_intent_value"
 
     if analysis.intent in PRIORITY_QUERY_ANSWER_INTENTS and not _query_evidence_has_intent_terms(stripped, analysis):
         return "missing_intent_evidence"
