@@ -31,6 +31,7 @@ fi
 if ! is_running "$MYSQL" || ! is_running "$CHROMA"; then
   fail "mysql·chromadb가 실행 중이어야 한다"
 fi
+wait_mysql_ready "$MYSQL" 60
 require_chroma_volume "$CHROMA"
 
 DEST="${BACKUP_ROOT}/$(date +%Y%m%d-%H%M%S)"

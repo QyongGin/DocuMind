@@ -63,7 +63,7 @@ fi
 
 echo "[2/4] mysql 복원"
 is_running "$MYSQL" || docker start "$MYSQL" >/dev/null
-wait_healthy "$MYSQL" 180
+wait_mysql_ready "$MYSQL" 180
 gzip -dc "$BACKUP_DIR/mysql.sql.gz" \
   | docker exec -i "$MYSQL" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot'
 

@@ -32,6 +32,19 @@ wait_healthy() {
   done
 }
 
+# mysql 이미지는 처음 켤 때 초기화용 임시 서버(네트워크 없음)를 먼저 띄운다.
+# compose 헬스체크(mysqladmin ping)는 로그인이 거부돼도 성공으로 보아 이때도 healthy가 되므로,
+# 초기화가 끝난 서버에서만 되는 TCP 로그인으로 준비 여부를 판단한다.
+# wait_mysql_ready <mysql 컨테이너> <최대 대기 초>
+wait_mysql_ready() {
+  local id="$1" timeout="$2" waited=0
+  until docker exec "$id" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -h127.0.0.1 --protocol=TCP -e "SELECT 1"' >/dev/null 2>&1; do
+    [ "$waited" -lt "$timeout" ] || fail "mysql이 ${timeout}초 안에 로그인을 받지 않았다"
+    sleep 2
+    waited=$((waited + 2))
+  done
+}
+
 # 백업·복원은 chromadb의 볼륨을 빌려 쓰는 보조 컨테이너(--volumes-from)로 한다.
 # /data가 볼륨이 아니면 색인이 컨테이너 안에만 있어서 보조 컨테이너가 보지 못한다.
 require_chroma_volume() {
