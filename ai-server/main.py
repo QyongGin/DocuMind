@@ -289,7 +289,7 @@ def _load_opendataloader_json_documents(tmp_path: str, filename: str) -> list[Do
 def _normalize_text(text: str) -> str:
     """
     opendataloader 아티팩트 제거: 한글 문장 중간에 삽입되는 과도한 개행을 정규화한다.
-    Docling 출력에도 동일하게 적용해도 무해하다.
+    MarkItDown 출력(DOCX·PPTX·XLSX)에도 같은 정규화를 적용하며 무해하다.
     """
     # 한글 사이 3개 이상 개행 제거 (파서 버그로 삽입되는 아티팩트)
     text = re.sub(r'([가-힣])\n{3,}([가-힣])', r'\1\2', text)
@@ -2407,7 +2407,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         total_start = time.perf_counter()
         _set_document_progress(document_id, 8, "parse", "문서를 파싱하고 있습니다.")
 
-        # 파서 분기: 확장자에 따라 PDF 또는 Docling 로더 사용
+        # 파서 분기: 확장자에 따라 PDF는 OpenDataLoader, DOCX·PPTX·XLSX는 MarkItDown으로 읽는다
         parse_start = time.perf_counter()
         raw_docs = _load_documents(tmp_path, filename)
         parse_elapsed = time.perf_counter() - parse_start
@@ -5752,7 +5752,6 @@ def _record_vector_trace(
 def _record_bm25_trace(trace_by_id: dict[str, dict], candidate: dict) -> None:
     """BM25 후보의 score를 trace에 기록한다."""
     chunk_id = str(candidate["chunk_id"])
-    meta = candidate["metadata"] or {}
     entry = _ensure_trace_entry(trace_by_id, chunk_id)
     _append_trace_method(entry, "bm25")
     entry.setdefault("bm25_rank", candidate["rank"])
