@@ -61,7 +61,6 @@ docker run --rm --network none --volumes-from "$CHROMA" \
 
 docker start "$CHROMA" >/dev/null
 trap - EXIT
-wait_healthy "$CHROMA" 120
 
 echo "[4/4] 백업 파일 확인, manifest·체크섬 기록"
 case "$(gzip -dc "$WORK/mysql.sql.gz" | tail -n 1)" in
@@ -86,3 +85,8 @@ mv "$WORK" "$DEST"
 printf '\n완료: %s\n' "$DEST"
 du -h "$DEST/mysql.sql.gz" "$DEST/chroma-data.tar.gz"
 cat "$DEST/manifest.txt"
+
+# 백업을 먼저 확정해 둔다. chromadb가 다시 준비되지 않는 경우에도 이 백업으로 복원할 수 있다.
+echo "chromadb가 다시 준비되기를 기다린다"
+wait_healthy "$CHROMA" 120
+echo "chromadb 준비 완료"

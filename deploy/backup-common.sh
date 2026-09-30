@@ -60,7 +60,7 @@ SELECT GROUP_CONCAT(CONCAT('SELECT ''', table_name, ''', COUNT(*) FROM `', table
   INTO @q
   FROM information_schema.tables
  WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE';
-SET @q = IFNULL(@q, 'SELECT ''(테이블 없음)'', 0');
+SET @q = IFNULL(@q, 'SELECT ''(none)'', 0');
 PREPARE stmt FROM @q;
 EXECUTE stmt;
 SQL
