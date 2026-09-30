@@ -2756,6 +2756,9 @@ STRICT_LOCAL_EVIDENCE_INTENTS = {"location", "time", "cost", "count", "attire"}
 # [#110 실험2] 답이 typed value(금액·인원·시간·위치·복장)인 intent.
 # 이 intent들에서는 우선 질의 근거가 그 값 모양을 실제로 담아야 한다.
 # (값 없는 안내/부정형 근거가 우선 블록에 올라가 실제 표 값을 가리는 오도 방지)
+# 실험4 이후 이 intent들의 우선 질의 근거는 프롬프트로 승격되지 않고 고정 답변에도 쓰이지 않는다
+# (PRIORITY_QUERY_ANSWER_INTENTS 밖). 지금은 trace·로그에 남는 근거만 거르며,
+# 나중에 값 intent를 우선 근거로 승격하게 될 때의 안전장치로 유지한다.
 VALUE_TYPED_PRIORITY_INTENTS = STRICT_LOCAL_EVIDENCE_INTENTS & set(INTENT_EVIDENCE_PATTERNS)
 EVIDENCE_FOCUSED_INTENTS = {
     "location", "time", "cost", "count", "list", "attire",
@@ -4481,8 +4484,9 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
     has_structured_evidence = bool(fact_text or evidence_facts)
     if relevant_excerpt and has_structured_evidence:
-        # [#110 실험1b] 구조화 근거(표 검색 정보/질문 의도 추출 정보)가 답을 담고 있을 때만
-        # 중복·노이즈인 원문 전체 덤프(전체 내용)를 제외해 7.8B 모델이 답을 놓치지 않게 한다.
+        # [#110 실험1b] 구조화 근거(표 검색 정보 또는 질문 의도 추출 정보)가 하나라도 있으면
+        # 중복·노이즈인 원문 전체 덤프(전체 내용)를 빼고 발췌만 남겨 7.8B 모델이 답을 놓치지 않게 한다.
+        # 구조화 근거가 답을 실제로 담고 있는지는 확인하지 않으므로, 답이 원문에만 있으면 놓칠 수 있다.
         # 구조화 근거가 없으면 답이 원문에만 있을 수 있어(실험1에서 '53' 회귀) 전체 내용을 유지한다.
         return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}"
     if relevant_excerpt:
