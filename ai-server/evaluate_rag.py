@@ -470,8 +470,17 @@ def _load_cases(path: Path) -> list[dict]:
     return cases
 
 
-def _select_cases(cases: list[dict], case_ids: set[str], limit: int | None) -> list[dict]:
+def _select_cases(
+    cases: list[dict],
+    case_ids: set[str],
+    limit: int | None,
+    document_hint: str | None = None,
+) -> list[dict]:
     selected = [case for case in cases if not case_ids or str(case.get("id")) in case_ids]
+    if document_hint:
+        needle = document_hint.strip()
+        # 색인된 문서만 측정하려고 document_hint 부분 문자열로 케이스를 좁힌다.
+        selected = [case for case in selected if needle in str(case.get("document_hint", ""))]
     if limit is not None:
         return selected[:limit]
     return selected
@@ -514,7 +523,12 @@ def _run_single_question(args: argparse.Namespace, case: dict, variant_name: str
 
 
 def _run_evaluation(args: argparse.Namespace) -> dict:
-    cases = _select_cases(_load_cases(args.questions), set(args.case_id), args.limit)
+    cases = _select_cases(
+        _load_cases(args.questions),
+        set(args.case_id),
+        args.limit,
+        args.document_hint,
+    )
     results = []
     for case in cases:
         for variant_name, variant_case, question in _question_variants(case):
@@ -686,6 +700,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int)
     parser.add_argument("--case-id", action="append", default=[])
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--document-hint",
+        help="document_hint 부분 문자열로 케이스를 좁힌다. 예: --document-hint 모집요강",
+    )
     parser.add_argument("--include-query", action="store_true")
     parser.add_argument("--system-prompt")
     parser.add_argument("--timeout", type=float, default=60.0)

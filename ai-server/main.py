@@ -2753,6 +2753,13 @@ QUERY_NON_SUBJECT_PATTERNS = (
     r"^(있어|있나요|있습니까|돼|되나요|될까|인가요)$",
 )
 STRICT_LOCAL_EVIDENCE_INTENTS = {"location", "time", "cost", "count", "attire"}
+# [#110 실험2] 답이 typed value(금액·인원·시간·위치·복장)인 intent.
+# 이 intent들에서는 우선 질의 근거가 그 값 모양을 실제로 담아야 한다.
+# (값 없는 안내/부정형 근거가 우선 블록에 올라가 실제 표 값을 가리는 오도 방지)
+# 실험4 이후 이 intent들의 우선 질의 근거는 프롬프트로 승격되지 않고 고정 답변에도 쓰이지 않는다
+# (PRIORITY_QUERY_ANSWER_INTENTS 밖). 지금은 trace·로그에 남는 근거만 거르며,
+# 나중에 값 intent를 우선 근거로 승격하게 될 때의 안전장치로 유지한다.
+VALUE_TYPED_PRIORITY_INTENTS = STRICT_LOCAL_EVIDENCE_INTENTS & set(INTENT_EVIDENCE_PATTERNS)
 EVIDENCE_FOCUSED_INTENTS = {
     "location", "time", "cost", "count", "list", "attire",
     "documents", "eligibility", "method", "schedule", "formula",
@@ -4338,6 +4345,23 @@ def _query_evidence_has_intent_terms(fact: str, analysis: QueryAnalysis) -> bool
     return any(term.lower() in normalized_fact for term in intent_terms)
 
 
+def _fact_has_intent_value(fact: str, intent: str | None) -> bool:
+    """값을 찾는 intent의 기대 값 모양(금액·인원·시간·위치·복장)이 근거 안에 실제로 있는지 본다.
+
+    intent 용어(예: '비용')가 아니라 값 모양(예: '30,000원')을 요구한다. '전형료는 반환하지
+    않음'처럼 주제어는 맞지만 값이 없는 안내/부정형 근거를 우선 블록에서 가려낸다.
+    """
+    if not intent:
+        return False
+    normalized = fact.lower()
+    if intent == "attire":
+        return _looks_like_attire_value(normalized)
+    for pattern in INTENT_EVIDENCE_PATTERNS.get(intent, []):
+        if re.search(pattern, normalized, flags=re.MULTILINE):
+            return True
+    return False
+
+
 def _priority_query_evidence_safety_reason(fact: str, analysis: QueryAnalysis) -> str | None:
     """우선 질의 근거로 올릴 수 없으면 사유 code를 반환한다."""
     stripped = fact.strip()
@@ -4349,6 +4373,12 @@ def _priority_query_evidence_safety_reason(fact: str, analysis: QueryAnalysis) -
 
     if analysis.subject_terms and not _subject_matches_text(stripped, analysis):
         return "subject_mismatch"
+
+    # [#110 실험2] 값을 찾는 intent(cost/count/time/location/attire)에서는 우선 질의 근거가
+    # 그 intent의 값 모양(cost→금액, count→인원 등)을 담아야 한다. 값이 없는 안내/부정형 근거가
+    # 우선 블록에 올라가 [검색 근거]의 실제 표 값을 가리는 오도(예: '전형료는 반환하지 않음')를 막는다.
+    if analysis.intent in VALUE_TYPED_PRIORITY_INTENTS and not _fact_has_intent_value(stripped, analysis.intent):
+        return "missing_intent_value"
 
     if analysis.intent in PRIORITY_QUERY_ANSWER_INTENTS and not _query_evidence_has_intent_terms(stripped, analysis):
         return "missing_intent_evidence"
@@ -4452,6 +4482,13 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
 
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
+    has_structured_evidence = bool(fact_text or evidence_facts)
+    if relevant_excerpt and has_structured_evidence:
+        # [#110 실험1b] 구조화 근거(표 검색 정보 또는 질문 의도 추출 정보)가 하나라도 있으면
+        # 중복·노이즈인 원문 전체 덤프(전체 내용)를 빼고 발췌만 남겨 7.8B 모델이 답을 놓치지 않게 한다.
+        # 구조화 근거가 답을 실제로 담고 있는지는 확인하지 않으므로, 답이 원문에만 있으면 놓칠 수 있다.
+        # 구조화 근거가 없으면 답이 원문에만 있을 수 있어(실험1에서 '53' 회귀) 전체 내용을 유지한다.
+        return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}"
     if relevant_excerpt:
         return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
     return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n전체 내용:\n{doc.strip()}"
@@ -5510,6 +5547,24 @@ def _priority_query_evidence_answer_disabled_reason(
     return None
 
 
+def _prompt_priority_query_evidence_text(evidence: PriorityQueryEvidence | None) -> str:
+    """[우선 질의 근거] 블록은 deterministic 답변까지 신뢰하는 intent에만 프롬프트 최우선으로 승격한다.
+
+    [#110 실험4 레버③] count/list 같은 표값 조회 intent는 추출기가 질문 행이 아닌 다른 열·다른 행
+    값을 질문 행으로 오인한다(trace 확인: '수시1차 일반고'(53) 대신 '모집 정원'(93)을 뽑고 타 학과
+    행 값까지 같은 라벨로 오염). 이 추출은 deterministic 답변으로 신뢰할 수 없어 이미 거부되는데
+    (unsupported_intent), 정작 프롬프트 최우선 블록 '[우선 질의 근거]'로는 올라가 정확한 [검색 근거]의
+    '표 검색 정보'(53) 위에 오답을 "먼저 쓰라"고 박아 7.8B를 오도한다. 신뢰 못 할 추출은 최우선
+    블록으로 승격하지 않고 [검색 근거]의 '표 검색 정보'/'질문 의도 추출 정보'에 맡긴다. 검증된
+    method/schedule(PRIORITY_QUERY_ANSWER_INTENTS)만 승격해 회귀를 막는다.
+    """
+    if evidence is None:
+        return ""
+    if evidence.intent not in PRIORITY_QUERY_ANSWER_INTENTS:
+        return ""
+    return evidence.evidence_text
+
+
 def _contract_trace_preview(
     chunk_id: str,
     doc: str,
@@ -6172,7 +6227,7 @@ def _trace_query_retrieval(
             context,
             question,
             priority_table_evidence.evidence_text if priority_table_evidence else "",
-            priority_query_evidence.evidence_text if priority_query_evidence else "",
+            _prompt_priority_query_evidence_text(priority_query_evidence),
         )
         if final_docs
         else ""
@@ -6398,7 +6453,7 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         context,
         question,
         priority_table_evidence.evidence_text if priority_table_evidence else "",
-        priority_query_evidence.evidence_text if priority_query_evidence else "",
+        _prompt_priority_query_evidence_text(priority_query_evidence),
     )
     priority_table_fact_answer = _priority_table_fact_answer_for_request(
         priority_table_evidence,
