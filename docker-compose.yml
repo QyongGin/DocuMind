@@ -36,7 +36,9 @@ services:
     expose:
       - "8000"
     volumes:
-      - chroma_data:/chroma/chroma
+      # chroma 1.x 이미지는 /config.yaml의 persist_path(/data)에 저장한다.
+      # 예전 경로(/chroma/chroma)에 연결하면 색인이 볼륨이 아니라 컨테이너 안에 쌓인다.
+      - chroma_data:/data
     environment:
       TZ: Asia/Seoul
     healthcheck:
