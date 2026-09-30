@@ -267,13 +267,243 @@ def _load_documents(tmp_path: str, filename: str) -> list[Document]:
     if ext == "pdf":
         # opendataloader: 한글 PDF에 최적화, format="markdown"으로 구조 보존
         loader = OpenDataLoaderPDFLoader(file_path=tmp_path, format="markdown")
+    elif ext == "pptx":
+        # MarkItDown의 pptx 변환은 텍스트박스를 XML 저장 순서로 나열해 시각적
+        # 라벨↔값 짝(예: 자격증명↔발급기관)이 깨지고, 슬라이드 제목이 Markdown
+        # 헤더가 아니라 슬라이드 경계 없이 뭉친 청크가 만들어진다.
+        # python-pptx 좌표 기반 읽기 순서 복원으로 대체하고 실패 시에만 폴백한다.
+        try:
+            return _load_pptx_documents(tmp_path, filename)
+        except Exception:
+            logger.exception("[pptx_layout] filename=%s 좌표 기반 변환 실패, MarkItDown으로 폴백", filename)
+            from markitdown import MarkItDown
+            markdown = MarkItDown().convert(tmp_path).text_content
+            return [Document(page_content=markdown)]
     else:
-        # docx/pptx/xlsx: MarkItDown으로 Markdown 변환
+        # docx/xlsx: MarkItDown으로 Markdown 변환
         # Word 헤딩 스타일을 ATX(#, ##, ###)로 정확히 변환해 MarkdownHeaderTextSplitter와 연동
         from markitdown import MarkItDown
         markdown = MarkItDown().convert(tmp_path).text_content
         return [Document(page_content=markdown)]
     return loader.load()
+
+
+# PPTX 읽기 순서 복원 정책값 (EMU 단위, 1cm = 360,000 EMU)
+# 시각적 묶음(카드)을 두 단계로 복원한다:
+#   1) 컨테이너 그룹핑 — 텍스트 없는 배경 도형(카드/행 사각형) 안에 중심이 들어가는
+#      텍스트박스끼리 묶는다. 라벨↔값이 가로로 놓인 행 카드도 이것으로 복원된다.
+#   2) 세로 체이닝 — 가로로 겹치고 세로 간격이 작은 카드끼리 열로 잇는다.
+#      개별 상자가 세로로 나열된 열 레이아웃(예: 학기별 과목 로드맵)을 복원한다.
+PPTX_CARD_VERTICAL_GAP_MAX_EMU = _env_int("PPTX_CARD_VERTICAL_GAP_MAX_EMU", 160000, minimum=0)
+PPTX_CARD_X_OVERLAP_MIN_RATIO = 0.5
+PPTX_CONTAINER_MIN_AREA_EMU = 2 * 360000 * 360000       # 2cm² 미만 도형은 장식으로 간주
+PPTX_CONTAINER_MAX_SLIDE_AREA_RATIO = 0.6               # 슬라이드 60% 초과 도형은 전체 배경으로 간주
+
+
+def _pptx_shape_text(shape) -> str:
+    """텍스트박스 내부 개행을 공백으로 눌러 한 항목을 한 줄로 만든다."""
+    return re.sub(r"\s+", " ", shape.text_frame.text).strip()
+
+
+def _pptx_table_to_markdown(table) -> str:
+    """pptx 실제 표(has_table)를 Markdown 파이프 표로 변환한다. 병합 셀은 좌상단 값만 남는다."""
+    rows: list[str] = []
+    for row_index, row in enumerate(table.rows):
+        cells = [re.sub(r"\s+", " ", cell.text).strip() for cell in row.cells]
+        rows.append("| " + " | ".join(cells) + " |")
+        if row_index == 0:
+            rows.append("|" + " --- |" * len(cells))
+    return "\n".join(rows)
+
+
+def _collect_pptx_shapes(shapes) -> tuple[list[dict], list[dict]]:
+    """
+    슬라이드 도형을 (텍스트/표 항목, 컨테이너 후보) 두 목록으로 평탄화한다.
+    그룹 도형은 재귀로 펼친다. 좌표가 없는 도형(레이아웃 상속)은 0으로 간주한다.
+    """
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    items: list[dict] = []
+    containers: list[dict] = []
+    for shape in shapes:
+        if getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.GROUP:
+            child_items, child_containers = _collect_pptx_shapes(shape.shapes)
+            items.extend(child_items)
+            containers.extend(child_containers)
+            continue
+        top = shape.top or 0
+        left = shape.left or 0
+        width = shape.width or 0
+        height = shape.height or 0
+        bounds = {"top": top, "left": left, "width": width, "bottom": top + height}
+        if getattr(shape, "has_table", False):
+            items.append({**bounds, "is_table": True, "text": _pptx_table_to_markdown(shape.table)})
+            continue
+        text = _pptx_shape_text(shape) if shape.has_text_frame else ""
+        if text:
+            items.append({**bounds, "is_table": False, "text": text})
+        elif width * height >= PPTX_CONTAINER_MIN_AREA_EMU:
+            containers.append({**bounds, "area": width * height})
+    return items, containers
+
+
+def _pptx_x_overlap_ratio(a: dict, b: dict) -> float:
+    """두 도형의 가로 겹침 길이를 좁은 쪽 폭 기준 비율로 반환한다."""
+    overlap = min(a["left"] + a["width"], b["left"] + b["width"]) - max(a["left"], b["left"])
+    narrower = min(a["width"], b["width"])
+    if overlap <= 0 or narrower <= 0:
+        return 0.0
+    return overlap / narrower
+
+
+def _group_pptx_items_by_container(items: list[dict], containers: list[dict]) -> list[dict]:
+    """
+    텍스트 항목의 중심이 들어가는 가장 작은 컨테이너로 항목을 묶어 카드를 만든다.
+    컨테이너가 없는 항목은 단독 카드가 된다. 표는 항상 단독 카드로 남긴다.
+    """
+    grouped: dict[int, list[dict]] = {}
+    cards: list[dict] = []
+    for item in items:
+        if item["is_table"]:
+            cards.append({**item, "texts": [item["text"]]})
+            continue
+        center_x = item["left"] + item["width"] / 2
+        center_y = (item["top"] + item["bottom"]) / 2
+        best_index = None
+        best_area = None
+        for index, container in enumerate(containers):
+            if not (container["left"] <= center_x <= container["left"] + container["width"]):
+                continue
+            if not (container["top"] <= center_y <= container["bottom"]):
+                continue
+            if best_area is None or container["area"] < best_area:
+                best_index = index
+                best_area = container["area"]
+        if best_index is None:
+            cards.append({**item, "texts": [item["text"]]})
+        else:
+            grouped.setdefault(best_index, []).append(item)
+
+    for members in grouped.values():
+        members.sort(key=lambda entry: (entry["top"], entry["left"]))
+        cards.append({
+            "top": min(entry["top"] for entry in members),
+            "bottom": max(entry["bottom"] for entry in members),
+            "left": min(entry["left"] for entry in members),
+            "width": max(entry["left"] + entry["width"] for entry in members) - min(entry["left"] for entry in members),
+            "is_table": False,
+            "texts": [entry["text"] for entry in members],
+        })
+    return cards
+
+
+def _chain_pptx_cards(cards: list[dict]) -> list[dict]:
+    """가로로 겹치고 세로 간격이 작은 카드를 열(column) 단위 카드로 잇는다."""
+    chained: list[dict] = []
+    for card in sorted(cards, key=lambda entry: (entry["top"], entry["left"])):
+        merged = False
+        if not card["is_table"]:
+            for existing in chained:
+                if existing["is_table"]:
+                    continue
+                gap = card["top"] - existing["bottom"]
+                if gap > PPTX_CARD_VERTICAL_GAP_MAX_EMU:
+                    continue
+                if _pptx_x_overlap_ratio(existing, card) < PPTX_CARD_X_OVERLAP_MIN_RATIO:
+                    continue
+                existing["texts"].extend(card["texts"])
+                existing["bottom"] = max(existing["bottom"], card["bottom"])
+                existing["left"] = min(existing["left"], card["left"])
+                existing["width"] = max(existing["width"], card["width"])
+                merged = True
+                break
+        if not merged:
+            chained.append(dict(card))
+    return chained
+
+
+def _pptx_cards_to_blocks(cards: list[dict]) -> list[tuple[int, str]]:
+    """카드를 시각적 행(top이 비슷한 카드 묶음)으로 모아 (top, 한 줄 텍스트)로 반환한다."""
+    blocks: list[tuple[int, str]] = []
+    band: list[dict] = []
+    band_top = None
+
+    def _flush() -> None:
+        if not band:
+            return
+        band.sort(key=lambda entry: entry["left"])
+        blocks.append((band_top, " | ".join(" — ".join(entry["texts"]) for entry in band)))
+
+    for card in sorted(cards, key=lambda entry: (entry["top"], entry["left"])):
+        if card["is_table"]:
+            _flush()
+            band = []
+            blocks.append((card["top"], card["texts"][0]))
+            continue
+        if band and card["top"] - band_top > PPTX_CARD_VERTICAL_GAP_MAX_EMU:
+            _flush()
+            band = []
+        if not band:
+            band_top = card["top"]
+        band.append(card)
+    _flush()
+    return blocks
+
+
+def _pptx_slide_to_markdown(slide, slide_number: int) -> str:
+    """슬라이드 하나를 '## 제목' 헤더 + 읽기 순서 복원 본문의 Markdown 섹션으로 변환한다."""
+    items, containers = _collect_pptx_shapes(slide.shapes)
+
+    # 전체 배경에 가까운 대형 도형은 컨테이너에서 제외한다(모든 항목이 한 카드로 뭉치는 것 방지).
+    slide_area = max((item["left"] + item["width"] for item in items + containers), default=0) * \
+        max((item["bottom"] for item in items + containers), default=0)
+    if slide_area > 0:
+        containers = [
+            container for container in containers
+            if container["area"] <= slide_area * PPTX_CONTAINER_MAX_SLIDE_AREA_RATIO
+        ]
+
+    # 제목: 제목 placeholder 우선, 없으면 최상단 텍스트. 본문에서 제외한다.
+    title_text = ""
+    title_shape = getattr(slide.shapes, "title", None)
+    if title_shape is not None and title_shape.has_text_frame:
+        title_text = _pptx_shape_text(title_shape)
+    if title_text:
+        items = [item for item in items if item["text"] != title_text or item["is_table"]]
+    elif items:
+        top_item = min(items, key=lambda entry: entry["top"])
+        if not top_item["is_table"]:
+            title_text = top_item["text"]
+            items = [item for item in items if item is not top_item]
+
+    cards = _chain_pptx_cards(_group_pptx_items_by_container(items, containers))
+    blocks = _pptx_cards_to_blocks(cards)
+
+    header = f"## {title_text} — 슬라이드 {slide_number}" if title_text else f"## 슬라이드 {slide_number}"
+    body = "\n\n".join(text for _, text in blocks)
+
+    notes_text = ""
+    if slide.has_notes_slide:
+        notes_text = re.sub(r"\s+", " ", slide.notes_slide.notes_text_frame.text).strip()
+    if notes_text:
+        body = f"{body}\n\n발표자 노트: {notes_text}" if body else f"발표자 노트: {notes_text}"
+
+    return f"{header}\n\n{body}" if body else header
+
+
+def _load_pptx_documents(tmp_path: str, filename: str) -> list[Document]:
+    """
+    PPTX를 python-pptx로 읽어 슬라이드 경계(## 헤더)와 좌표 기반 읽기 순서를
+    보존한 Markdown Document 하나로 변환한다. 이후 청킹은 공유 경로를 그대로 탄다.
+    """
+    from pptx import Presentation
+
+    presentation = Presentation(tmp_path)
+    stem = filename.rsplit(".", 1)[0]
+    sections = [f"# {stem}"]
+    for slide_number, slide in enumerate(presentation.slides, start=1):
+        sections.append(_pptx_slide_to_markdown(slide, slide_number))
+    return [Document(page_content="\n\n".join(sections))]
 
 
 def _load_opendataloader_json_documents(tmp_path: str, filename: str) -> list[Document]:
