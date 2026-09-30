@@ -1480,6 +1480,11 @@ def _apply_overlap(docs: list[Document]) -> list[Document]:
     return overlapped
 
 
+# 색인이 정하는 metadata 키. 로더가 붙인 같은 키가 덮어쓰면 안 된다.
+# (PDF 로더는 source에 업로드 임시 파일 경로를 넣는다.)
+INDEXER_OWNED_METADATA_KEYS = frozenset({"document_id", "source", "chunk_index"})
+
+
 def _build_chunk_metadata(doc: Document, filename: str, document_id: int, chunk_index: int, page_lookup: list[dict]) -> dict:
     """
     ChromaDB에 저장할 청크 metadata를 만든다.
@@ -1496,6 +1501,8 @@ def _build_chunk_metadata(doc: Document, filename: str, document_id: int, chunk_
         metadata["page_start"] = page_start
         metadata["page_end"] = page_end if page_end is not None else page_start
     for key, value in doc.metadata.items():
+        if key in INDEXER_OWNED_METADATA_KEYS:
+            continue
         if isinstance(value, (str, int, float, bool)):
             metadata[key] = value
 
