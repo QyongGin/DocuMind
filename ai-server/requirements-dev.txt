@@ -1,0 +1,4 @@
+# 개발/테스트 전용 의존성 (운영 이미지에는 포함하지 않는다).
+# 설치: ai-server/venv/bin/python -m pip install -r requirements-dev.txt
+# 실행: ai-server/venv/bin/python -m pytest tests/
+pytest>=8.0,<9.0

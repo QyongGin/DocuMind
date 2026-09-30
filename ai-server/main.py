@@ -80,22 +80,19 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
-    """실수 환경변수를 읽되 범위를 벗어난 값이면 기본값으로 되돌린다."""
+def _env_float(name: str, default: float = 0.0, minimum: float = 0.0) -> float:
+    """float 환경변수를 읽는다. 파싱 실패나 최소값 미만이면 기본값을 쓴다."""
     raw_value = os.getenv(name)
     if raw_value is None:
         return default
-
     try:
         value = float(raw_value)
     except ValueError:
         logger.warning("%s=%s 값이 실수가 아니어서 기본값 %s를 사용합니다.", name, raw_value, default)
         return default
-
     if value < minimum:
         logger.warning("%s=%s 값이 최소값 %s보다 작아서 기본값 %s를 사용합니다.", name, raw_value, minimum, default)
         return default
-
     return value
 
 
@@ -108,6 +105,9 @@ OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "exaone3.5:7.8b")
 # 환경변수로 임베딩 모델명 분기. VRAM이 작은 서버에서는 qwen3-embedding:4b를 우선 사용한다.
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:4b")
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+# 생성 결정론화: 같은 코드가 같은 평가 점수를 내도록 temperature 기본 0.0.
+# RAG 결정론 앵커(17/40)의 전제다. 0이 아니면 같은 입력에도 EXAONE 답이 흔들린다.
+OLLAMA_TEMPERATURE = _env_float("OLLAMA_TEMPERATURE", 0.0)
 OLLAMA_EMBEDDING_WARMUP_ON_STARTUP = _env_bool("OLLAMA_EMBEDDING_WARMUP_ON_STARTUP")
 OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 4096)
 OLLAMA_NUM_PREDICT = _env_int("OLLAMA_NUM_PREDICT", 512)
@@ -135,20 +135,15 @@ if CHUNK_OVERLAP >= CHUNK_SIZE:
 
 ollama_client = Client(host=OLLAMA_BASE_URL)
 
-# [#110 실험3] 생성 결정론화. 기본 temperature(약 0.8)는 같은 입력에도 답이 매번 달라져
-# answer_pass가 ±2~3 흔들렸다(같은 코드 3회: 17/15/12). 사실 기반 RAG 봇은 greedy 디코딩이
-# 평가·프로덕션 모두에 맞으므로 기본값을 0.0으로 둔다. 필요 시 OLLAMA_TEMPERATURE로 조정한다.
-OLLAMA_TEMPERATURE = _env_float("OLLAMA_TEMPERATURE", 0.0, minimum=0.0)
-
 # 질의응답에 사용할 LLM. 임베딩 모델과 분리해 별도 관리
 llm = OllamaLLM(
     model=OLLAMA_LLM_MODEL,
     base_url=OLLAMA_BASE_URL,
+    temperature=OLLAMA_TEMPERATURE,
     keep_alive=OLLAMA_KEEP_ALIVE,
     num_ctx=OLLAMA_NUM_CTX,
     num_predict=OLLAMA_NUM_PREDICT,
-    num_thread=OLLAMA_NUM_THREAD,
-    temperature=OLLAMA_TEMPERATURE
+    num_thread=OLLAMA_NUM_THREAD
 )
 
 # 환경변수로 ChromaDB 모드 분기
@@ -201,7 +196,7 @@ _bm25_sparse_index = None
 _document_progress: dict[int, dict] = {}
 
 logger.info(
-    "[startup] ollama_base_url=%s llm_model=%s temperature=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s query_retrieval_chunks_enabled=%s opendataloader_json_table_facts_enabled=%s chroma_host=%s chroma_port=%s",
+    "[startup] ollama_base_url=%s llm_model=%s llm_temperature=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s query_retrieval_chunks_enabled=%s opendataloader_json_table_facts_enabled=%s chroma_host=%s chroma_port=%s",
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
     OLLAMA_TEMPERATURE,
