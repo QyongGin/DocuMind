@@ -16,7 +16,7 @@ import asyncio
 import logging
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import Lock
 
 from rag_contract_builders import (
@@ -32,7 +32,12 @@ from rag_contract_builders import (
     section_path_quality,
     section_path_warnings,
 )
-from rag_contracts import contract_to_dict
+from rag_contracts import SourceBlock, TableFact, contract_to_dict
+from rag_table_fact_selector import (
+    build_table_fact_evidence_preview,
+    select_table_facts_for_question,
+)
+from opendataloader_contract_adapter import adapt_opendataloader_json_page
 
 try:
     from kiwipiepy import Kiwi
@@ -75,6 +80,22 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_float(name: str, default: float = 0.0, minimum: float = 0.0) -> float:
+    """float 환경변수를 읽는다. 파싱 실패나 최소값 미만이면 기본값을 쓴다."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        value = float(raw_value)
+    except ValueError:
+        logger.warning("%s=%s 값이 실수가 아니어서 기본값 %s를 사용합니다.", name, raw_value, default)
+        return default
+    if value < minimum:
+        logger.warning("%s=%s 값이 최소값 %s보다 작아서 기본값 %s를 사용합니다.", name, raw_value, minimum, default)
+        return default
+    return value
+
+
 # 환경변수로 로컬/Docker 환경 분기
 # 로컬: OLLAMA_BASE_URL 미설정 시 localhost 사용
 # Docker: OLLAMA_BASE_URL=http://ollama:11434
@@ -84,6 +105,9 @@ OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "exaone3.5:7.8b")
 # 환경변수로 임베딩 모델명 분기. VRAM이 작은 서버에서는 qwen3-embedding:4b를 우선 사용한다.
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:4b")
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+# 생성 결정론화: 같은 코드가 같은 평가 점수를 내도록 temperature 기본 0.0.
+# RAG 결정론 앵커(17/40)의 전제다. 0이 아니면 같은 입력에도 EXAONE 답이 흔들린다.
+OLLAMA_TEMPERATURE = _env_float("OLLAMA_TEMPERATURE", 0.0)
 OLLAMA_EMBEDDING_WARMUP_ON_STARTUP = _env_bool("OLLAMA_EMBEDDING_WARMUP_ON_STARTUP")
 OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 4096)
 OLLAMA_NUM_PREDICT = _env_int("OLLAMA_NUM_PREDICT", 512)
@@ -99,6 +123,7 @@ TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
 TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
 EMBED_TABLE_RAW_CHUNKS = _env_bool("EMBED_TABLE_RAW_CHUNKS", True)
 QUERY_RETRIEVAL_CHUNKS_ENABLED = _env_bool("QUERY_RETRIEVAL_CHUNKS_ENABLED", True)
+OPENDATALOADER_JSON_TABLE_FACTS_ENABLED = _env_bool("OPENDATALOADER_JSON_TABLE_FACTS_ENABLED", False)
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
     logger.warning(
@@ -114,6 +139,7 @@ ollama_client = Client(host=OLLAMA_BASE_URL)
 llm = OllamaLLM(
     model=OLLAMA_LLM_MODEL,
     base_url=OLLAMA_BASE_URL,
+    temperature=OLLAMA_TEMPERATURE,
     keep_alive=OLLAMA_KEEP_ALIVE,
     num_ctx=OLLAMA_NUM_CTX,
     num_predict=OLLAMA_NUM_PREDICT,
@@ -133,6 +159,31 @@ else:
 DOCUMENT_COLLECTION_NAME = "documents"
 SOURCE_BLOCK_COLLECTION_NAME = "source_blocks"
 RETRIEVAL_CHUNK_COLLECTION_NAME = "retrieval_chunks"
+OPENDATALOADER_JSON_TABLE_FACT_SOURCE = "opendataloader_json"
+OPENDATALOADER_JSON_PARENT_CHUNK_INDEX_OFFSET = 1_000_000
+OPENDATALOADER_JSON_RUNTIME_TABLE_FACT_METADATA_KEYS = (
+    "document_id",
+    "source_block_id",
+    "source_lookup_id",
+    "table_fact_source",
+    "table_fact_id",
+    "table_fact_type",
+    "table_fact_table_id",
+    "table_fact_row_label",
+    "table_fact_column_label",
+    "table_fact_value",
+    "table_fact_value_type",
+    "table_fact_unit",
+    "table_fact_row_index",
+    "table_fact_column_index",
+    "table_fact_row_header_path",
+    "table_fact_column_path",
+    "table_fact_header_path",
+    "table_fact_caption",
+    "table_fact_legend",
+    "table_fact_note",
+    "table_fact_confidence",
+)
 collection = client.get_or_create_collection(DOCUMENT_COLLECTION_NAME)
 source_block_collection = client.get_or_create_collection(SOURCE_BLOCK_COLLECTION_NAME)
 retrieval_chunk_collection = client.get_or_create_collection(RETRIEVAL_CHUNK_COLLECTION_NAME)
@@ -145,9 +196,10 @@ _bm25_sparse_index = None
 _document_progress: dict[int, dict] = {}
 
 logger.info(
-    "[startup] ollama_base_url=%s llm_model=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s query_retrieval_chunks_enabled=%s chroma_host=%s chroma_port=%s",
+    "[startup] ollama_base_url=%s llm_model=%s llm_temperature=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s query_retrieval_chunks_enabled=%s opendataloader_json_table_facts_enabled=%s chroma_host=%s chroma_port=%s",
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
+    OLLAMA_TEMPERATURE,
     OLLAMA_EMBEDDING_MODEL,
     OLLAMA_KEEP_ALIVE,
     OLLAMA_EMBEDDING_WARMUP_ON_STARTUP,
@@ -162,6 +214,7 @@ logger.info(
     BM25_INDEX_MAX_ENTRIES,
     EMBED_TABLE_RAW_CHUNKS,
     QUERY_RETRIEVAL_CHUNKS_ENABLED,
+    OPENDATALOADER_JSON_TABLE_FACTS_ENABLED,
     CHROMA_HOST or "persistent",
     CHROMA_PORT
 )
@@ -223,10 +276,20 @@ def _load_documents(tmp_path: str, filename: str) -> list[Document]:
     return loader.load()
 
 
+def _load_opendataloader_json_documents(tmp_path: str, filename: str) -> list[Document]:
+    """PDF를 OpenDataLoader JSON 구조 문서로 추가 로딩한다."""
+    ext = filename.rsplit(".", 1)[-1].lower()
+    if ext != "pdf" or not OPENDATALOADER_JSON_TABLE_FACTS_ENABLED:
+        return []
+
+    loader = OpenDataLoaderPDFLoader(file_path=tmp_path, format="json")
+    return loader.load()
+
+
 def _normalize_text(text: str) -> str:
     """
     opendataloader 아티팩트 제거: 한글 문장 중간에 삽입되는 과도한 개행을 정규화한다.
-    Docling 출력에도 동일하게 적용해도 무해하다.
+    MarkItDown 출력(DOCX·PPTX·XLSX)에도 같은 정규화를 적용하며 무해하다.
     """
     # 한글 사이 3개 이상 개행 제거 (파서 버그로 삽입되는 아티팩트)
     text = re.sub(r'([가-힣])\n{3,}([가-힣])', r'\1\2', text)
@@ -713,7 +776,7 @@ def _clean_table_cell(cell: str) -> str:
 
 def _is_empty_table_cell(cell: str) -> bool:
     """Markdown 파싱 과정에서 생긴 빈 cell인지 확인한다."""
-    return not cell or cell in {"-", "–", "—"}
+    return not cell or cell in {"-", "–", "—"} or bool(re.fullmatch(r"[-–—]+", cell))
 
 
 def _normalize_table_symbol(symbol: str) -> str:
@@ -794,12 +857,21 @@ def _parse_markdown_table(block_text: str) -> tuple[list[list[str]], list[list[s
     return padded_headers, padded_body
 
 
-def _is_probable_subheader_row(row: list[str]) -> bool:
+def _is_probable_subheader_row(row: list[str], header_rows: list[list[str]] | None = None) -> bool:
     """본문 첫 줄이 실제 데이터가 아니라 병합 header 보강 row인지 추정한다."""
+    if header_rows and not any(
+        _is_empty_table_cell(cell)
+        for header_row in header_rows
+        for cell in header_row
+    ):
+        return False
+
     non_empty_cells = [cell for cell in row if not _is_empty_table_cell(cell)]
     if len(non_empty_cells) < 2:
         return False
     if any(re.search(r"\d", cell) for cell in non_empty_cells):
+        return False
+    if any(len(cell) > 24 or len(cell.split()) >= 4 for cell in non_empty_cells):
         return False
     return True
 
@@ -838,17 +910,22 @@ def _select_row_subject(row: list[str], column_labels: list[str]) -> tuple[str, 
     descriptors: list[str] = []
     subject = ""
     preferred_subject = ""
+    preferred_subject_label = ""
     for index, cell in enumerate(row):
         if _is_empty_table_cell(cell):
             continue
         label = column_labels[index] if index < len(column_labels) else f"열 {index + 1}"
         descriptors.append(f"{label}={cell}")
         if (
-            not preferred_subject
-            and any(keyword in label for keyword in ("모집단위", "학과", "항목", "요소", "구분", "전형", "프로젝트 유형"))
+            any(keyword in label for keyword in ("모집단위", "학과", "항목", "요소", "구분", "전형", "프로젝트 유형"))
             and not re.fullmatch(r"[\d.,]+", cell)
         ):
-            preferred_subject = cell
+            normalized_label = re.sub(r"\s+", "", label)
+            if not preferred_subject:
+                preferred_subject = cell
+                preferred_subject_label = normalized_label
+            elif normalized_label == preferred_subject_label:
+                preferred_subject = cell
         if not subject and not re.fullmatch(r"[\d.,]+", cell):
             subject = cell
         if len(descriptors) >= 3:
@@ -975,7 +1052,7 @@ def _extract_table_facts(text: str, metadata: dict) -> list[str]:
         if not header_rows or not body_rows:
             continue
 
-        subheader_row = body_rows[0] if body_rows and _is_probable_subheader_row(body_rows[0]) else None
+        subheader_row = body_rows[0] if body_rows and _is_probable_subheader_row(body_rows[0], header_rows) else None
         data_rows = body_rows[1:] if subheader_row else body_rows
         column_labels = _compose_column_labels(header_rows, subheader_row)
         generate_matrix_facts = _should_generate_matrix_facts(column_labels)
@@ -1403,6 +1480,11 @@ def _apply_overlap(docs: list[Document]) -> list[Document]:
     return overlapped
 
 
+# 색인이 정하는 metadata 키. 로더가 붙인 같은 키가 덮어쓰면 안 된다.
+# (PDF 로더는 source에 업로드 임시 파일 경로를 넣는다.)
+INDEXER_OWNED_METADATA_KEYS = frozenset({"document_id", "source", "chunk_index"})
+
+
 def _build_chunk_metadata(doc: Document, filename: str, document_id: int, chunk_index: int, page_lookup: list[dict]) -> dict:
     """
     ChromaDB에 저장할 청크 metadata를 만든다.
@@ -1419,6 +1501,8 @@ def _build_chunk_metadata(doc: Document, filename: str, document_id: int, chunk_
         metadata["page_start"] = page_start
         metadata["page_end"] = page_end if page_end is not None else page_start
     for key, value in doc.metadata.items():
+        if key in INDEXER_OWNED_METADATA_KEYS:
+            continue
         if isinstance(value, (str, int, float, bool)):
             metadata[key] = value
 
@@ -1537,6 +1621,15 @@ def _warm_up_embedding_model() -> None:
     )
 
 
+@dataclass(frozen=True)
+class OpenDataLoaderJsonIndexArtifacts:
+    """OpenDataLoader JSON에서 만든 추가 source/table_fact 색인 문서 묶음."""
+
+    source_docs: list[Document]
+    table_fact_docs: list[Document]
+    diagnostics_count: int = 0
+
+
 @app.on_event("startup")
 async def warm_up_embedding_model_on_startup() -> None:
     """옵션이 켜져 있으면 앱 시작 시 임베딩 모델 로딩까지 완료한다."""
@@ -1551,11 +1644,310 @@ async def warm_up_embedding_model_on_startup() -> None:
     await asyncio.to_thread(_warm_up_embedding_model)
 
 
+def _empty_opendataloader_json_index_artifacts() -> OpenDataLoaderJsonIndexArtifacts:
+    return OpenDataLoaderJsonIndexArtifacts(source_docs=[], table_fact_docs=[])
+
+
+def _opendataloader_source_index(source_block_id: str) -> int:
+    """OpenDataLoader SourceBlock id에서 전역 source 순번을 복원한다."""
+    match = re.search(r":source-(\d+)$", str(source_block_id))
+    if not match:
+        return 0
+    return int(match.group(1))
+
+
+def _opendataloader_source_lookup_id(document_id: int | str, source_index: int) -> str:
+    """OpenDataLoader source block을 source_blocks collection에서 찾을 id로 바꾼다."""
+    return f"{document_id}_odl_{source_index}_source"
+
+
+def _opendataloader_parent_chunk_id(document_id: int | str, source_index: int) -> str:
+    """OpenDataLoader table_fact가 fallback 부모 원문을 가리킬 stable id를 만든다."""
+    return f"{document_id}_odl_{source_index}"
+
+
+def _metadata_json_array(values: tuple[str, ...] | list[str]) -> str:
+    """ChromaDB metadata에 tuple/list 값을 작고 안전한 JSON 문자열로 저장한다."""
+    return json.dumps([str(value) for value in values if str(value).strip()], ensure_ascii=False)
+
+
+def _set_optional_metadata(metadata: dict, key: str, value: object) -> None:
+    """ChromaDB가 받을 수 있는 scalar metadata만 선택적으로 넣는다."""
+    if value is None:
+        return
+    if isinstance(value, (str, int, float, bool)):
+        metadata[key] = value
+
+
+def _table_fact_header_metadata(header_path: tuple[str, ...]) -> dict:
+    """TableFact header_path를 기존 Header 1..6 metadata 형식으로 보존한다."""
+    metadata: dict = {}
+    for index, value in enumerate(header_path[:6], start=1):
+        if str(value).strip():
+            metadata[f"Header {index}"] = str(value).strip()
+    return metadata
+
+
+def _build_opendataloader_source_block_document(
+    source_block: SourceBlock,
+    filename: str,
+    document_id: int,
+) -> Document:
+    """OpenDataLoader table source block을 source_blocks collection 문서로 만든다."""
+    source_index = _opendataloader_source_index(source_block.source_block_id)
+    source_lookup_id = _opendataloader_source_lookup_id(document_id, source_index)
+    parent_chunk_id = _opendataloader_parent_chunk_id(document_id, source_index)
+    parent_chunk_index = OPENDATALOADER_JSON_PARENT_CHUNK_INDEX_OFFSET + source_index
+    metadata: dict = {
+        "document_id": str(document_id),
+        "source": filename,
+        "chunk_role": "source_block",
+        "parser_name": OPENDATALOADER_JSON_TABLE_FACT_SOURCE,
+        "source_block_id": source_block.source_block_id,
+        "source_lookup_id": source_lookup_id,
+        "source_collection": SOURCE_BLOCK_COLLECTION_NAME,
+        "source_parent_chunk_id": parent_chunk_id,
+        "source_parent_chunk_index": parent_chunk_index,
+    }
+    if source_block.page_span is not None:
+        metadata["page"] = source_block.page_span.start
+        metadata["page_start"] = source_block.page_span.start
+        metadata["page_end"] = source_block.page_span.end
+    return Document(page_content=source_block.raw_text, metadata=metadata)
+
+
+def _format_table_fact_index_text(table_fact: TableFact) -> str:
+    """Typed TableFact를 기존 lexical table_fact 검색이 읽을 수 있는 문장으로 만든다."""
+    caption = table_fact.caption or " > ".join(table_fact.header_path) or "문서 표"
+    row_path = " > ".join(table_fact.row_header_path) if table_fact.row_header_path else table_fact.row_label
+    column_path = " > ".join(table_fact.column_path) if table_fact.column_path else table_fact.column_label
+    pairs = []
+    if row_path and row_path != table_fact.row_label:
+        pairs.append(f"행 경로={row_path}")
+    pairs.append(f"{column_path}={table_fact.value}")
+    return f"{caption}: {table_fact.row_label} 행 정보는 {'; '.join(pairs)}이다."
+
+
+def _build_opendataloader_table_fact_document(
+    table_fact: TableFact,
+    fact_index: int,
+    source_doc: Document,
+) -> Document:
+    """OpenDataLoader TableFact를 documents collection의 table_fact entry로 만든다."""
+    source_metadata = source_doc.metadata
+    source_index = _opendataloader_source_index(table_fact.source_block_id)
+    metadata = dict(source_metadata)
+    metadata.update(_table_fact_header_metadata(table_fact.header_path))
+    metadata.update({
+        "chunk_role": "table_fact",
+        "parent_chunk_id": source_metadata["source_parent_chunk_id"],
+        "parent_chunk_index": source_metadata["source_parent_chunk_index"],
+        "parent_content": source_doc.page_content,
+        "fact_index": fact_index,
+        "table_fact_lookup_id": f"{source_metadata['document_id']}_odl_fact_{fact_index}",
+        "table_fact_source": OPENDATALOADER_JSON_TABLE_FACT_SOURCE,
+        "table_fact_id": table_fact.fact_id,
+        "table_fact_type": table_fact.fact_type,
+        "table_fact_table_id": table_fact.table_id,
+        "table_fact_row_label": table_fact.row_label,
+        "table_fact_column_label": table_fact.column_label,
+        "table_fact_value": table_fact.value,
+        "table_fact_value_type": table_fact.value_type,
+        "table_fact_row_header_path": _metadata_json_array(table_fact.row_header_path),
+        "table_fact_column_path": _metadata_json_array(table_fact.column_path),
+        "table_fact_header_path": _metadata_json_array(table_fact.header_path),
+        "table_fact_source_block_index": source_index,
+    })
+    _set_optional_metadata(metadata, "table_fact_unit", table_fact.unit)
+    _set_optional_metadata(metadata, "table_fact_row_index", table_fact.row_index)
+    _set_optional_metadata(metadata, "table_fact_column_index", table_fact.column_index)
+    _set_optional_metadata(metadata, "table_fact_caption", table_fact.caption)
+    _set_optional_metadata(metadata, "table_fact_legend", table_fact.legend)
+    _set_optional_metadata(metadata, "table_fact_note", table_fact.note)
+    _set_optional_metadata(metadata, "table_fact_confidence", table_fact.confidence)
+    return Document(page_content=_format_table_fact_index_text(table_fact), metadata=metadata)
+
+
+def _opendataloader_fact_group_key(table_fact: TableFact) -> tuple[str, str, str]:
+    """같은 OpenDataLoader 표 안에서 반복되는 행 그룹을 찾기 위한 key를 만든다."""
+    return (
+        str(table_fact.table_id),
+        str(table_fact.source_block_id),
+        str(table_fact.row_label).strip(),
+    )
+
+
+def _opendataloader_fact_row_key(table_fact: TableFact) -> tuple[str, str, int]:
+    """같은 원문 표 row에서 나온 fact를 묶기 위한 key를 만든다."""
+    row_index = table_fact.row_index if table_fact.row_index is not None else -1
+    return (str(table_fact.table_id), str(table_fact.source_block_id), row_index)
+
+
+def _opendataloader_fact_column_sort_key(table_fact: TableFact) -> int:
+    """column_index가 없는 fact도 안정적으로 정렬한다."""
+    return table_fact.column_index if table_fact.column_index is not None else 10**9
+
+
+def _opendataloader_value_can_extend_row_header(value: str) -> bool:
+    """반복 group label 아래의 세부 행 라벨로 쓸 수 있는 짧은 text인지 본다."""
+    cleaned = re.sub(r"\s+", " ", str(value or "").strip())
+    if not cleaned:
+        return False
+    if len(cleaned) > 40 or len(cleaned.split()) > 4:
+        return False
+    if re.search(r"[.!?。]|다$", cleaned):
+        return False
+    return True
+
+
+def _opendataloader_extend_row_header_path(
+    table_fact: TableFact,
+    detail_label: str,
+) -> TableFact:
+    """반복 group label과 세부 행 라벨을 TableFact row_header_path에 함께 보존한다."""
+    cleaned_detail_label = str(detail_label or "").strip()
+    if not cleaned_detail_label:
+        return table_fact
+
+    path: list[str] = []
+    for value in (*table_fact.row_header_path, table_fact.row_label):
+        cleaned = str(value or "").strip()
+        if cleaned and cleaned != cleaned_detail_label and cleaned not in path:
+            path.append(cleaned)
+    path.append(cleaned_detail_label)
+
+    return replace(
+        table_fact,
+        row_label=cleaned_detail_label,
+        row_header_path=tuple(path),
+    )
+
+
+def _preserve_opendataloader_repeated_row_headers(
+    table_facts: list[TableFact],
+) -> list[TableFact]:
+    """row span으로 반복된 group label과 세부 행 라벨을 색인 전에 합친다."""
+    if not table_facts:
+        return []
+
+    rows_by_group: dict[tuple[str, str, str], set[int]] = {}
+    facts_by_row: dict[tuple[str, str, int], list[TableFact]] = {}
+    for table_fact in table_facts:
+        row_key = _opendataloader_fact_row_key(table_fact)
+        facts_by_row.setdefault(row_key, []).append(table_fact)
+        if table_fact.row_index is not None:
+            rows_by_group.setdefault(
+                _opendataloader_fact_group_key(table_fact),
+                set(),
+            ).add(table_fact.row_index)
+
+    detail_label_by_row: dict[tuple[str, str, int], str] = {}
+    for row_key, row_facts in facts_by_row.items():
+        sorted_facts = sorted(row_facts, key=_opendataloader_fact_column_sort_key)
+        if len(sorted_facts) < 2:
+            continue
+
+        first_fact = sorted_facts[0]
+        repeated_rows = rows_by_group.get(_opendataloader_fact_group_key(first_fact), set())
+        if len(repeated_rows) < 2:
+            continue
+
+        detail_label = str(first_fact.value or "").strip()
+        if detail_label == first_fact.row_label:
+            continue
+        if first_fact.value_type != "text":
+            continue
+        if not _opendataloader_value_can_extend_row_header(detail_label):
+            continue
+
+        later_facts = [
+            fact for fact in sorted_facts[1:]
+            if _opendataloader_fact_column_sort_key(fact) > _opendataloader_fact_column_sort_key(first_fact)
+        ]
+        if not later_facts:
+            continue
+
+        detail_label_by_row[row_key] = detail_label
+
+    if not detail_label_by_row:
+        return table_facts
+
+    normalized: list[TableFact] = []
+    for table_fact in table_facts:
+        detail_label = detail_label_by_row.get(_opendataloader_fact_row_key(table_fact))
+        if detail_label:
+            normalized.append(_opendataloader_extend_row_header_path(table_fact, detail_label))
+        else:
+            normalized.append(table_fact)
+    return normalized
+
+
+def _build_opendataloader_json_index_artifacts(
+    json_docs: list[Document],
+    filename: str,
+    document_id: int,
+) -> OpenDataLoaderJsonIndexArtifacts:
+    """OpenDataLoader JSON page 문서를 source/table_fact 색인 문서로 변환한다."""
+    if not json_docs:
+        return _empty_opendataloader_json_index_artifacts()
+
+    block_index_offset = 0
+    diagnostics_count = 0
+    source_blocks_by_id: dict[str, SourceBlock] = {}
+    table_facts: list[TableFact] = []
+
+    for json_doc in json_docs:
+        result = adapt_opendataloader_json_page(
+            json_doc.page_content,
+            document_id=document_id,
+            source=filename,
+            document_format=_document_format_from_filename(filename),
+            block_index_offset=block_index_offset,
+        )
+        block_index_offset += len(result.parsed_blocks)
+        diagnostics_count += len(result.diagnostics)
+        for source_block in result.source_blocks:
+            source_blocks_by_id[source_block.source_block_id] = source_block
+        table_facts.extend(result.table_facts)
+
+    table_facts = _preserve_opendataloader_repeated_row_headers(table_facts)
+    required_source_ids = {table_fact.source_block_id for table_fact in table_facts}
+    source_docs_by_id = {
+        source_block_id: _build_opendataloader_source_block_document(
+            source_block,
+            filename,
+            document_id,
+        )
+        for source_block_id, source_block in source_blocks_by_id.items()
+        if source_block_id in required_source_ids
+    }
+
+    table_fact_docs: list[Document] = []
+    for fact_index, table_fact in enumerate(table_facts):
+        source_doc = source_docs_by_id.get(table_fact.source_block_id)
+        if source_doc is None:
+            continue
+        table_fact_docs.append(
+            _build_opendataloader_table_fact_document(
+                table_fact,
+                fact_index,
+                source_doc,
+            )
+        )
+
+    return OpenDataLoaderJsonIndexArtifacts(
+        source_docs=list(source_docs_by_id.values()),
+        table_fact_docs=table_fact_docs,
+        diagnostics_count=diagnostics_count,
+    )
+
+
 def _build_index_documents(
     final_docs: list[Document],
     filename: str,
     document_id: int,
     page_lookup: list[dict],
+    opendataloader_json_artifacts: OpenDataLoaderJsonIndexArtifacts | None = None,
 ) -> tuple[list[Document], list[Document], list[Document], float, int]:
     """원본 청크, 검색용 table fact, source block, retrieval chunk 문서를 함께 만든다."""
     index_docs: list[Document] = []
@@ -1599,6 +1991,11 @@ def _build_index_documents(
                 fact_metadata["parent_content"] = doc.page_content
             index_docs.append(Document(page_content=fact, metadata=fact_metadata))
             table_fact_count += 1
+
+    if opendataloader_json_artifacts is not None:
+        source_docs.extend(opendataloader_json_artifacts.source_docs)
+        index_docs.extend(opendataloader_json_artifacts.table_fact_docs)
+        table_fact_count += len(opendataloader_json_artifacts.table_fact_docs)
 
     return index_docs, source_docs, retrieval_docs, page_match_elapsed, table_fact_count
 
@@ -1703,6 +2100,9 @@ def _build_retrieval_chunk_document(
 def _build_index_document_id(document_id: int, metadata: dict, fallback_index: int) -> str:
     """ChromaDB에 저장할 원본 청크와 파생 fact id를 만든다."""
     if metadata.get("chunk_role") == "table_fact":
+        table_fact_lookup_id = str(metadata.get("table_fact_lookup_id") or "").strip()
+        if table_fact_lookup_id:
+            return table_fact_lookup_id
         parent_index = metadata.get("parent_chunk_index", fallback_index)
         fact_index = metadata.get("fact_index", 0)
         return f"{document_id}_{parent_index}_fact_{fact_index}"
@@ -1710,7 +2110,13 @@ def _build_index_document_id(document_id: int, metadata: dict, fallback_index: i
     return f"{document_id}_{chunk_index}"
 
 
-def _store_document_chunks(final_docs: list[Document], filename: str, document_id: int, page_lookup: list[dict]) -> tuple[float, float, float, int, int, int]:
+def _store_document_chunks(
+    final_docs: list[Document],
+    filename: str,
+    document_id: int,
+    page_lookup: list[dict],
+    opendataloader_json_artifacts: OpenDataLoaderJsonIndexArtifacts | None = None,
+) -> tuple[float, float, float, int, int, int]:
     """
     문서 청크를 batch embedding 후 ChromaDB에 batch 저장한다.
     청크별 HTTP 호출을 피하기 위해 EMBEDDING_BATCH_SIZE 단위로 묶어 처리한다.
@@ -1720,6 +2126,7 @@ def _store_document_chunks(final_docs: list[Document], filename: str, document_i
         filename,
         document_id,
         page_lookup,
+        opendataloader_json_artifacts,
     )
     embedding_elapsed = 0.0
     chroma_elapsed = 0.0
@@ -2000,11 +2407,40 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         total_start = time.perf_counter()
         _set_document_progress(document_id, 8, "parse", "문서를 파싱하고 있습니다.")
 
-        # 파서 분기: 확장자에 따라 PDF 또는 Docling 로더 사용
+        # 파서 분기: 확장자에 따라 PDF는 OpenDataLoader, DOCX·PPTX·XLSX는 MarkItDown으로 읽는다
         parse_start = time.perf_counter()
         raw_docs = _load_documents(tmp_path, filename)
         parse_elapsed = time.perf_counter() - parse_start
         _set_document_progress(document_id, 18, "parse", "문서 파싱을 완료했습니다.")
+
+        opendataloader_json_start = time.perf_counter()
+        opendataloader_json_artifacts = _empty_opendataloader_json_index_artifacts()
+        if OPENDATALOADER_JSON_TABLE_FACTS_ENABLED:
+            try:
+                opendataloader_json_docs = _load_opendataloader_json_documents(tmp_path, filename)
+                opendataloader_json_artifacts = _build_opendataloader_json_index_artifacts(
+                    opendataloader_json_docs,
+                    filename,
+                    document_id,
+                )
+            except Exception:
+                logger.exception(
+                    "[opendataloader_json_table_facts] document_id=%s filename=%s failed; continuing with markdown table facts",
+                    document_id,
+                    filename,
+                )
+                opendataloader_json_artifacts = _empty_opendataloader_json_index_artifacts()
+        opendataloader_json_elapsed = time.perf_counter() - opendataloader_json_start
+        if OPENDATALOADER_JSON_TABLE_FACTS_ENABLED:
+            logger.info(
+                "[opendataloader_json_table_facts] document_id=%s filename=%s source_blocks=%s table_facts=%s diagnostics=%s elapsed=%.2fs",
+                document_id,
+                filename,
+                len(opendataloader_json_artifacts.source_docs),
+                len(opendataloader_json_artifacts.table_fact_docs),
+                opendataloader_json_artifacts.diagnostics_count,
+                opendataloader_json_elapsed,
+            )
 
         page_lookup_start = time.perf_counter()
         page_lookup = _build_page_lookup(raw_docs)
@@ -2045,12 +2481,13 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             final_docs,
             filename,
             document_id,
-            page_lookup
+            page_lookup,
+            opendataloader_json_artifacts,
         )
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
         logger.info(
-            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s retrieval_chunk_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
+            "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s opendataloader_json_table_fact_entries=%s retrieval_chunk_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs opendataloader_json=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
             len(raw_docs),
@@ -2060,6 +2497,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             len(final_docs),
             index_entries,
             table_fact_entries,
+            len(opendataloader_json_artifacts.table_fact_docs),
             retrieval_chunk_entries,
             CHUNK_SIZE,
             CHUNK_OVERLAP,
@@ -2068,6 +2506,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             EMBED_TABLE_RAW_CHUNKS,
             EMBEDDING_BATCH_SIZE,
             parse_elapsed,
+            opendataloader_json_elapsed,
             page_lookup_elapsed,
             normalize_elapsed,
             split_elapsed,
@@ -2154,9 +2593,45 @@ class RagTraceRequest(BaseModel):
     vector_preview_size: int = Field(default=8, ge=0, le=32)
 
 
+@dataclass(frozen=True)
+class PriorityTableFactEvidence:
+    """Prompt에 우선 배치할 수 있는 검증된 표 근거."""
+
+    evidence_text: str
+    chunk_id: str
+    source_index: int
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PriorityQueryEvidence:
+    """Prompt에 우선 배치할 수 있는 질문 맞춤 근거."""
+
+    evidence_text: str
+    chunk_id: str
+    source_index: int
+    facts: tuple[str, ...] = ()
+    intent: str | None = None
+    reasons: tuple[str, ...] = ()
+
+
 DEFAULT_SYSTEM_PROMPT = (
     "너는 인하공업전문대학 문서를 근거로 답변하는 안내 챗봇이다."
 )
+
+
+def _normalize_system_prompt_for_comparison(system_prompt: str | None) -> str:
+    """기본 prompt와 사용자 prompt를 비교하기 위해 공백 차이를 정규화한다."""
+    return " ".join(str(system_prompt or "").strip().split())
+
+
+def _has_custom_system_prompt(system_prompt: str | None) -> bool:
+    """Spring이 보내는 기본 prompt와 관리자가 바꾼 custom prompt를 구분한다."""
+    normalized_prompt = _normalize_system_prompt_for_comparison(system_prompt)
+    if not normalized_prompt:
+        return False
+    return normalized_prompt != _normalize_system_prompt_for_comparison(DEFAULT_SYSTEM_PROMPT)
+
 
 MANDATORY_RAG_PROMPT = (
     "필수 답변 규칙:\n"
@@ -2212,6 +2687,11 @@ QUERY_COLLECTION_WHERE_TERMS = {"학과", "과목", "서류", "항목", "종류"
 QUERY_PHYSICAL_LOCATION_TERMS = {"위치", "장소", "주소", "소재지", "몇층", "층", "호관"}
 
 TABLE_STATISTIC_TERMS = {"결과", "평균", "최저", "최고", "경쟁", "경쟁률", "예비", "순위", "등급"}
+PRIORITY_QUERY_ANSWER_INTENTS = {"method", "schedule"}
+PRIORITY_QUERY_PROCEDURE_TERMS = {
+    "방법", "절차", "신청", "예약", "접수", "제출", "처리", "승인", "선착순",
+    "배정", "변경", "공지", "확인", "준비", "지참", "응시", "등록", "홈페이지",
+}
 BM25_K1 = 1.5
 BM25_B = 0.75
 KIWI_SEARCH_TAG_PREFIXES = ("NN", "SL", "SN", "XR")
@@ -2280,6 +2760,13 @@ QUERY_NON_SUBJECT_PATTERNS = (
     r"^(있어|있나요|있습니까|돼|되나요|될까|인가요)$",
 )
 STRICT_LOCAL_EVIDENCE_INTENTS = {"location", "time", "cost", "count", "attire"}
+# [#110 실험2] 답이 typed value(금액·인원·시간·위치·복장)인 intent.
+# 이 intent들에서는 우선 질의 근거가 그 값 모양을 실제로 담아야 한다.
+# (값 없는 안내/부정형 근거가 우선 블록에 올라가 실제 표 값을 가리는 오도 방지)
+# 실험4 이후 이 intent들의 우선 질의 근거는 프롬프트로 승격되지 않고 고정 답변에도 쓰이지 않는다
+# (PRIORITY_QUERY_ANSWER_INTENTS 밖). 지금은 trace·로그에 남는 근거만 거르며,
+# 나중에 값 intent를 우선 근거로 승격하게 될 때의 안전장치로 유지한다.
+VALUE_TYPED_PRIORITY_INTENTS = STRICT_LOCAL_EVIDENCE_INTENTS & set(INTENT_EVIDENCE_PATTERNS)
 EVIDENCE_FOCUSED_INTENTS = {
     "location", "time", "cost", "count", "list", "attire",
     "documents", "eligibility", "method", "schedule", "formula",
@@ -2744,16 +3231,20 @@ def _build_bm25_sparse_index() -> SparseSearchIndex:
     Chroma raw chunk를 한 번 읽어 인메모리 BM25 inverted index를 만든다.
     매 질의마다 collection 전체를 다시 전송받지 않기 위한 query-time cache다.
     """
-    collection_count = collection.count()
-    if collection_count > BM25_INDEX_MAX_ENTRIES:
+    results = collection.get(
+        where={"chunk_role": "raw"},
+        include=["documents", "metadatas"],
+        limit=BM25_INDEX_MAX_ENTRIES + 1,
+    )
+    raw_result_count = len(results.get("ids", []))
+    if raw_result_count > BM25_INDEX_MAX_ENTRIES:
         logger.warning(
-            "[query_bm25_index_skip] collection_count=%s max_entries=%s",
-            collection_count,
+            "[query_bm25_index_skip] raw_records_exceed_limit=%s max_entries=%s",
+            raw_result_count,
             BM25_INDEX_MAX_ENTRIES,
         )
         return SparseSearchIndex(records=[], document_frequencies={}, postings={}, average_length=0.0)
 
-    results = collection.get(include=["documents", "metadatas"])
     records: list[SparseIndexRecord] = []
     document_frequencies: dict[str, int] = {}
     postings: dict[str, set[int]] = {}
@@ -2779,8 +3270,8 @@ def _build_bm25_sparse_index() -> SparseSearchIndex:
 
     average_length = sum(record.document_length for record in records) / len(records) if records else 0.0
     logger.info(
-        "[query_bm25_index_built] collection_count=%s raw_records=%s terms=%s avg_length=%.2f",
-        collection_count,
+        "[query_bm25_index_built] raw_result_count=%s raw_records=%s terms=%s avg_length=%.2f",
+        raw_result_count,
         len(records),
         len(document_frequencies),
         average_length,
@@ -3808,6 +4299,156 @@ def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts:
     return "\n".join(_extract_query_evidence_fact_lines(text, analysis, max_facts, meta))
 
 
+def _query_evidence_fact_body(fact: str) -> str:
+    """query evidence fact에서 label 뒤 실제 근거 본문을 꺼낸다."""
+    stripped = fact.strip()
+    if stripped.startswith("-"):
+        stripped = stripped[1:].strip()
+    if ":" in stripped:
+        return stripped.split(":", 1)[1].strip()
+    if "：" in stripped:
+        return stripped.split("：", 1)[1].strip()
+    return stripped
+
+
+def _query_evidence_fact_label(fact: str) -> str:
+    """query evidence fact의 표시 label을 반환한다."""
+    stripped = fact.strip()
+    if stripped.startswith("-"):
+        stripped = stripped[1:].strip()
+    if ":" in stripped:
+        return stripped.split(":", 1)[0].strip()
+    if "：" in stripped:
+        return stripped.split("：", 1)[0].strip()
+    return ""
+
+
+def _looks_like_numeric_table_dump(text: str) -> bool:
+    """입시결과/모집인원 표가 한 줄로 붙은 숫자 덤프인지 보수적으로 판단한다."""
+    stripped = text.strip()
+    if stripped.count("|") >= 4:
+        cells = [cell.strip() for cell in stripped.split("|") if cell.strip()]
+        if len(cells) >= 5:
+            numeric_cells = sum(
+                1
+                for cell in cells
+                if re.fullmatch(r"[-–—]|\d[\d,]*(?:\.\d+)?%?", cell)
+            )
+            if numeric_cells >= 3 and numeric_cells / len(cells) >= 0.35:
+                return True
+
+    digit_count = sum(char.isdigit() for char in stripped)
+    korean_count = len(re.findall(r"[가-힣]", stripped))
+    has_statistic_hint = any(term in stripped for term in TABLE_STATISTIC_TERMS | {"모집인원", "모집정원"})
+    return digit_count >= 10 and digit_count > korean_count and has_statistic_hint
+
+
+def _query_evidence_has_intent_terms(fact: str, analysis: QueryAnalysis) -> bool:
+    """질문 intent에 직접 답하는 용어가 근거 안에 있는지 확인한다."""
+    normalized_fact = fact.lower()
+    intent_terms = set(INTENT_EVIDENCE_TERMS.get(analysis.intent or "", set()))
+    if analysis.intent in PRIORITY_QUERY_ANSWER_INTENTS:
+        intent_terms.update(PRIORITY_QUERY_PROCEDURE_TERMS)
+    return any(term.lower() in normalized_fact for term in intent_terms)
+
+
+def _fact_has_intent_value(fact: str, intent: str | None) -> bool:
+    """값을 찾는 intent의 기대 값 모양(금액·인원·시간·위치·복장)이 근거 안에 실제로 있는지 본다.
+
+    intent 용어(예: '비용')가 아니라 값 모양(예: '30,000원')을 요구한다. '전형료는 반환하지
+    않음'처럼 주제어는 맞지만 값이 없는 안내/부정형 근거를 우선 블록에서 가려낸다.
+    """
+    if not intent:
+        return False
+    normalized = fact.lower()
+    if intent == "attire":
+        return _looks_like_attire_value(normalized)
+    for pattern in INTENT_EVIDENCE_PATTERNS.get(intent, []):
+        if re.search(pattern, normalized, flags=re.MULTILINE):
+            return True
+    return False
+
+
+def _priority_query_evidence_safety_reason(fact: str, analysis: QueryAnalysis) -> str | None:
+    """우선 질의 근거로 올릴 수 없으면 사유 code를 반환한다."""
+    stripped = fact.strip()
+    if not stripped:
+        return "empty_fact"
+
+    if _looks_like_numeric_table_dump(stripped):
+        return "numeric_table_dump"
+
+    if analysis.subject_terms and not _subject_matches_text(stripped, analysis):
+        return "subject_mismatch"
+
+    # [#110 실험2] 값을 찾는 intent(cost/count/time/location/attire)에서는 우선 질의 근거가
+    # 그 intent의 값 모양(cost→금액, count→인원 등)을 담아야 한다. 값이 없는 안내/부정형 근거가
+    # 우선 블록에 올라가 [검색 근거]의 실제 표 값을 가리는 오도(예: '전형료는 반환하지 않음')를 막는다.
+    if analysis.intent in VALUE_TYPED_PRIORITY_INTENTS and not _fact_has_intent_value(stripped, analysis.intent):
+        return "missing_intent_value"
+
+    if analysis.intent in PRIORITY_QUERY_ANSWER_INTENTS and not _query_evidence_has_intent_terms(stripped, analysis):
+        return "missing_intent_evidence"
+
+    label = _query_evidence_fact_label(stripped)
+    if label == "관련 근거" and analysis.intent in PRIORITY_QUERY_ANSWER_INTENTS:
+        body = _query_evidence_fact_body(stripped)
+        if _looks_like_numeric_table_dump(body):
+            return "numeric_table_dump"
+        if not _query_evidence_has_intent_terms(body, analysis):
+            return "generic_fact_without_procedure_signal"
+
+    return None
+
+
+def _priority_query_evidence_for_prompt(
+    docs: list[str],
+    metadatas: list[dict],
+    ids: list[str],
+    analysis: QueryAnalysis,
+) -> PriorityQueryEvidence | None:
+    """최종 검색 후보에서 prompt에 올릴 수 있는 질문 맞춤 근거를 고른다."""
+    if not analysis.intent:
+        return None
+
+    for source_index, (doc, meta, chunk_id) in enumerate(
+        zip(docs, metadatas, ids),
+        start=1,
+    ):
+        fact_lines = _extract_query_evidence_fact_lines(
+            doc,
+            analysis,
+            max_facts=5,
+            meta=meta or {},
+        )
+        selected_facts: list[str] = []
+        rejected_reasons: list[str] = []
+        for fact in fact_lines:
+            rejected_reason = _priority_query_evidence_safety_reason(fact, analysis)
+            if rejected_reason:
+                rejected_reasons.append(rejected_reason)
+                continue
+            selected_facts.append(fact)
+            if len(selected_facts) >= 3:
+                break
+
+        if not selected_facts:
+            continue
+
+        reasons = ["query_evidence_facts", f"intent={analysis.intent}"]
+        if rejected_reasons:
+            reasons.append("filtered=" + ",".join(sorted(set(rejected_reasons))))
+        return PriorityQueryEvidence(
+            evidence_text="\n".join(selected_facts),
+            chunk_id=str(chunk_id),
+            source_index=source_index,
+            facts=tuple(selected_facts),
+            intent=analysis.intent,
+            reasons=tuple(reasons),
+        )
+    return None
+
+
 def _score_query_evidence_facts(text: str, analysis: QueryAnalysis, meta: dict | None = None) -> int:
     """질문 subject와 intent가 같은 line/section에서 만난 구조화 근거에 가산점을 준다."""
     runtime_facts = _get_query_evidence_facts_from_meta(meta or {})
@@ -3848,6 +4489,13 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
 
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
+    has_structured_evidence = bool(fact_text or evidence_facts)
+    if relevant_excerpt and has_structured_evidence:
+        # [#110 실험1b] 구조화 근거(표 검색 정보 또는 질문 의도 추출 정보)가 하나라도 있으면
+        # 중복·노이즈인 원문 전체 덤프(전체 내용)를 빼고 발췌만 남겨 7.8B 모델이 답을 놓치지 않게 한다.
+        # 구조화 근거가 답을 실제로 담고 있는지는 확인하지 않으므로, 답이 원문에만 있으면 놓칠 수 있다.
+        # 구조화 근거가 없으면 답이 원문에만 있을 수 있어(실험1에서 '53' 회귀) 전체 내용을 유지한다.
+        return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}"
     if relevant_excerpt:
         return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
     return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n전체 내용:\n{doc.strip()}"
@@ -4076,6 +4724,52 @@ def _append_runtime_table_fact(meta: dict, fact_text: str) -> dict:
     return next_meta
 
 
+def _runtime_typed_table_fact_metadata(fact_meta: dict) -> dict | None:
+    """OpenDataLoader typed table_fact 복원에 필요한 metadata만 runtime에 보존한다."""
+    if fact_meta.get("table_fact_source") != OPENDATALOADER_JSON_TABLE_FACT_SOURCE:
+        return None
+    runtime_meta = {
+        key: fact_meta[key]
+        for key in OPENDATALOADER_JSON_RUNTIME_TABLE_FACT_METADATA_KEYS
+        if key in fact_meta
+    }
+    if not runtime_meta.get("table_fact_row_label") or not runtime_meta.get("table_fact_value"):
+        return None
+    return runtime_meta
+
+
+def _append_runtime_typed_table_fact(meta: dict, fact_meta: dict) -> dict:
+    """부모 청크로 합쳐진 OpenDataLoader table_fact metadata를 누적한다."""
+    typed_meta = _runtime_typed_table_fact_metadata(fact_meta)
+    if typed_meta is None:
+        return meta
+
+    next_meta = dict(meta)
+    existing = next_meta.get("matched_typed_table_fact_metadatas")
+    if isinstance(existing, list):
+        items = list(existing)
+    else:
+        items = []
+    fact_key = str(typed_meta.get("table_fact_id") or typed_meta.get("table_fact_lookup_id") or typed_meta)
+    existing_keys = {
+        str(item.get("table_fact_id") or item.get("table_fact_lookup_id") or item)
+        for item in items
+        if isinstance(item, dict)
+    }
+    if fact_key not in existing_keys:
+        items.append(typed_meta)
+    next_meta["matched_typed_table_fact_metadatas"] = items
+    return next_meta
+
+
+def _get_runtime_typed_table_fact_metadatas(meta: dict) -> list[dict]:
+    """부모 청크 runtime metadata에 누적된 typed table_fact metadata를 반환한다."""
+    matched = meta.get("matched_typed_table_fact_metadatas")
+    if not isinstance(matched, list):
+        return []
+    return [item for item in matched if isinstance(item, dict)]
+
+
 def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list[str]) -> tuple[list[str], list[dict], list[str]]:
     """검색된 table_fact를 부모 원본 청크와 연결해 답변 context를 구성한다."""
     expanded_docs: list[str] = []
@@ -4112,12 +4806,15 @@ def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list
         fact_text = doc.strip()
         if result_id in seen_indexes:
             existing_index = seen_indexes[result_id]
-            expanded_metadatas[existing_index] = _append_runtime_table_fact(expanded_metadatas[existing_index], fact_text)
+            runtime_meta = _append_runtime_table_fact(expanded_metadatas[existing_index], fact_text)
+            runtime_meta = _append_runtime_typed_table_fact(runtime_meta, meta)
+            expanded_metadatas[existing_index] = runtime_meta
             continue
 
         runtime_meta = dict(parent_meta or {})
         runtime_meta["matched_chunk_role"] = "table_fact"
         runtime_meta = _append_runtime_table_fact(runtime_meta, fact_text)
+        runtime_meta = _append_runtime_typed_table_fact(runtime_meta, meta)
         seen_indexes[result_id] = len(expanded_docs)
         expanded_docs.append(parent_doc)
         expanded_metadatas.append(runtime_meta)
@@ -4126,12 +4823,40 @@ def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list
     return expanded_docs, expanded_metadatas, expanded_ids
 
 
-def _build_rag_prompt(system_prompt: str | None, context: str, question: str) -> str:
+def _build_rag_prompt(
+    system_prompt: str | None,
+    context: str,
+    question: str,
+    priority_table_evidence: str = "",
+    priority_query_evidence: str = "",
+) -> str:
     """검색 근거와 사용자 질문을 LLM 입력 프롬프트로 조합한다."""
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
+    priority_blocks: list[str] = []
+    if priority_table_evidence.strip():
+        priority_blocks.append(f"""
+[우선 표 근거]
+{priority_table_evidence.strip()}
+
+[우선 표 근거 사용 규칙]
+- [우선 표 근거]가 있으면 이 블록의 행, 열, 값 관계를 [검색 근거]보다 먼저 사용한다.
+- [우선 표 근거]에 없는 조건, 전형, 서류, 해석은 만들지 않는다.
+""")
+    if priority_query_evidence.strip():
+        priority_blocks.append(f"""
+[우선 질의 근거]
+{priority_query_evidence.strip()}
+
+[우선 질의 근거 사용 규칙]
+- [우선 표 근거]가 있으면 [우선 표 근거]를 먼저 따른다.
+- [우선 표 근거]가 없거나 답변에 직접 필요한 내용이 부족하면 [우선 질의 근거]를 [검색 근거]보다 먼저 사용한다.
+- [우선 질의 근거]에 없는 조건, 절차, 날짜, 숫자, 해석은 만들지 않는다.
+""")
+    priority_block = "\n".join(priority_blocks)
     return f"""{prompt_policy}
 
 {MANDATORY_RAG_PROMPT}
+{priority_block}
 
 [검색 근거]
 {context}
@@ -4141,8 +4866,10 @@ def _build_rag_prompt(system_prompt: str | None, context: str, question: str) ->
 
 [답변 직전 확인]
 - 답변은 [검색 근거]에 직접 적힌 내용만 사용한다.
-- [검색 근거]의 '질문 의도 추출 정보'가 있으면 답변에 가장 먼저 사용한다.
+- [우선 표 근거]가 있으면 표의 행/열/값 판단에 가장 먼저 사용한다.
+- [우선 질의 근거]가 있으면 질문 의도에 직접 대응하는 절차와 안내 문구로 우선 사용한다.
 - [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다.
+- [검색 근거]의 '질문 의도 추출 정보'가 있으면 답변에 우선 사용한다.
 - [검색 근거]의 '질문 관련 발췌'가 있으면 그 발췌에 직접 적힌 항목만 우선 사용한다.
 - 질문 단어와 일치하는 섹션 제목이 있으면 해당 섹션 아래 내용만 답변한다.
 - 같은 청크 안에 다른 섹션이 있어도 질문과 맞지 않으면 답변에 섞지 않는다.
@@ -4191,6 +4918,78 @@ def _metadata_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _metadata_float(value: object) -> float | None:
+    """metadata 값이 실수로 해석될 때만 float로 반환한다."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _metadata_json_tuple(meta: dict, key: str) -> tuple[str, ...]:
+    """JSON 문자열 metadata를 tuple[str]로 복원한다."""
+    value = meta.get(key)
+    if isinstance(value, list):
+        return tuple(str(item).strip() for item in value if str(item).strip())
+    if not isinstance(value, str) or not value.strip():
+        return ()
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return tuple(part.strip() for part in value.split(">") if part.strip())
+    if not isinstance(decoded, list):
+        return ()
+    return tuple(str(item).strip() for item in decoded if str(item).strip())
+
+
+def _typed_table_fact_from_metadata(meta: dict, source_block_id: str) -> TableFact | None:
+    """OpenDataLoader JSON 기반 typed table_fact metadata를 TableFact로 복원한다."""
+    if meta.get("table_fact_source") != OPENDATALOADER_JSON_TABLE_FACT_SOURCE:
+        return None
+
+    row_label = str(meta.get("table_fact_row_label") or "").strip()
+    column_label = str(meta.get("table_fact_column_label") or "").strip()
+    value = str(meta.get("table_fact_value") or "").strip()
+    if not row_label or not column_label or not value:
+        return None
+
+    resolved_source_block_id = str(meta.get("source_block_id") or source_block_id or "").strip()
+    if not resolved_source_block_id:
+        return None
+
+    return TableFact(
+        fact_id=str(meta.get("table_fact_id") or meta.get("table_fact_lookup_id") or ""),
+        fact_type=str(meta.get("table_fact_type") or "cell"),
+        table_id=str(meta.get("table_fact_table_id") or ""),
+        row_label=row_label,
+        column_label=column_label,
+        value=value,
+        source_block_id=resolved_source_block_id,
+        value_type=str(meta.get("table_fact_value_type") or "text"),
+        unit=str(meta.get("table_fact_unit")).strip() if meta.get("table_fact_unit") else None,
+        row_index=_metadata_int(meta.get("table_fact_row_index")),
+        column_index=_metadata_int(meta.get("table_fact_column_index")),
+        row_header_path=_metadata_json_tuple(meta, "table_fact_row_header_path"),
+        column_path=_metadata_json_tuple(meta, "table_fact_column_path"),
+        header_path=_metadata_json_tuple(meta, "table_fact_header_path"),
+        caption=str(meta.get("table_fact_caption")).strip() if meta.get("table_fact_caption") else None,
+        legend=str(meta.get("table_fact_legend")).strip() if meta.get("table_fact_legend") else None,
+        note=str(meta.get("table_fact_note")).strip() if meta.get("table_fact_note") else None,
+        confidence=_metadata_float(meta.get("table_fact_confidence")),
+    )
+
+
+def _table_fact_table_index_from_metadata(meta: dict) -> int | None:
+    """typed table_fact metadata의 table_id에서 contract table index를 복원한다."""
+    table_id = str(meta.get("table_fact_table_id") or meta.get("table_fact_id") or "")
+    match = re.search(r":table-(\d+)", table_id)
+    if not match:
+        return None
+    return int(match.group(1))
 
 
 def _contract_block_index(chunk_id: str, meta: dict) -> int:
@@ -4440,32 +5239,64 @@ def _query_intent_contract_preview(question: str, analysis: QueryAnalysis) -> di
     return contract_to_dict(query_intent)
 
 
-def _typed_table_fact_contract_previews(
+def _typed_table_fact_contract_candidates(
     chunk_id: str,
     doc: str,
     meta: dict,
     source_block_id: str,
-    max_facts: int = 8,
-) -> list[dict]:
-    """runtime table_fact 문자열을 typed TableFact preview로 변환한다."""
-    facts = _get_matched_table_facts(meta)
-    fact_source = "matched_table_facts"
-    if not facts and meta.get("chunk_role") == "table_fact":
-        facts = [doc.strip()] if doc.strip() else []
-        fact_source = "candidate_table_fact_document"
-    elif not facts and "|" in doc:
-        facts = _extract_table_facts(doc, meta)
-        fact_source = "extracted_from_candidate_doc"
+) -> list[tuple[TableFact, str]]:
+    """runtime table_fact 문자열을 typed TableFact 후보로 변환한다."""
+    typed_table_fact = _typed_table_fact_from_metadata(meta, source_block_id)
+    candidates: list[tuple[TableFact, str]] = []
+    seen_typed_fact_ids: set[str] = set()
+    if typed_table_fact is not None:
+        candidates.append((typed_table_fact, "typed_table_fact_metadata"))
+        seen_typed_fact_ids.add(typed_table_fact.fact_id)
+
+    for typed_meta in _get_runtime_typed_table_fact_metadatas(meta):
+        runtime_typed_fact = _typed_table_fact_from_metadata(typed_meta, source_block_id)
+        if runtime_typed_fact is None or runtime_typed_fact.fact_id in seen_typed_fact_ids:
+            continue
+        candidates.append((runtime_typed_fact, "matched_typed_table_fact_metadata"))
+        seen_typed_fact_ids.add(runtime_typed_fact.fact_id)
+
+    fact_entries: list[tuple[str, str]] = []
+    seen_facts: set[str] = set()
+    for table_fact, _ in candidates:
+        seen_facts.add(_format_table_fact_index_text(table_fact))
+
+    def append_facts(facts: list[str], fact_source: str) -> None:
+        for fact in facts:
+            normalized_fact = fact.strip()
+            if not normalized_fact or normalized_fact in seen_facts:
+                continue
+            seen_facts.add(normalized_fact)
+            fact_entries.append((normalized_fact, fact_source))
+
+    if typed_table_fact is None:
+        extracted_facts = (
+            _extract_table_facts(doc, meta)
+            if "|" in doc and meta.get("chunk_role") != "table_fact"
+            else []
+        )
+        append_facts(extracted_facts, "extracted_from_candidate_doc")
+
+    if not fact_entries:
+        append_facts(_get_matched_table_facts(meta), "matched_table_facts")
+
+    if not fact_entries and typed_table_fact is None and meta.get("chunk_role") == "table_fact":
+        append_facts([doc.strip()] if doc.strip() else [], "candidate_table_fact_document")
 
     header_path = tuple(
         str(meta.get(header_key) or "").strip()
         for header_key in HEADER_METADATA_KEYS
         if str(meta.get(header_key) or "").strip()
     )
-    table_index = _contract_block_index(chunk_id, meta)
+    table_index = _table_fact_table_index_from_metadata(meta)
+    if table_index is None:
+        table_index = _contract_block_index(chunk_id, meta)
     resolved_source_block_id = str(meta.get("source_block_id") or source_block_id)
-    previews: list[dict] = []
-    for row_index, fact in enumerate(facts):
+    for row_index, (fact, fact_source) in enumerate(fact_entries):
         row_label = _extract_table_fact_row_subject(fact)
         if not row_label:
             continue
@@ -4487,15 +5318,267 @@ def _typed_table_fact_contract_previews(
                 caption=caption,
                 header_path=header_path,
             )
-            preview = contract_to_dict(table_fact)
-            preview["preview_source"] = fact_source
-            previews.append(preview)
-            if len(previews) >= max_facts:
-                return previews
-    return previews
+            candidates.append((table_fact, fact_source))
+    return candidates
 
 
-def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: int = 240) -> dict:
+def _typed_table_fact_preview(table_fact: TableFact, fact_source: str) -> dict:
+    preview = contract_to_dict(table_fact)
+    preview["preview_source"] = fact_source
+    return preview
+
+
+def _selected_table_fact_previews(
+    question: str,
+    table_fact_candidates: list[tuple[TableFact, str]],
+) -> dict:
+    typed_facts = [table_fact for table_fact, _ in table_fact_candidates]
+    selection_result = select_table_facts_for_question(question, typed_facts)
+    fact_source_by_id = {
+        table_fact.fact_id: fact_source
+        for table_fact, fact_source in table_fact_candidates
+    }
+    selected_previews = []
+    for selection in selection_result.selections:
+        preview = contract_to_dict(selection.fact)
+        preview["preview_source"] = fact_source_by_id.get(selection.fact.fact_id, "")
+        preview["selection_score"] = selection.score
+        preview["selection_reasons"] = list(selection.reasons)
+        preview["matched_row_terms"] = list(selection.matched_row_terms)
+        preview["matched_column_terms"] = list(selection.matched_column_terms)
+        selected_previews.append(preview)
+    evidence_preview = build_table_fact_evidence_preview(selection_result)
+    return {
+        "comparison_mode": selection_result.comparison_mode,
+        "target_row_labels": list(selection_result.target_row_labels),
+        "selected_facts": selected_previews,
+        "evidence_preview": {
+            "runtime_connection": "trace_only",
+            "prompt_candidate_ready": evidence_preview.prompt_candidate_ready,
+            "evidence_text": evidence_preview.evidence_text,
+            "reasons": list(evidence_preview.reasons),
+            "truncated": evidence_preview.truncated,
+            "diagnostics": [
+                {
+                    "code": diagnostic.code,
+                    "message": diagnostic.message,
+                    "details": diagnostic.details or {},
+                }
+                for diagnostic in evidence_preview.diagnostics
+            ],
+        },
+        "diagnostics": [
+            {
+                "code": diagnostic.code,
+                "message": diagnostic.message,
+                "details": diagnostic.details or {},
+            }
+            for diagnostic in selection_result.diagnostics
+        ],
+    }
+
+
+def _priority_table_fact_evidence_for_prompt(
+    question: str,
+    docs: list[str],
+    metadatas: list[dict],
+    ids: list[str],
+) -> PriorityTableFactEvidence | None:
+    """최종 검색 후보에서 prompt에 올릴 수 있는 첫 번째 표 근거를 고른다."""
+    for source_index, (doc, meta, chunk_id) in enumerate(
+        zip(docs, metadatas, ids),
+        start=1,
+    ):
+        meta = meta or {}
+        source_block_id = str(meta.get("source_block_id") or "")
+        table_fact_candidates = _typed_table_fact_contract_candidates(
+            str(chunk_id),
+            doc,
+            meta,
+            source_block_id,
+        )
+        if not table_fact_candidates:
+            continue
+        selection_result = select_table_facts_for_question(
+            question,
+            [table_fact for table_fact, _ in table_fact_candidates],
+        )
+        evidence_preview = build_table_fact_evidence_preview(selection_result)
+        if not evidence_preview.prompt_candidate_ready or not evidence_preview.evidence_text:
+            continue
+        return PriorityTableFactEvidence(
+            evidence_text=evidence_preview.evidence_text,
+            chunk_id=str(chunk_id),
+            source_index=source_index,
+            reasons=evidence_preview.reasons,
+        )
+    return None
+
+
+def _build_priority_table_fact_answer(
+    evidence: PriorityTableFactEvidence | None,
+) -> str | None:
+    """검증된 표 근거가 있으면 LLM 없이 행/열/값 기반 답변을 만든다."""
+    if evidence is None or not evidence.evidence_text.strip():
+        return None
+
+    common_contexts: list[str] = []
+    answer_lines: list[str] = []
+    for line in evidence.evidence_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("공통 맥락:"):
+            context = stripped.split(":", 1)[1].strip()
+            if context:
+                common_contexts.append(context)
+            continue
+        match = re.match(r"- 행: (?P<row>.+?) / 열: (?P<column>.+?) / 값: (?P<value>.+)$", stripped)
+        if not match:
+            continue
+        row = match.group("row").strip()
+        column = match.group("column").strip()
+        value = match.group("value").strip()
+        if not row or not column or not value:
+            continue
+        if column == "지원자격" or column.endswith(" > 지원자격"):
+            answer_lines.append(f"- {row}: {value}")
+        else:
+            answer_lines.append(f"- {row} / {column}: {value}")
+
+    if not answer_lines:
+        return None
+
+    prefix = "표 근거 기준 답변입니다."
+    if common_contexts:
+        prefix += f"\n공통 맥락: {', '.join(common_contexts)}"
+    return f"{prefix}\n" + "\n".join(answer_lines)
+
+
+def _priority_table_fact_answer_for_request(
+    evidence: PriorityTableFactEvidence | None,
+    system_prompt: str | None,
+) -> str | None:
+    """관리자가 기본값과 다른 prompt를 설정했으면 LLM이 형식 지시를 적용하게 둔다."""
+    if _has_custom_system_prompt(system_prompt):
+        return None
+    return _build_priority_table_fact_answer(evidence)
+
+
+def _priority_table_fact_answer_disabled_reason(
+    evidence: PriorityTableFactEvidence | None,
+    system_prompt: str | None,
+) -> str | None:
+    if evidence is not None and _has_custom_system_prompt(system_prompt):
+        return "custom_system_prompt"
+    return None
+
+
+def _priority_query_fact_answer_score(fact: str, analysis: QueryAnalysis) -> int:
+    """질문과 직접 맞는 query evidence fact를 고정 답변 후보로 점수화한다."""
+    score = 0
+    normalized_fact = fact.lower()
+    for term in analysis.primary_terms:
+        if term and term.lower() in normalized_fact:
+            score += 3
+    for term in analysis.subject_terms:
+        if term and term.lower() in normalized_fact:
+            score += 1
+    for term in PRIORITY_QUERY_PROCEDURE_TERMS:
+        if term.lower() in normalized_fact:
+            score += 1
+    if _query_evidence_fact_label(fact) in {"관련 근거", "관련 항목"}:
+        score -= 4
+    return score
+
+
+def _build_priority_query_evidence_answer(
+    evidence: PriorityQueryEvidence | None,
+    analysis: QueryAnalysis,
+) -> str | None:
+    """안전 조건이 확실한 질문 맞춤 근거만 LLM 없이 답변한다."""
+    if evidence is None or not evidence.facts:
+        return None
+    if evidence.intent not in PRIORITY_QUERY_ANSWER_INTENTS:
+        return None
+
+    ranked_facts = sorted(
+        (
+            (_priority_query_fact_answer_score(fact, analysis), fact)
+            for fact in evidence.facts
+        ),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    if not ranked_facts:
+        return None
+
+    best_score, best_fact = ranked_facts[0]
+    if best_score < 5:
+        return None
+
+    label = _query_evidence_fact_label(best_fact)
+    body = _query_evidence_fact_body(best_fact)
+    if not label or label in {"관련 근거", "관련 항목"}:
+        return None
+    if len(body) < 12 or _looks_like_numeric_table_dump(body):
+        return None
+    if _priority_query_evidence_safety_reason(best_fact, analysis):
+        return None
+
+    return f"질문 맞춤 근거 기준 답변입니다.\n- {label}: {body}"
+
+
+def _priority_query_evidence_answer_for_request(
+    evidence: PriorityQueryEvidence | None,
+    system_prompt: str | None,
+    analysis: QueryAnalysis,
+) -> str | None:
+    """관리자가 기본값과 다른 prompt를 설정했으면 LLM이 형식 지시를 적용하게 둔다."""
+    if _has_custom_system_prompt(system_prompt):
+        return None
+    return _build_priority_query_evidence_answer(evidence, analysis)
+
+
+def _priority_query_evidence_answer_disabled_reason(
+    evidence: PriorityQueryEvidence | None,
+    system_prompt: str | None,
+    analysis: QueryAnalysis,
+) -> str | None:
+    if evidence is None:
+        return None
+    if _has_custom_system_prompt(system_prompt):
+        return "custom_system_prompt"
+    if evidence.intent not in PRIORITY_QUERY_ANSWER_INTENTS:
+        return "unsupported_intent"
+    if _build_priority_query_evidence_answer(evidence, analysis) is None:
+        return "safety_conditions_not_met"
+    return None
+
+
+def _prompt_priority_query_evidence_text(evidence: PriorityQueryEvidence | None) -> str:
+    """[우선 질의 근거] 블록은 deterministic 답변까지 신뢰하는 intent에만 프롬프트 최우선으로 승격한다.
+
+    [#110 실험4 레버③] count/list 같은 표값 조회 intent는 추출기가 질문 행이 아닌 다른 열·다른 행
+    값을 질문 행으로 오인한다(trace 확인: '수시1차 일반고'(53) 대신 '모집 정원'(93)을 뽑고 타 학과
+    행 값까지 같은 라벨로 오염). 이 추출은 deterministic 답변으로 신뢰할 수 없어 이미 거부되는데
+    (unsupported_intent), 정작 프롬프트 최우선 블록 '[우선 질의 근거]'로는 올라가 정확한 [검색 근거]의
+    '표 검색 정보'(53) 위에 오답을 "먼저 쓰라"고 박아 7.8B를 오도한다. 신뢰 못 할 추출은 최우선
+    블록으로 승격하지 않고 [검색 근거]의 '표 검색 정보'/'질문 의도 추출 정보'에 맡긴다. 검증된
+    method/schedule(PRIORITY_QUERY_ANSWER_INTENTS)만 승격해 회귀를 막는다.
+    """
+    if evidence is None:
+        return ""
+    if evidence.intent not in PRIORITY_QUERY_ANSWER_INTENTS:
+        return ""
+    return evidence.evidence_text
+
+
+def _contract_trace_preview(
+    chunk_id: str,
+    doc: str,
+    meta: dict,
+    preview_chars: int = 240,
+    question: str | None = None,
+) -> dict:
     """현재 trace 후보를 ParsedBlock/SourceBlock 진단 preview로 변환한다."""
     meta = meta or {}
     try:
@@ -4524,11 +5607,23 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
         )
         page_span = source_block.page_span
         section_path = list(section_node.path) if section_node else []
-        typed_table_facts = _typed_table_fact_contract_previews(
+        typed_table_fact_candidates = _typed_table_fact_contract_candidates(
             str(chunk_id),
             doc,
             meta,
             source_block.source_block_id,
+        )
+        typed_table_fact_preview_limit = 8
+        typed_table_facts = [
+            _typed_table_fact_preview(table_fact, fact_source)
+            for table_fact, fact_source in typed_table_fact_candidates[
+                :typed_table_fact_preview_limit
+            ]
+        ]
+        selected_table_facts = (
+            _selected_table_fact_previews(question, typed_table_fact_candidates)
+            if question and typed_table_fact_candidates
+            else None
         )
         return {
             "parsed_block_id": parsed_block.block_id,
@@ -4584,13 +5679,25 @@ def _contract_trace_preview(chunk_id: str, doc: str, meta: dict, preview_chars: 
                 preview_chars=preview_chars,
             ),
             "typed_table_facts": typed_table_facts,
+            "typed_table_fact_count": len(typed_table_fact_candidates),
+            "typed_table_fact_preview_limit": typed_table_fact_preview_limit,
+            "typed_table_fact_preview_truncated": (
+                len(typed_table_fact_candidates) > typed_table_fact_preview_limit
+            ),
+            "selected_table_facts": selected_table_facts,
         }
     except Exception:
         logger.exception("[rag_contract_preview] failed chunk_id=%s", chunk_id)
         return {"error": "contract_preview_failed"}
 
 
-def _candidate_location_summary(chunk_id: str, doc: str, meta: dict, preview_chars: int = 360) -> dict:
+def _candidate_location_summary(
+    chunk_id: str,
+    doc: str,
+    meta: dict,
+    preview_chars: int = 360,
+    question: str | None = None,
+) -> dict:
     """trace 후보의 문서 위치와 본문 미리보기를 만든다."""
     meta = meta or {}
     return {
@@ -4605,7 +5712,12 @@ def _candidate_location_summary(chunk_id: str, doc: str, meta: dict, preview_cha
         "chunk_index": meta.get("chunk_index", _parse_chunk_index(str(chunk_id))),
         "header_path": _format_header_path(meta),
         "content_preview": _preview_text(doc, preview_chars),
-        "contract_preview": _contract_trace_preview(str(chunk_id), doc, meta),
+        "contract_preview": _contract_trace_preview(
+            str(chunk_id),
+            doc,
+            meta,
+            question=question,
+        ),
     }
 
 
@@ -4640,7 +5752,6 @@ def _record_vector_trace(
 def _record_bm25_trace(trace_by_id: dict[str, dict], candidate: dict) -> None:
     """BM25 후보의 score를 trace에 기록한다."""
     chunk_id = str(candidate["chunk_id"])
-    meta = candidate["metadata"] or {}
     entry = _ensure_trace_entry(trace_by_id, chunk_id)
     _append_trace_method(entry, "bm25")
     entry.setdefault("bm25_rank", candidate["rank"])
@@ -4741,7 +5852,7 @@ def _format_rerank_candidate(
 
     trace_key = _candidate_parent_key(str(chunk_id), meta)
     retrieval = trace_by_id.get(str(chunk_id)) or trace_by_id.get(trace_key) or {"retrieval_methods": []}
-    formatted = _candidate_location_summary(chunk_id, doc, meta)
+    formatted = _candidate_location_summary(chunk_id, doc, meta, question=question)
     formatted.update({
         "rank": rank,
         "selected_for_prompt": selected,
@@ -5095,8 +6206,38 @@ def _trace_query_retrieval(
     final_docs = focused_docs[:top_k]
     final_metadatas = focused_metadatas[:top_k]
     final_ids = focused_ids[:top_k]
+    priority_table_evidence = (
+        _priority_table_fact_evidence_for_prompt(
+            question,
+            final_docs,
+            final_metadatas,
+            final_ids,
+        )
+        if final_docs
+        else None
+    )
+    priority_query_evidence = (
+        _priority_query_evidence_for_prompt(
+            final_docs,
+            final_metadatas,
+            final_ids,
+            analysis,
+        )
+        if final_docs
+        else None
+    )
     context = _build_context(final_docs, final_metadatas, final_ids, analysis) if final_docs else ""
-    prompt = _build_rag_prompt(system_prompt, context, question) if final_docs else ""
+    prompt = (
+        _build_rag_prompt(
+            system_prompt,
+            context,
+            question,
+            priority_table_evidence.evidence_text if priority_table_evidence else "",
+            _prompt_priority_query_evidence_text(priority_query_evidence),
+        )
+        if final_docs
+        else ""
+    )
     final_candidates = [
         _format_rerank_candidate(
             index + 1,
@@ -5166,6 +6307,44 @@ def _trace_query_retrieval(
             "final_candidates": final_candidates,
         },
         "final_context": context,
+        "priority_table_evidence": {
+            "runtime_connection": "query_prompt",
+            "chunk_id": priority_table_evidence.chunk_id,
+            "source_index": priority_table_evidence.source_index,
+            "reasons": list(priority_table_evidence.reasons),
+            "evidence_text": priority_table_evidence.evidence_text,
+            "deterministic_answer": _priority_table_fact_answer_for_request(
+                priority_table_evidence,
+                system_prompt,
+            ),
+            "deterministic_answer_disabled_reason": (
+                _priority_table_fact_answer_disabled_reason(
+                    priority_table_evidence,
+                    system_prompt,
+                )
+            ),
+        } if priority_table_evidence else None,
+        "priority_query_evidence": {
+            "runtime_connection": "query_prompt",
+            "chunk_id": priority_query_evidence.chunk_id,
+            "source_index": priority_query_evidence.source_index,
+            "facts": list(priority_query_evidence.facts),
+            "intent": priority_query_evidence.intent,
+            "reasons": list(priority_query_evidence.reasons),
+            "evidence_text": priority_query_evidence.evidence_text,
+            "deterministic_answer": _priority_query_evidence_answer_for_request(
+                priority_query_evidence,
+                system_prompt,
+                analysis,
+            ),
+            "deterministic_answer_disabled_reason": (
+                _priority_query_evidence_answer_disabled_reason(
+                    priority_query_evidence,
+                    system_prompt,
+                    analysis,
+                )
+            ),
+        } if priority_query_evidence else None,
         "final_prompt_preview": _preview_text(prompt, 3000),
         "timing": {
             "embedding_elapsed": _round_float(embedding_elapsed, 4),
@@ -5261,9 +6440,36 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         return None, [], metrics
 
     context_build_start = time.perf_counter()
+    priority_table_evidence = _priority_table_fact_evidence_for_prompt(
+        question,
+        docs,
+        metadatas,
+        ids,
+    )
+    priority_query_evidence = _priority_query_evidence_for_prompt(
+        docs,
+        metadatas,
+        ids,
+        analysis,
+    )
     context = _build_context(docs, metadatas, ids, analysis)
     # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
-    prompt = _build_rag_prompt(system_prompt, context, question)
+    prompt = _build_rag_prompt(
+        system_prompt,
+        context,
+        question,
+        priority_table_evidence.evidence_text if priority_table_evidence else "",
+        _prompt_priority_query_evidence_text(priority_query_evidence),
+    )
+    priority_table_fact_answer = _priority_table_fact_answer_for_request(
+        priority_table_evidence,
+        system_prompt,
+    )
+    priority_query_evidence_answer = _priority_query_evidence_answer_for_request(
+        priority_query_evidence,
+        system_prompt,
+        analysis,
+    )
 
     # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 사용자 표시용 헤더 포함
     sources = []
@@ -5313,6 +6519,29 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         "retrieval_chunk_query_error": results.get("retrieval_chunk_query_error"),
         "query_intent": analysis.intent,
         "query_subject_terms": sorted(analysis.subject_terms),
+        "priority_table_evidence_used": priority_table_evidence is not None,
+        "priority_table_evidence_chunk_id": (
+            priority_table_evidence.chunk_id if priority_table_evidence else None
+        ),
+        "priority_table_fact_answer": priority_table_fact_answer,
+        "priority_table_fact_answer_disabled_reason": (
+            _priority_table_fact_answer_disabled_reason(
+                priority_table_evidence,
+                system_prompt,
+            )
+        ),
+        "priority_query_evidence_used": priority_query_evidence is not None,
+        "priority_query_evidence_chunk_id": (
+            priority_query_evidence.chunk_id if priority_query_evidence else None
+        ),
+        "priority_query_evidence_answer": priority_query_evidence_answer,
+        "priority_query_evidence_answer_disabled_reason": (
+            _priority_query_evidence_answer_disabled_reason(
+                priority_query_evidence,
+                system_prompt,
+                analysis,
+            )
+        ),
     }
     logger.info(
         "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s retrieval_chunk_vector=%s legacy_vector=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
@@ -5485,6 +6714,30 @@ async def query_document(request: QueryRequest):
     if prompt is None:
         return {"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
 
+    priority_answer = query_metrics.get("priority_table_fact_answer")
+    if priority_answer:
+        logger.info(
+            "[query] priority_table_fact_answer sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs total=%.2fs",
+            len(sources),
+            query_metrics["context_chars"],
+            query_metrics["prompt_chars"],
+            query_metrics["prepare_elapsed"],
+            time.perf_counter() - query_start,
+        )
+        return {"answer": priority_answer, "sources": sources}
+
+    priority_answer = query_metrics.get("priority_query_evidence_answer")
+    if priority_answer:
+        logger.info(
+            "[query] priority_query_evidence_answer sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs total=%.2fs",
+            len(sources),
+            query_metrics["context_chars"],
+            query_metrics["prompt_chars"],
+            query_metrics["prepare_elapsed"],
+            time.perf_counter() - query_start,
+        )
+        return {"answer": priority_answer, "sources": sources}
+
     # async 핸들러에서 ainvoke()로 이벤트 루프 블로킹 방지
     llm_start = time.perf_counter()
     answer = await llm.ainvoke(prompt)
@@ -5532,6 +6785,54 @@ async def query_stream(request: QueryRequest):
             empty_stream(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+        )
+
+    priority_answer = query_metrics.get("priority_table_fact_answer")
+    if priority_answer:
+        async def priority_stream():
+            yield f"data: {json.dumps({'answer': priority_answer}, ensure_ascii=False)}\n\n"
+            payload = json.dumps(
+                {"done": True, "answer": priority_answer, "sources": sources},
+                ensure_ascii=False,
+            )
+            yield f"data: {payload}\n\n"
+
+        logger.info(
+            "[query_stream] priority_table_fact_answer sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs total=%.2fs",
+            len(sources),
+            query_metrics["context_chars"],
+            query_metrics["prompt_chars"],
+            query_metrics["prepare_elapsed"],
+            time.perf_counter() - stream_start,
+        )
+        return StreamingResponse(
+            priority_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    priority_answer = query_metrics.get("priority_query_evidence_answer")
+    if priority_answer:
+        async def priority_query_stream():
+            yield f"data: {json.dumps({'answer': priority_answer}, ensure_ascii=False)}\n\n"
+            payload = json.dumps(
+                {"done": True, "answer": priority_answer, "sources": sources},
+                ensure_ascii=False,
+            )
+            yield f"data: {payload}\n\n"
+
+        logger.info(
+            "[query_stream] priority_query_evidence_answer sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs total=%.2fs",
+            len(sources),
+            query_metrics["context_chars"],
+            query_metrics["prompt_chars"],
+            query_metrics["prepare_elapsed"],
+            time.perf_counter() - stream_start,
+        )
+        return StreamingResponse(
+            priority_query_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     async def token_stream():

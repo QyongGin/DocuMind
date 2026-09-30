@@ -165,14 +165,20 @@ def build_table_cell_fact(
     value: str,
     source_block_id: str,
     caption: str | None = None,
+    row_header_path: Sequence[str] = (),
     column_path: Sequence[str] = (),
     header_path: Sequence[str] = (),
     fact_type: str = "cell",
     confidence: float | None = None,
 ) -> TableFact:
     """Create a typed TableFact from one table cell and its row/column labels."""
+    cleaned_row_label = _clean_cell_text(row_label)
     cleaned_value = _clean_cell_text(value)
     value_type, unit = infer_table_value_type(cleaned_value)
+    row_path_parts = [_clean_cell_text(str(part)) for part in row_header_path]
+    resolved_row_header_path = tuple(part for part in row_path_parts if part)
+    if not resolved_row_header_path and cleaned_row_label:
+        resolved_row_header_path = (cleaned_row_label,)
     resolved_column_path = tuple(
         str(part).strip()
         for part in column_path
@@ -185,7 +191,7 @@ def build_table_cell_fact(
         fact_id=_table_fact_id(document_id, table_index, row_index, column_index),
         fact_type=fact_type,
         table_id=_contract_id(document_id, "table", table_index),
-        row_label=_clean_cell_text(row_label) or "해당 행",
+        row_label=cleaned_row_label or "해당 행",
         column_label=_clean_cell_text(column_label) or f"열 {column_index + 1}",
         value=cleaned_value,
         source_block_id=source_block_id,
@@ -193,6 +199,7 @@ def build_table_cell_fact(
         unit=unit,
         row_index=row_index,
         column_index=column_index,
+        row_header_path=resolved_row_header_path,
         column_path=resolved_column_path,
         header_path=tuple(str(part).strip() for part in header_path if str(part).strip()),
         caption=_clean_cell_text(caption or "") or None,

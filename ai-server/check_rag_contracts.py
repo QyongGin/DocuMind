@@ -65,6 +65,7 @@ def build_contract_sample() -> dict:
         value="10만 원",
         source_block_id=source_block.source_block_id,
         caption="Table Section",
+        row_header_path=("Group A", "Item A"),
         header_path=("Table Section",),
         confidence=0.95,
     )
@@ -174,6 +175,7 @@ def main() -> None:
     assert decoded["retrieval_chunk"]["section_ids"] == [decoded["section"]["section_id"]]
     assert decoded["table_fact"]["source_block_id"] == decoded["source_block"]["source_block_id"]
     assert decoded["table_fact"]["row_label"] == "Item A"
+    assert decoded["table_fact"]["row_header_path"] == ["Group A", "Item A"]
     assert decoded["table_fact"]["column_label"] == "Value"
     assert decoded["table_fact"]["value"] == "10만 원"
     assert decoded["table_fact"]["value_type"] == "money"

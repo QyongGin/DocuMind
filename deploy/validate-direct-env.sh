@@ -1,4 +1,6 @@
 #!/usr/bin/env sh
+# NOTE (2026-09): Written for the May 2026 school server trial, which is no longer available.
+# Not used now. Revisit when deploying to a school server.
 set -eu
 
 ENV_FILE="${1:-.env}"
@@ -33,7 +35,7 @@ require_non_empty() {
 }
 
 [ -f "$ENV_FILE" ] || fail "${ENV_FILE} does not exist"
-[ -n "$SERVER_IP" ] || fail "server IP is required. Usage: deploy/validate-direct-env.sh .env 34.64.63.109 19580"
+[ -n "$SERVER_IP" ] || fail "server IP is required. Usage: deploy/validate-direct-env.sh .env <SERVER_IP> 19580"
 
 required_keys="
 MYSQL_ROOT_PASSWORD
