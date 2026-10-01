@@ -4,9 +4,11 @@
 """
 
 import re
+import zipfile
 from dataclasses import dataclass, field
 from datetime import date
 from html import escape as html_escape
+from html import unescape as html_unescape
 
 import pypdfium2
 from bs4 import BeautifulSoup
@@ -89,6 +91,7 @@ class PostParts:
     body_chars: int
     attachments: list[Attachment] = field(default_factory=list)
     modified_at: str | None = None
+    body_images: int = 0
 
 
 def post_parts(article_html: str) -> PostParts:
@@ -114,8 +117,9 @@ def post_parts(article_html: str) -> PostParts:
         if match and name:
             attachments.append(Attachment(match.group(1), name, link["href"]))
     body_chars = len(re.sub(r"\s+", "", body.get_text())) if body is not None else 0
+    body_images = len(body.find_all("img")) if body is not None else 0
     return PostParts(title, posted, body_html, body_chars, attachments,
-                     normalize_date(modified.group(1)) if modified else None)
+                     normalize_date(modified.group(1)) if modified else None, body_images)
 
 
 def faq_document(question: str, answer_html: str) -> str:
@@ -154,6 +158,24 @@ def hwp_metrics(path: str) -> tuple[int, int, str, str | None]:
         note = "암호 또는 배포용 HWP라 글자를 읽지 못함"
     text = re.sub(r"\s+", " ", result.text).strip()
     return len(text), result.tables, text, note
+
+
+def hwpx_metrics(path: str) -> tuple[int, int, str]:
+    """(글자 수, 표 수, 글). HWPX는 zip 안 `Contents/sectionN.xml`의 `<hp:t>`에 글이 있다(OWPML)."""
+    texts: list[str] = []
+    tables = 0
+    with zipfile.ZipFile(path) as archive:
+        names = sorted(
+            (name for name in archive.namelist() if re.fullmatch(r"Contents/section\d+\.xml", name)),
+            key=lambda name: int(re.search(r"\d+", name.rsplit("/", 1)[-1]).group()),
+        )
+        for name in names:
+            xml = archive.read(name).decode("utf-8", errors="replace")
+            tables += len(re.findall(r"<(?:\w+:)?tbl[\s>]", xml))
+            for run in re.findall(r"<(?:\w+:)?t(?:\s[^>]*)?>(.*?)</(?:\w+:)?t>", xml, flags=re.S):
+                texts.append(html_unescape(re.sub(r"<[^>]+>", "", run)))
+    text = re.sub(r"\s+", " ", " ".join(texts)).strip()
+    return len(text), tables, text
 
 
 def image_heavy_pdf(chars: int, pages: int) -> bool:
@@ -242,8 +264,16 @@ def suggest_topic(title: str, fixed: str | None = None, section_topic: str | Non
 
 
 def sniff_format(name: str, head: bytes) -> str:
-    """파일명 확장자로 형식을 정하고, 확장자가 없거나 낯설면 앞부분 바이트로 본다."""
+    """파일명 확장자로 형식을 정하고, 확장자가 없거나 낯설면 앞부분 바이트로 본다.
+
+    HWP는 확장자를 믿지 않는다: `.hwp`인데 내용은 HWPX(zip, mimetype `application/hwp+zip`)인 첨부가 있다
+    (2026-10-02 전체 수집 실측 12개).
+    """
     found = file_format(name)
+    if head.startswith(b"PK\x03\x04") and (found in ("hwp", "etc") and b"application/hwp+zip" in head):
+        return "hwpx"
+    if head.startswith(b"\xd0\xcf\x11\xe0") and found == "hwpx":
+        return "hwp"
     if found != "etc":
         return found
     if head.startswith(b"%PDF"):

@@ -17,6 +17,9 @@ from .ledger import Ledger
 from .polite import PoliteSession, RobotsDisallowed
 
 TARGETS = ("pages", "regulations", "faq", "ipsi", "depts", "notices")
+EMPTY_FILE_NOTE = "빈 파일(0바이트): 학교 사이트가 내용 없이 내려준다"
+NO_CONTENT_NOTE = "본문 글·그림·첨부 없음(동영상·링크만 있는 글 등)"
+UNREADABLE_NOTE_PREFIXES = ("글자 추출 실패", "암호 또는 배포용")
 
 
 @dataclass
@@ -38,6 +41,29 @@ class Counts:
     skipped: int = 0
     empty: int = 0
     failed: int = 0
+
+
+def measure_file(fmt: str, path: Path, html: str | None = None) -> tuple[dict, str | None, str | None]:
+    """(대장 칸, 추출한 글 — 못 읽으면 None, 비고)."""
+    empty = {"text_chars": None, "table_count": None, "image_heavy": None}
+    try:
+        if fmt == "html":
+            chars, tables, images, text = extract.html_metrics(html if html is not None else path.read_text("utf-8"))
+            return {"text_chars": chars, "table_count": tables, "image_heavy": int(extract.image_heavy_html(chars, images))}, text, None
+        if fmt == "pdf":
+            chars, pages, text = extract.pdf_metrics(str(path))
+            return {"text_chars": chars, "table_count": None, "image_heavy": int(extract.image_heavy_pdf(chars, pages))}, text, f"{pages}쪽"
+        if fmt == "hwp":
+            chars, tables, text, note = extract.hwp_metrics(str(path))
+            if note:
+                return empty, None, note
+            return {"text_chars": chars, "table_count": tables, "image_heavy": 0}, text, None
+        if fmt == "hwpx":
+            chars, tables, text = extract.hwpx_metrics(str(path))
+            return {"text_chars": chars, "table_count": tables, "image_heavy": 0}, text, None
+    except Exception as error:  # 손상된 파일 등: 대장에 남기고 계속한다
+        return empty, None, f"글자 추출 실패: {type(error).__name__}"
+    return empty, None, None
 
 
 def three_years_before(today: date) -> date:
@@ -166,30 +192,11 @@ class Collector:
         target.write_bytes(data)
         return {"file_path": relpath.as_posix(), "sha256": digest, "size_bytes": len(data), "twin": None}
 
-    def measure(self, fmt: str, path: Path, html: str | None) -> tuple[dict, str | None, str | None]:
-        """(대장 칸, 추출한 글 — 못 읽으면 None, 비고)."""
-        empty = {"text_chars": None, "table_count": None, "image_heavy": None}
-        try:
-            if fmt == "html":
-                chars, tables, images, text = extract.html_metrics(html if html is not None else path.read_text("utf-8"))
-                return {"text_chars": chars, "table_count": tables, "image_heavy": int(extract.image_heavy_html(chars, images))}, text, None
-            if fmt == "pdf":
-                chars, pages, text = extract.pdf_metrics(str(path))
-                return {"text_chars": chars, "table_count": None, "image_heavy": int(extract.image_heavy_pdf(chars, pages))}, text, f"{pages}쪽"
-            if fmt == "hwp":
-                chars, tables, text, note = extract.hwp_metrics(str(path))
-                if note:
-                    return empty, None, note
-                return {"text_chars": chars, "table_count": tables, "image_heavy": 0}, text, None
-        except Exception as error:  # 손상된 파일 등: 대장에 남기고 계속한다
-            return empty, None, f"글자 추출 실패: {type(error).__name__}"
-        return empty, None, None
-
     def save_and_record(self, row: dict, data: bytes, ext: str, html: str | None = None,
-                        force_hold: str | None = None) -> None:
+                        force_hold: str | None = None, no_content: bool = False) -> None:
         stored = self.store(row["doc_id"], row["kind"], ext, data)
         row.update(file_path=stored["file_path"], sha256=stored["sha256"], size_bytes=stored["size_bytes"])
-        measured, text, note = self.measure(row["format"], self.root / stored["file_path"], html)
+        measured, text, note = measure_file(row["format"], self.root / stored["file_path"], html)
         row.update(measured)
         notes = [part for part in (row.get("notes"), note) if part]
 
@@ -216,6 +223,9 @@ class Collector:
             notes.append(f"내용 중복: {stored['twin']}")
             row["index_status"] = "제외"
             self.counts.duplicate += 1
+        elif no_content:
+            notes.append(NO_CONTENT_NOTE)
+            row["index_status"] = "제외"
         else:
             row["index_status"] = extract.index_status(status, row.get("valid_until"), self.today)
         row["notes"] = " / ".join(notes) or None
@@ -235,7 +245,13 @@ class Collector:
             name = fallback_name
         if on_name:
             on_name(row, name)
-        row["format"] = extract.sniff_format(name, fetched.content[:8])
+        if not fetched.content:
+            # 학교 사이트가 내용 없이 내려주는 첨부(실측 4개). 원본은 남기지 않고 행만 기록한다
+            row.update(size_bytes=0, text_chars=0, notes=EMPTY_FILE_NOTE, pii_status="통과", index_status="제외")
+            self.ledger.upsert(row)
+            self.counts.empty += 1
+            return True
+        row["format"] = extract.sniff_format(name, fetched.content[:128])
         ext = row["format"] if row["format"] not in ("image", "etc") else extract.file_ext(name)
         self.save_and_record(row, fetched.content, ext, force_hold=force_hold)
         return True
@@ -334,7 +350,9 @@ class Collector:
     def post(self, board: scope.Board, listed: sites.ListRow, referer: str, regulations: bool) -> None:
         doc_id = ids.post_id(board.site, board.board_no, listed.seq)
         children = [row["doc_id"] for row in self.ledger.children(doc_id)]
-        if self.unit_done(doc_id, [doc_id, *children]):
+        # 끝낸 글이라도 대장에 본문 행도 첨부 행도 없으면 다시 처리한다(모든 글은 대장에 남아야 한다)
+        represented = self.ledger.has(doc_id) or bool(children)
+        if represented and self.unit_done(doc_id, [doc_id, *children]):
             self.counts.skipped += 1
             return
         self._unit_failed = False
@@ -358,12 +376,15 @@ class Collector:
         suggestions = (self.regulation_suggestions(title) if regulations
                        else self.notice_suggestions(board, title, posted_at, basis))
         existing = self.ledger.get(doc_id)
-        if parts.body_chars >= scope.POST_MIN_CHARS and not (existing and existing["file_path"]):
+        has_body = parts.body_chars >= scope.POST_MIN_CHARS or parts.body_images > 0
+        if (has_body or not parts.attachments) and not (existing and existing["file_path"]):
+            # 그림만 있는 글(포스터)은 image_heavy 행, 글·그림·첨부가 모두 없는 글도 출처로 남긴다(색인 제외)
             row = self.base_row(doc_id, "post", board.site, url, title, "html", posted_at=posted_at,
                                 **common, **suggestions)
-            self.save_and_record(row, parts.body_html.encode("utf-8"), "html", html=parts.body_html)
-        elif parts.body_chars < scope.POST_MIN_CHARS:
-            self.counts.empty += 1
+            self.save_and_record(row, parts.body_html.encode("utf-8"), "html", html=parts.body_html,
+                                 no_content=not has_body)
+        elif not has_body:
+            self.counts.empty += 1  # 본문 없이 첨부만 있는 글: 첨부 행의 parent_id로 남는다
         for attachment in parts.attachments:
             self.attachment(board, doc_id, attachment, fetched.url, posted_at, suggestions, regulations)
         self.log(f"  글 {doc_id} {title} (첨부 {len(parts.attachments)})")
@@ -556,6 +577,69 @@ class Collector:
         self.log(f"  학과 {dept} ({site_id})")
         if self.counts.failed == before:
             self.ledger.mark_visited(unit)
+
+
+def remeasure(ledger: Ledger, root: str | Path, today: date) -> dict:
+    """글을 읽지 못한 행을 원본으로 다시 잰다(형식 오인 정정, 새 추출기 추가 뒤). 사람이 확인한 행은 두고, 요청은 보내지 않는다.
+
+    - 내용이 HWPX인 `.hwp`처럼 형식이 바뀌면 파일 확장자도 고친다(같은 파일을 가리키는 행 모두)
+    - 0바이트 파일은 지우고 '빈 파일'로 기록한다
+    - '2차 검사 못 함'으로 보류했던 행은 읽힌 글로 개인정보를 다시 판단한다
+    """
+    root = Path(root)
+    report = {"checked": 0, "format_fixed": 0, "now_readable": 0, "empty_files": 0}
+    doc_ids = [row[0] for row in ledger.con.execute(
+        "SELECT doc_id FROM ledger WHERE file_path IS NOT NULL AND text_chars IS NULL AND reviewed = 0 ORDER BY doc_id")]
+    for doc_id in doc_ids:
+        row = ledger.get(doc_id)  # 앞 행에서 파일 이름이 바뀌었을 수 있다
+        if not row or not row["file_path"] or row["text_chars"] is not None:
+            continue
+        path = root / row["file_path"]
+        if not path.exists():
+            continue
+        report["checked"] += 1
+        if path.stat().st_size == 0:
+            old_path = row["file_path"]
+            in_use = ledger.con.execute(
+                "SELECT 1 FROM ledger WHERE file_path = ? AND reviewed = 1", (old_path,)).fetchone()
+            if not in_use:  # 사람이 확인한 행이 가리키는 파일은 지우지 않는다
+                path.unlink()
+            ledger.con.execute(
+                "UPDATE ledger SET file_path = NULL, size_bytes = 0, text_chars = 0, notes = ?, pii_status = '통과', "
+                "pii_reason = NULL, index_status = '제외' WHERE file_path = ? AND reviewed = 0",
+                (EMPTY_FILE_NOTE, old_path),
+            )
+            ledger.con.commit()
+            report["empty_files"] += 1
+            continue
+        with open(path, "rb") as handle:
+            head = handle.read(128)
+        fmt = extract.sniff_format(row["title"], head)
+        if fmt != row["format"]:
+            report["format_fixed"] += 1
+            if fmt in ("hwp", "hwpx", "pdf") and path.suffix.lower() != f".{fmt}":
+                new_rel = Path(row["file_path"]).with_suffix(f".{fmt}").as_posix()
+                path.rename(root / new_rel)
+                ledger.con.execute("UPDATE ledger SET file_path = ? WHERE file_path = ?", (new_rel, row["file_path"]))
+                ledger.con.commit()
+                row["file_path"], path = new_rel, root / new_rel
+        measured, text, note = measure_file(fmt, path)
+        kept = [part for part in (row["notes"] or "").split(" / ")
+                if part and not part.startswith(UNREADABLE_NOTE_PREFIXES)]
+        if note:
+            kept.insert(0, note)
+        update = {"doc_id": doc_id, "format": fmt, **measured, "notes": " / ".join(kept) or None}
+        if (row["pii_reason"] or "").startswith("2차 검사 못 함"):
+            if text is None:
+                update["pii_reason"] = f"2차 검사 못 함(형식 {fmt}{', ' + note if note else ''})"
+            else:
+                update["pii_status"], update["pii_reason"] = pii.judge(row["title"], text)
+                report["now_readable"] += 1
+        status = update.get("pii_status", row["pii_status"])
+        duplicate = any(part.startswith("내용 중복") for part in kept)
+        update["index_status"] = "제외" if duplicate else extract.index_status(status, row["valid_until"], today)
+        ledger.upsert(update)
+    return report
 
 
 def viewer_name(row: dict, name: str) -> None:

@@ -139,3 +139,22 @@ def test_formats():
     assert extract.sniff_format("temp_1.tmp", b"%PDF-1.4") == "pdf"
     assert extract.sniff_format("noext", b"\xd0\xcf\x11\xe0\xa1\xb1") == "hwp"
     assert extract.file_ext("a.b.PDF") == "pdf"
+
+
+def test_post_parts_counts_images():
+    html = fixture("article.html").replace("<p>문의는 학사 담당", "<p><img src='/poster.png'>문의는 학사 담당")
+    assert extract.post_parts(html).body_images == 1
+    assert extract.post_parts(fixture("article.html")).body_images == 0
+
+
+def test_hwpx_detected_even_with_hwp_extension(tmp_path):
+    from conftest import make_hwpx
+
+    data = make_hwpx(["첫 문단", "둘째 문단 &amp; 끝"], tables=1)
+    assert extract.sniff_format("안내.hwp", data[:128]) == "hwpx"  # 확장자는 .hwp, 내용은 HWPX
+    assert extract.sniff_format("안내.hwpx", b"\xd0\xcf\x11\xe0" + b"\x00" * 8) == "hwp"
+    assert extract.sniff_format("자료.zip", b"PK\x03\x04" + b"\x00" * 40) == "etc"
+    path = tmp_path / "a.hwpx"
+    path.write_bytes(data)
+    chars, tables, text = extract.hwpx_metrics(str(path))
+    assert text == "첫 문단 둘째 문단 & 끝 표 칸" and tables == 1 and chars == len(text)

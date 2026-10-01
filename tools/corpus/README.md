@@ -27,6 +27,9 @@
 | 403·429·5xx가 이어지면 간격을 두 배로, 5번 연속이면 멈춘다 | `PoliteSession.get` (간격 상한 30초) |
 | 이어 받기 | 끝까지 처리한 단위(페이지·글·FAQ 게시판)를 `visits`에 적고 다음 실행에서 건너뛴다. 실패가 있었던 단위는 다시 시도한다 |
 | 같은 내용은 한 번만 | SHA256이 같은 파일은 새로 쓰지 않고 먼저 받은 파일을 가리키며, 비고에 `내용 중복`을 적고 색인에서 뺀다 |
+| 글은 모두 대장에 | 그림만 있는 글(포스터)은 `image_heavy=1` 행, 글·그림·첨부가 모두 없는 글은 색인 제외 행으로 남긴다. 본문 없이 첨부만 있는 글은 첨부 행의 `parent_id`로 남는다 |
+| 빈 첨부 | 학교 사이트가 0바이트로 내려주는 첨부는 원본 없이 `빈 파일` 행만 남긴다 |
+| HWP·HWPX | 확장자를 믿지 않고 내용으로 판단한다(`.hwp`인데 내용은 HWPX인 첨부가 있다) |
 | 첨부 하나 100MB 상한 | 넘으면 받지 않고 실패 목록에 남긴다 |
 
 ## 개인정보 2단계 검사
@@ -59,6 +62,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m corpus export-review review.csv --unreviewed
 .venv/bin/python -m corpus import-review review.csv
 .venv/bin/python -m corpus add-file <파일> --doc-id ipsi/file/<이름> --site ipsi --topic 입시 --year 2026
+.venv/bin/python -m corpus remeasure                 # 글을 읽지 못한 행을 원본으로 다시 재기(요청 없음)
 ```
 
 `--root`를 주지 않으면 저장소의 `Assets/corpus/`를 쓴다. 대상은 `pages,regulations,faq,ipsi,depts,notices`.
@@ -84,7 +88,8 @@ Assets/corpus/
 | 용도 | `visibility` `index_status` `split` `uploaded_document_id` `reviewed` `notes` | 규칙·사람 |
 
 사람이 확인한 행(`reviewed=1`)의 내용 판단 칸은 다시 수집해도 덮어쓰지 않는다. 값 목록은 `CHECK` 제약으로 막는다.
-글자 수는 HTML은 BeautifulSoup, PDF는 pypdfium2, HWP는 olefile로 꺼낸 글 기준이다(공백을 하나로 줄임).
+글자 수는 HTML은 BeautifulSoup, PDF는 pypdfium2, HWP는 olefile, HWPX는 zip 안 `Contents/sectionN.xml`의 `<hp:t>`에서 꺼낸 글 기준이다(공백을 하나로 줄임).
+추출기를 고치거나 더하면 `remeasure`로 글을 읽지 못했던 행만 다시 잰다(사람이 확인한 행은 두고, 개인정보는 읽힌 글로 다시 판단).
 
 ## 테스트
 
