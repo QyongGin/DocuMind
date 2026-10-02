@@ -315,3 +315,28 @@ def test_remeasure_keeps_empty_file_used_by_reviewed_row(tmp_path, ledger):
     remeasure(ledger, tmp_path, TODAY)
     assert (raw / "e.hwp").exists()  # 확인한 행(a2)이 가리키므로 남긴다
     assert ledger.get("www/bbs/1/1/a1")["file_path"] is None and ledger.get("www/bbs/1/1/a2")["file_path"] == "raw/e.hwp"
+
+
+def test_approved_post_with_keyword_title_gets_its_attachment(tmp_path, ledger, small_scope):
+    """사람이 통과로 확인한 글은 제목에 키워드(대상자)가 있어도 다시 보류하지 않고 첨부를 받는다."""
+    from conftest import PDF_ONLY_ATTACH, board_list, k2_article
+
+    routes = {f"{WWW}/robots.txt": (200, "User-agent: *\nAllow: /\n", {})}
+    routes[f"{WWW}/bbs/kr/11/artclList.do?page=1"] = ok(board_list([("3001", "장학금 지원대상자 선발 안내", "2026.09.15.")]))
+    routes[f"{WWW}/bbs/kr/11/3001/artclView.do"] = ok(k2_article(
+        "3001", "장학금 지원대상자 선발 안내", "2026.09.15.", "<p>신청 자격과 기간을 안내한다. 자세한 내용은 붙임 공고를 본다.</p>",
+        [("8001", "지원대상자 선발 공고.pdf")]))
+    routes[f"{WWW}/bbs/kr/11/8001/download.do"] = ok(PDF_ONLY_ATTACH, "지원대상자 선발 공고.pdf")
+    run(tmp_path, ledger, ["notices"], routes)  # 1차: 글을 열지 않고 보류
+    assert ledger.get("www/bbs/11/3001")["file_path"] is None
+    # 사람이 글을 통과로 확인 → 다음 수집에서 글을 받는다. 첨부는 파일명 키워드로 다시 1차 보류
+    ledger.con.execute("UPDATE ledger SET pii_status='통과', reviewed=1 WHERE doc_id='www/bbs/11/3001'")
+    run(tmp_path, ledger, ["notices"], routes)
+    assert ledger.get("www/bbs/11/3001")["file_path"]
+    attach = "www/bbs/11/3001/a8001"
+    assert ledger.get(attach)["pii_status"] == "보류" and ledger.get(attach)["file_path"] is None
+    # 사람이 첨부도 통과로 확인 → 제목에 키워드가 있는 글이어도 첨부를 받는다
+    ledger.con.execute("UPDATE ledger SET pii_status='통과', reviewed=1 WHERE doc_id=?", (attach,))
+    http, _ = run(tmp_path, ledger, ["notices"], routes)
+    assert f"{WWW}/bbs/kr/11/8001/download.do" in http.requested
+    assert ledger.get(attach)["file_path"]

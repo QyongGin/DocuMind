@@ -191,3 +191,9 @@ def test_request_cap_stops_run():
     session.get("https://example.inhatc.ac.kr/a")  # robots + a
     with pytest.raises(Stop):
         session.get("https://example.inhatc.ac.kr/a")
+
+
+def test_hwp_para_text_joins_surrogate_pairs():
+    text = "규정 😀 끝"
+    assert hwp.para_text(text.encode("utf-16-le")) == text
+    text.encode("utf-8")  # 대리 문자가 홀로 남으면 여기서 실패한다
