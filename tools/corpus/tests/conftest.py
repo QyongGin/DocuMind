@@ -4,7 +4,9 @@
 중첩)만 따르고 글은 지어낸 것이다.
 """
 
+import io
 import sys
+import zipfile
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -24,6 +26,18 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 TODAY = date(2026, 10, 2)
 # 금요일 밤 10시: 업무 시간(평일 9~18시) 밖
 EVENING = datetime(2026, 10, 2, 22, 0, tzinfo=KST)
+
+
+def make_hwpx(paragraphs: list[str], tables: int = 0) -> bytes:
+    """테스트용 HWPX: 첫 항목 mimetype(압축 없음) + Contents/section0.xml의 <hp:t> 글."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(zipfile.ZipInfo("mimetype"), "application/hwp+zip")
+        body = "".join(f"<hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p>" for text in paragraphs)
+        body += "<hp:tbl><hp:tr><hp:tc><hp:p><hp:run><hp:t>표 칸</hp:t></hp:run></hp:p></hp:tc></hp:tr></hp:tbl>" * tables
+        archive.writestr("Contents/section0.xml",
+                         f"<?xml version='1.0' encoding='UTF-8'?><hs:sec xmlns:hs='s' xmlns:hp='p'>{body}</hs:sec>")
+    return buffer.getvalue()
 
 
 def fixture(name: str) -> str:

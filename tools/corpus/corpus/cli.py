@@ -4,6 +4,7 @@
     export-review  사람이 확인할 칸을 CSV로 내보내기
     import-review  확인한 CSV를 대장에 반영하고, 개인정보 '제외' 원본을 지운다
     add-file       이미 가진 파일을 대장에 등록(예: 2026학년도 모집요강)
+    remeasure      글을 읽지 못한 행을 원본으로 다시 재기(형식 오인 정정, 빈 파일 정리). 요청은 보내지 않는다
     stats          대장 집계(형식·주제·개인정보·첨부 실측 크기)
     failures       실패 목록
 """
@@ -17,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import extract, pii
-from .collect import TARGETS, Collector, counts_dict
+from .collect import TARGETS, Collector, counts_dict, remeasure
 from .ledger import Ledger
 from .polite import KST, PoliteSession, Stop
 
@@ -115,6 +116,15 @@ def cmd_add_file(args) -> int:
     return 0
 
 
+def cmd_remeasure(args) -> int:
+    root = Path(args.root)
+    ledger = ledger_at(root)
+    report = remeasure(ledger, root, datetime.now(KST).date())
+    ledger.close()
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
+
+
 def cmd_stats(args) -> int:
     ledger = ledger_at(Path(args.root))
     print(json.dumps(ledger.stats(), ensure_ascii=False, indent=2))
@@ -165,6 +175,9 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("--group")
     add.add_argument("--notes")
     add.set_defaults(func=cmd_add_file)
+
+    again = commands.add_parser("remeasure", help="읽지 못한 행 다시 재기(요청 없음)")
+    again.set_defaults(func=cmd_remeasure)
 
     stats = commands.add_parser("stats", help="대장 집계")
     stats.set_defaults(func=cmd_stats)

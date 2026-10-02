@@ -219,3 +219,107 @@ def test_faq_first_pass_hit_keeps_no_original(tmp_path, ledger, small_scope):
     held = [row for row in rows_by_id(ledger).values() if row["title"] == "합격자 발표는 언제인가요?"][0]
     assert (held["pii_status"], held["file_path"], held["index_status"]) == ("보류", None, "제외")
     assert len(list((tmp_path / "raw/www/faq/579").glob("*.html"))) == 2
+
+
+def edge_routes():
+    """그림만 있는 글, 내용 없는 글, 첨부만 있는 글, 빈 첨부, .hwp로 올린 HWPX."""
+    from conftest import PDF_ONLY_ATTACH, board_list, k2_article, make_hwpx
+
+    routes = {f"{WWW}/robots.txt": (200, "User-agent: *\nAllow: /\n", {})}
+    routes[f"{WWW}/bbs/kr/11/artclList.do?page=1"] = ok(board_list([
+        ("2001", "포스터 공지", "2026.09.10."), ("2002", "동영상 공지", "2026.09.11."),
+        ("2003", "첨부만 공지", "2026.09.12."), ("2004", "빈 첨부 공지", "2026.09.13."),
+        ("2005", "HWPX 첨부 공지", "2026.09.14."),
+    ]))
+    article = f"{WWW}/bbs/kr/11/{{}}/artclView.do"
+    routes[article.format(2001)] = ok(k2_article("2001", "포스터 공지", "2026.09.10.", "<p><img src='/p.png'></p>", []))
+    routes[article.format(2002)] = ok(k2_article("2002", "동영상 공지", "2026.09.11.", "<iframe src='/v'></iframe>", []))
+    routes[article.format(2003)] = ok(k2_article("2003", "첨부만 공지", "2026.09.12.", "", [("6003", "안내.pdf")]))
+    routes[article.format(2004)] = ok(k2_article("2004", "빈 첨부 공지", "2026.09.13.", "<p>첨부 서식을 내려받아 제출한다. 기한은 이번 달 말이다.</p>",
+                                                 [("6001", "신청서.hwp")]))
+    routes[article.format(2005)] = ok(k2_article("2005", "HWPX 첨부 공지", "2026.09.14.", "<p>세부 내용은 붙임 문서를 참고한다. 문의는 담당 부서로 한다.</p>",
+                                                 [("6002", "세부 안내.hwp")]))
+    routes[f"{WWW}/bbs/kr/11/6003/download.do"] = ok(PDF_ONLY_ATTACH, "안내.pdf")
+    routes[f"{WWW}/bbs/kr/11/6001/download.do"] = ok(b"", "신청서.hwp")
+    routes[f"{WWW}/bbs/kr/11/6002/download.do"] = ok(make_hwpx(["신청 기간은 9월 말까지이다."], tables=1), "세부 안내.hwp")
+    return routes
+
+
+def test_every_post_is_recorded(tmp_path, ledger, small_scope):
+    run(tmp_path, ledger, ["notices"], edge_routes())
+    rows = rows_by_id(ledger)
+    poster = rows["www/bbs/11/2001"]  # 그림만 있는 글도 행으로(그림 위주)
+    assert poster["image_heavy"] == 1 and poster["index_status"] == "색인" and poster["pii_status"] == "통과"
+    video = rows["www/bbs/11/2002"]  # 글·그림·첨부가 모두 없는 글도 출처로 남기되 색인 제외
+    assert video["index_status"] == "제외" and "본문 글·그림·첨부 없음" in video["notes"]
+    assert "www/bbs/11/2003" not in rows and "www/bbs/11/2003/a6003" in rows  # 첨부만 있는 글은 첨부 행으로
+    empty = rows["www/bbs/11/2004/a6001"]  # 0바이트 첨부: 원본 없이 행만
+    assert (empty["size_bytes"], empty["file_path"], empty["index_status"], empty["pii_status"]) == (0, None, "제외", "통과")
+    assert empty["notes"].startswith("빈 파일(0바이트)")
+    hwpx = rows["www/bbs/11/2005/a6002"]  # 이름은 .hwp, 내용은 HWPX
+    assert hwpx["format"] == "hwpx" and hwpx["file_path"].endswith(".hwpx")
+    assert hwpx["text_chars"] > 0 and hwpx["table_count"] == 1 and hwpx["pii_status"] == "통과"
+
+
+def test_visited_post_without_rows_is_redone(tmp_path, ledger, small_scope):
+    # 예전 판 수집기가 끝냈다고 적었지만 대장에 남지 않은 글(그림 포스터)은 다시 처리한다
+    ledger.mark_visited("www/bbs/11/2001")
+    run(tmp_path, ledger, ["notices"], edge_routes())
+    assert ledger.has("www/bbs/11/2001")
+    # 대장에 남은 글은 다시 열지 않는다
+    http, _ = run(tmp_path, ledger, ["notices"], edge_routes())
+    assert not [url for url in http.requested if "artclView" in url or "download" in url]
+
+
+def test_remeasure_fixes_unread_rows(tmp_path, ledger):
+    from conftest import make_hwpx
+
+    from corpus.collect import EMPTY_FILE_NOTE, remeasure
+
+    raw = tmp_path / "raw" / "www" / "bbs" / "1" / "1"
+    raw.mkdir(parents=True)
+    (raw / "a1.hwp").write_bytes(make_hwpx(["규정 안내 문서이다."]))
+    (raw / "a3.hwp").write_bytes(b"")
+    unread = {"site": "www", "kind": "attach", "url": "u", "collected_at": "2026-10-02", "format": "hwp",
+              "pii_status": "보류", "pii_reason": "2차 검사 못 함(형식 hwp, 글자 추출 실패: NotOleFileError)",
+              "index_status": "제외"}
+    ledger.upsert({"doc_id": "www/bbs/1/1/a1", "title": "안내.hwp", "file_path": "raw/www/bbs/1/1/a1.hwp",
+                   "notes": "글자 추출 실패: NotOleFileError", **unread})
+    ledger.upsert({"doc_id": "www/bbs/2/1/a2", "title": "안내.hwp", "file_path": "raw/www/bbs/1/1/a1.hwp",
+                   "notes": "글자 추출 실패: NotOleFileError / 내용 중복: www/bbs/1/1/a1", **unread})
+    (raw / "a4.hwp").write_bytes(b"not an ole file")
+    ledger.upsert({"doc_id": "www/bbs/1/1/a3", "title": "빈.hwp", "file_path": "raw/www/bbs/1/1/a3.hwp", **unread})
+    ledger.upsert({"doc_id": "www/bbs/3/1/a5", "title": "빈.hwp", "file_path": "raw/www/bbs/1/1/a3.hwp", **unread})
+    ledger.upsert({"doc_id": "www/bbs/1/1/a4", "title": "확인함.hwp", "file_path": "raw/www/bbs/1/1/a4.hwp", **unread})
+    ledger.con.execute("UPDATE ledger SET reviewed = 1 WHERE doc_id = 'www/bbs/1/1/a4'")
+    report = remeasure(ledger, tmp_path, TODAY)
+    assert report == {"checked": 3, "format_fixed": 2, "now_readable": 2, "empty_files": 1}
+    first, twin = ledger.get("www/bbs/1/1/a1"), ledger.get("www/bbs/2/1/a2")
+    assert first["format"] == "hwpx" and first["file_path"] == "raw/www/bbs/1/1/a1.hwpx"
+    assert (tmp_path / first["file_path"]).exists() and not (raw / "a1.hwp").exists()
+    assert first["text_chars"] > 0 and first["pii_status"] == "통과" and first["notes"] is None
+    assert first["index_status"] == "색인"
+    assert twin["file_path"] == first["file_path"] and twin["notes"] == "내용 중복: www/bbs/1/1/a1"
+    assert twin["index_status"] == "제외" and twin["pii_status"] == "통과"
+    for doc_id in ("www/bbs/1/1/a3", "www/bbs/3/1/a5"):  # 0바이트 파일은 지우고, 같은 파일을 가리키던 행도 함께
+        empty = ledger.get(doc_id)
+        assert (empty["file_path"], empty["notes"], empty["index_status"]) == (None, EMPTY_FILE_NOTE, "제외")
+    assert not (raw / "a3.hwp").exists()
+    reviewed = ledger.get("www/bbs/1/1/a4")  # 사람이 확인한 행은 건드리지 않는다
+    assert reviewed["notes"] is None and reviewed["pii_status"] == "보류" and reviewed["text_chars"] is None
+
+
+def test_remeasure_keeps_empty_file_used_by_reviewed_row(tmp_path, ledger):
+    from corpus.collect import remeasure
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "e.hwp").write_bytes(b"")
+    base = {"site": "www", "kind": "attach", "url": "u", "collected_at": "2026-10-02", "format": "hwp",
+            "title": "빈.hwp", "file_path": "raw/e.hwp", "pii_status": "보류", "pii_reason": "2차 검사 못 함(형식 hwp)"}
+    ledger.upsert({"doc_id": "www/bbs/1/1/a1", **base})
+    ledger.upsert({"doc_id": "www/bbs/1/1/a2", **base})
+    ledger.con.execute("UPDATE ledger SET reviewed = 1 WHERE doc_id = 'www/bbs/1/1/a2'")
+    remeasure(ledger, tmp_path, TODAY)
+    assert (raw / "e.hwp").exists()  # 확인한 행(a2)이 가리키므로 남긴다
+    assert ledger.get("www/bbs/1/1/a1")["file_path"] is None and ledger.get("www/bbs/1/1/a2")["file_path"] == "raw/e.hwp"
