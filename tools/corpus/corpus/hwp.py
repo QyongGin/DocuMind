@@ -54,6 +54,13 @@ def para_text(buf: bytes) -> str:
                 out.append("\t")
             index += 1 if code in CHAR_CONTROLS else 8
             continue
+        if 0xD800 <= code <= 0xDBFF and index + 1 < length:
+            # UTF-16 대리 문자 쌍(이모지·확장 한자 등)은 두 칸을 합쳐 한 글자로
+            (low,) = struct.unpack_from("<H", buf, (index + 1) * 2)
+            if 0xDC00 <= low <= 0xDFFF:
+                out.append(chr(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)))
+                index += 2
+                continue
         out.append(chr(code))
         index += 1
     return "".join(out)

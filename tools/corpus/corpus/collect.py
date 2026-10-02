@@ -163,6 +163,11 @@ class Collector:
         row = self.ledger.get(doc_id)
         return bool(row and row["reviewed"] and row["pii_status"] == "통과" and not row["file_path"])
 
+    def approved(self, doc_id: str) -> bool:
+        """사람이 개인정보를 확인해 쓰기로 한 행. 제목 키워드(1차)로 다시 보류하지 않는다."""
+        row = self.ledger.get(doc_id)
+        return bool(row and row["reviewed"] and row["pii_status"] in ("통과", "가림"))
+
     def already_have(self, doc_id: str) -> bool:
         """받았거나, 보류·제외로 받지 않기로 한 행. 사람이 1차 보류를 풀어 준 행만 다시 받는다."""
         row = self.ledger.get(doc_id)
@@ -267,7 +272,7 @@ class Collector:
             return
         self._unit_failed = False
         keyword = pii.title_hit(name)
-        if keyword and not self.approved_pending(doc_id):
+        if keyword and not self.approved(doc_id):
             self.hold(self.base_row(doc_id, "page", site, url, name + title_suffix, "html"), keyword)
             self.ledger.mark_visited(doc_id)
             return
@@ -359,7 +364,7 @@ class Collector:
         url = board.view_url(listed.seq)
         common = {"board": board.label, "post_no": listed.seq}
         keyword = pii.title_hit(listed.title)
-        if keyword and not self.approved_pending(doc_id):
+        if keyword and not self.approved(doc_id):
             row = self.base_row(doc_id, "post", board.site, url, listed.title, "html", posted_at=listed.posted_at,
                                 **common, **self.notice_suggestions(board, listed.title, listed.posted_at))
             self.hold(row, keyword, note="1차 보류로 글을 열지 않아 첨부 목록을 모름")
@@ -406,7 +411,7 @@ class Collector:
                             parent_id=post_doc_id, board=board.label, post_no=post_doc_id.rsplit("/", 1)[-1],
                             posted_at=posted_at, **suggestions)
         keyword = pii.title_hit(attachment.name)
-        if keyword and not self.approved_pending(doc_id):
+        if keyword and not self.approved(doc_id):
             self.hold(row, keyword)
             return
         self.download_row(row, url, referer, attachment.name)
@@ -460,7 +465,7 @@ class Collector:
                                     topic=extract.suggest_topic(item.question, faq.topic),
                                     valid_until="until_replaced", group_id=faq.group)
                 keyword = pii.title_hit(item.question)
-                if keyword and not self.approved_pending(doc_id):
+                if keyword and not self.approved(doc_id):
                     # 답은 목록 화면에 이미 있지만, 1차 규칙대로 원본을 남기지 않는다
                     self.hold(row, keyword)
                     continue
@@ -501,7 +506,7 @@ class Collector:
             row = self.base_row(doc_id, "viewer", "ipsi", item.url, fallback, "pdf", topic="입시",
                                 group_id=group, notes=f"전형: {track} · 링크: {item.label}")
             keyword = pii.title_hit(item.label)
-            if keyword and not self.approved_pending(doc_id):
+            if keyword and not self.approved(doc_id):
                 self.hold(row, keyword)
                 continue
             self.download_row(row, item.url, fetched.url, fallback, on_name=viewer_name)
