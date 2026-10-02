@@ -5,11 +5,14 @@ import com.documind.documind.domain.auth.UserRepository;
 import com.documind.documind.domain.category.Category;
 import com.documind.documind.domain.category.CategoryRepository;
 import com.documind.documind.global.exception.CustomException;
+import com.documind.documind.global.exception.DuplicateDocumentException;
 import com.documind.documind.global.exception.ErrorCode;
 import com.documind.documind.global.infra.fastapi.FastApiClient;
+import com.documind.documind.global.infra.fastapi.FastApiDocumentMetadata;
 import com.documind.documind.global.infra.fastapi.FastApiUploadResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -21,6 +24,9 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -66,6 +72,24 @@ public class DocumentService {
      */
     @Transactional
     public DocumentUploadResponse upload(MultipartFile file, Long categoryId, String username) {
+        return upload(file, categoryId, DocumentSource.EMPTY, username);
+    }
+
+    /**
+     * 문서를 출처 정보(대장 ID·원래 주소·게시일·학년도)와 함께 업로드한다.
+     *
+     * <p>같은 파일(SHA-256)이 살아 있는 문서에 있으면 막는다. 출처 정보와 카테고리는 DB에 저장하고
+     * AI 서버에 넘겨 청크 메타데이터로 넣는다(#126).</p>
+     *
+     * @param file       업로드할 파일 (PDF/HWP/HWPX/DOCX/PPTX/XLSX/HTML)
+     * @param categoryId 연결할 카테고리 PK. 미분류면 null
+     * @param source     문서 대장 정보. 없으면 {@link DocumentSource#EMPTY}
+     * @param username   업로드한 관리자 계정명
+     * @return 업로드 결과 (document_id, 파일명, 파일 크기, 청크 수)
+     * @throws CustomException 형식이 틀리거나 같은 파일이 있으면(DUPLICATE_DOCUMENT, 409) 실패
+     */
+    @Transactional
+    public DocumentUploadResponse upload(MultipartFile file, Long categoryId, DocumentSource source, String username) {
         long processingStartNanos = System.nanoTime();
 
         // 파일 형식 검증: 브라우저 MIME 대신 확장자 + 파일 앞부분 서명으로 확인한다
@@ -81,6 +105,10 @@ public class DocumentService {
                     .orElseThrow(() -> new CustomException(ErrorCode.CATEGORY_NOT_FOUND));
         }
 
+        // 같은 파일 막기: 살아 있고 실패하지 않은 문서와 파일 지문이 같으면 거절한다
+        String contentSha256 = sha256Of(file);
+        rejectDuplicate(contentSha256);
+
         // UUID 기반 서버 저장 파일명 생성 (확장자 유지)
         String originalName = file.getOriginalFilename();
         String extension = originalName != null && originalName.contains(".")
@@ -92,13 +120,14 @@ public class DocumentService {
         // FastAPI 호출 시 document_id가 필요하므로 저장 후 호출 순서를 지킨다
         Document document = Document.create(
                 uploader, category, fileName, originalName,
-                file.getSize(), fileType.getMimeType()
+                file.getSize(), fileType.getMimeType(), source, contentSha256
         );
-        documentRepository.save(document);
+        saveNewDocument(document);
+        FastApiDocumentMetadata metadata = toFastApiMetadata(document);
 
         if (asyncProcessingEnabled) {
             Path tempFilePath = copyToTempFile(file, extension);
-            processAfterCommit(tempFilePath, originalName, document.getId(), processingStartNanos);
+            processAfterCommit(tempFilePath, originalName, document.getId(), metadata, processingStartNanos);
             return DocumentUploadResponse.builder()
                     .documentId(document.getId())
                     .originalName(document.getOriginalName())
@@ -109,7 +138,7 @@ public class DocumentService {
                     .build();
         }
 
-        completeSynchronously(file, document, processingStartNanos);
+        completeSynchronously(file, document, metadata, processingStartNanos);
 
         return DocumentUploadResponse.builder()
                 .documentId(document.getId())
@@ -137,9 +166,64 @@ public class DocumentService {
         return fileType;
     }
 
-    private void completeSynchronously(MultipartFile file, Document document, long processingStartNanos) {
+    // 파일 내용의 SHA-256(16진수 64자)
+    private String sha256Of(MultipartFile file) {
+        try (InputStream inputStream = file.getInputStream()) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = inputStream.read(buffer)) != -1) {
+                digest.update(buffer, 0, read);
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (IOException e) {
+            throw new CustomException(ErrorCode.FILE_READ_FAILED);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256을 쓸 수 없는 JVM입니다.", e);
+        }
+    }
+
+    private void rejectDuplicate(String contentSha256) {
+        List<Document> existing = documentRepository.findLiveByContentSha256(contentSha256);
+        if (!existing.isEmpty()) {
+            throw new DuplicateDocumentException(existing.get(0).getId(), existing.get(0).getOriginalName());
+        }
+    }
+
+    // 동시에 같은 파일을 올리면 앱 검사를 둘 다 통과할 수 있다. 그때는 DB 유일 제약(V4)이 막고, 409로 바꿔 알린다
+    private void saveNewDocument(Document document) {
+        try {
+            documentRepository.saveAndFlush(document);
+        } catch (DataIntegrityViolationException e) {
+            List<Document> existing = documentRepository.findLiveByContentSha256(document.getContentSha256());
+            if (existing.isEmpty()) {
+                throw e;
+            }
+            throw new DuplicateDocumentException(existing.get(0).getId(), existing.get(0).getOriginalName());
+        }
+    }
+
+    private FastApiDocumentMetadata toFastApiMetadata(Document document) {
+        DocumentSource source = document.getSource();
+        Category category = document.getCategory();
+        return new FastApiDocumentMetadata(
+                source.ledgerId(),
+                source.url(),
+                source.postedAt(),
+                source.academicYear(),
+                category != null ? category.getId() : null,
+                category != null ? category.getName() : null
+        );
+    }
+
+    private void completeSynchronously(
+            MultipartFile file,
+            Document document,
+            FastApiDocumentMetadata metadata,
+            long processingStartNanos
+    ) {
         // FastAPI에 파일 전송 → 청킹·임베딩·ChromaDB 저장 요청
-        FastApiUploadResponse fastApiResponse = fastApiClient.uploadDocument(file, document.getId());
+        FastApiUploadResponse fastApiResponse = fastApiClient.uploadDocument(file, document.getId(), metadata);
         long processingDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - processingStartNanos);
         // FastAPI 처리 완료 후 청크 수와 처리 시간을 업데이트
         document.completeProcessing(fastApiResponse.getChunks(), processingDurationMs);
@@ -158,12 +242,18 @@ public class DocumentService {
         }
     }
 
-    private void processAfterCommit(Path tempFilePath, String originalName, Long documentId, long processingStartNanos) {
+    private void processAfterCommit(
+            Path tempFilePath,
+            String originalName,
+            Long documentId,
+            FastApiDocumentMetadata metadata,
+            long processingStartNanos
+    ) {
         String filename = originalName != null ? originalName : "upload";
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                documentProcessingService.processAsync(tempFilePath, filename, documentId, processingStartNanos);
+                documentProcessingService.processAsync(tempFilePath, filename, documentId, metadata, processingStartNanos);
             }
 
             @Override

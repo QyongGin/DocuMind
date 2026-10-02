@@ -2,6 +2,7 @@ package com.documind.documind.domain.document;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
@@ -27,4 +28,17 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
      * @return is_active=true인 문서. 없으면 empty
      */
     Optional<Document> findByIdAndIsActiveTrue(Long id);
+
+    /**
+     * 같은 파일 지문(SHA-256)을 가진, 살아 있고 실패하지 않은 문서를 찾는다(같은 파일 막기, #126 결정 2·4).
+     * 지운 문서와 실패한 문서는 비교하지 않아 같은 파일을 다시 올릴 수 있다.
+     *
+     * @param contentSha256 파일 내용 SHA-256(16진수)
+     * @return 같은 파일 문서(먼저 올린 순)
+     */
+    @Query("SELECT d FROM Document d WHERE d.contentSha256 = :contentSha256 AND d.isActive = true"
+            + " AND (d.processingStatus IS NULL"
+            + " OR d.processingStatus <> com.documind.documind.domain.document.DocumentProcessingStatus.FAILED)"
+            + " ORDER BY d.id ASC")
+    List<Document> findLiveByContentSha256(@Param("contentSha256") String contentSha256);
 }

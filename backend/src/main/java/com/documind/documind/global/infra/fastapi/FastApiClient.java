@@ -2,6 +2,9 @@ package com.documind.documind.global.infra.fastapi;
 
 import com.documind.documind.global.exception.CustomException;
 import com.documind.documind.global.exception.ErrorCode;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -44,10 +47,23 @@ public class FastApiClient {
 
     // PDF 파일과 document_id를 FastAPI에 전송해 청킹·임베딩·저장을 요청
     public FastApiUploadResponse uploadDocument(MultipartFile file, Long documentId) {
+        return uploadDocument(file, documentId, FastApiDocumentMetadata.EMPTY);
+    }
+
+    /**
+     * 업로드 파일과 문서 메타데이터를 FastAPI에 전송해 청킹·임베딩·저장을 요청한다(동기 처리).
+     *
+     * @param file       업로드 파일
+     * @param documentId MySQL documents PK
+     * @param metadata   청크마다 넣을 문서 메타데이터
+     * @return FastAPI 문서 처리 결과
+     */
+    public FastApiUploadResponse uploadDocument(MultipartFile file, Long documentId, FastApiDocumentMetadata metadata) {
         return uploadDocument(
                 file.getResource(),
                 Objects.requireNonNullElse(file.getOriginalFilename(), "upload"),
-                documentId
+                documentId,
+                metadata
         );
     }
 
@@ -60,6 +76,26 @@ public class FastApiClient {
      * @return FastAPI 문서 처리 결과
      */
     public FastApiUploadResponse uploadDocument(Resource fileResource, String originalFilename, Long documentId) {
+        return uploadDocument(fileResource, originalFilename, documentId, FastApiDocumentMetadata.EMPTY);
+    }
+
+    /**
+     * 파일 Resource와 문서 메타데이터를 FastAPI에 전송해 청킹·임베딩·저장을 요청한다.
+     *
+     * <p>AI 서버가 422로 거절하면(암호·배포용 HWP 등) 응답의 이유 문장을 담은 DOCUMENT_UNREADABLE을 던진다.</p>
+     *
+     * @param fileResource     FastAPI에 전달할 파일 Resource
+     * @param originalFilename multipart filename으로 전달할 원본 파일명
+     * @param documentId       MySQL documents PK
+     * @param metadata         청크마다 넣을 문서 메타데이터. 값이 없는 칸은 보내지 않는다
+     * @return FastAPI 문서 처리 결과
+     */
+    public FastApiUploadResponse uploadDocument(
+            Resource fileResource,
+            String originalFilename,
+            Long documentId,
+            FastApiDocumentMetadata metadata
+    ) {
         // MultipartBodyBuilder: multipart/form-data 파트를 생성하고 boundary는 WebClient가 자동 생성
         MultipartBodyBuilder body = new MultipartBodyBuilder();
         // Resource 기반 전송: 파일 전체를 힙에 올리지 않고 multipart writer가 스트리밍 처리한다
@@ -67,6 +103,7 @@ public class FastApiClient {
                 .filename(Objects.requireNonNullElse(originalFilename, "upload"));
         // FastAPI Form 필드는 문자열로 수신 후 int로 자동 변환함
         body.part("document_id", documentId.toString());
+        addMetadataParts(body, metadata);
 
         try {
             FastApiUploadResponse response = blockingWebClient.post()
@@ -80,6 +117,16 @@ public class FastApiClient {
         } catch (WebClientResponseException.ServiceUnavailable e) {
             log.warn("FastAPI /documents 서비스 불가. documentId={}", documentId, e);
             throw new CustomException(ErrorCode.FASTAPI_UNAVAILABLE);
+        } catch (WebClientResponseException e) {
+            // 422는 상태 코드 숫자로 본다(Spring 7에서 예외 이름이 UnprocessableEntity → UnprocessableContent로 바뀜)
+            String reason = e.getStatusCode().value() == 422 ? unreadableReason(e) : null;
+            if (reason == null) {
+                // 422가 아니거나 detail이 문장이 아니면(요청 검증 오류 목록 등) 일반 실패로 둔다
+                log.warn("FastAPI /documents 호출 실패. documentId={} status={}", documentId, e.getStatusCode(), e);
+                throw new CustomException(ErrorCode.FASTAPI_UPLOAD_FAILED);
+            }
+            log.warn("FastAPI /documents 문서 거절. documentId={} reason={}", documentId, reason);
+            throw new CustomException(ErrorCode.DOCUMENT_UNREADABLE, reason);
         } catch (WebClientRequestException e) {
             log.warn("FastAPI /documents 연결 실패. documentId={}", documentId, e);
             throw new CustomException(ErrorCode.FASTAPI_CONNECTION_FAILED);
@@ -269,5 +316,34 @@ public class FastApiClient {
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
                 .map(ServerSentEvent::data)
                 .filter(data -> data != null && !data.isEmpty());
+    }
+
+    // 값이 있는 메타데이터만 multipart 파트로 붙인다. 이름은 FastAPI Form 인자와 같다
+    private static void addMetadataParts(MultipartBodyBuilder body, FastApiDocumentMetadata metadata) {
+        if (metadata == null) {
+            return;
+        }
+        addPart(body, "ledger_id", metadata.ledgerId());
+        addPart(body, "source_url", metadata.sourceUrl());
+        addPart(body, "posted_at", metadata.postedAt());
+        addPart(body, "academic_year", metadata.academicYear());
+        addPart(body, "category_id", metadata.categoryId());
+        addPart(body, "category", metadata.categoryName());
+    }
+
+    private static void addPart(MultipartBodyBuilder body, String name, Object value) {
+        if (value != null) {
+            body.part(name, value.toString());
+        }
+    }
+
+    // AI 서버 422 응답의 detail이 문장이면 돌려준다(화면에 보여도 되는 이유). 아니면 null
+    private static String unreadableReason(WebClientResponseException e) {
+        try {
+            JsonNode detail = new ObjectMapper().readTree(e.getResponseBodyAsString()).path("detail");
+            return detail.isTextual() && !detail.asText().isBlank() ? detail.asText() : null;
+        } catch (JsonProcessingException parseError) {
+            return null;
+        }
     }
 }

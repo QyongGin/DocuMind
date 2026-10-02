@@ -59,6 +59,18 @@ CREATE TABLE IF NOT EXISTS visits (
   unit TEXT PRIMARY KEY,
   at TEXT NOT NULL
 );
+-- 업로드 기록(`upload` 명령): 대상(service·dataset)마다 대장 행이 어느 문서 번호로 올라갔는지. 다시 실행하면 이어 올린다
+CREATE TABLE IF NOT EXISTS uploads (
+  target TEXT NOT NULL,
+  doc_id TEXT NOT NULL,
+  sha256 TEXT,
+  document_id INTEGER,
+  status TEXT NOT NULL CHECK (status IN ('ready','exists','failed')),
+  reason TEXT,
+  base_url TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (target, doc_id)
+);
 """
 
 # 사람이 확인하는 칸. 확인 뒤(reviewed=1)에는 수집기가 바꾸지 않는다

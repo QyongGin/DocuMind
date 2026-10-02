@@ -16,10 +16,12 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -71,6 +73,56 @@ class FastApiClientTest {
         assertTrue(requestBody.get().contains("name=\"document_id\""));
         assertTrue(requestBody.get().contains("7"));
         assertTrue(requestBody.get().contains("filename=\"sample.pdf\""));
+    }
+
+    @Test
+    void uploadDocumentSendsOnlyPresentMetadataParts() throws IOException {
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        server.createContext("/documents", exchange -> {
+            requestBody.set(readBody(exchange));
+            sendJson(exchange, "{\"status\":\"success\",\"filename\":\"notice.hwp\",\"chunks\":2}");
+        });
+        MockMultipartFile file = new MockMultipartFile("file", "notice.hwp", "application/x-hwp", new byte[]{1, 2, 3});
+        FastApiDocumentMetadata metadata = new FastApiDocumentMetadata(
+                "www/bbs/11/1/a2", "https://www.example.ac.kr/notice/1", LocalDate.of(2026, 8, 1), 2026, 3L, "학사");
+
+        fastApiClient.uploadDocument(file, 9L, metadata);
+
+        String body = requestBody.get();
+        for (String expected : List.of(
+                "name=\"ledger_id\"", "www/bbs/11/1/a2",
+                "name=\"source_url\"", "https://www.example.ac.kr/notice/1",
+                "name=\"posted_at\"", "2026-08-01",
+                "name=\"academic_year\"", "name=\"category_id\"", "name=\"category\"")) {
+            assertTrue(body.contains(expected), expected);
+        }
+
+        fastApiClient.uploadDocument(file, 10L, FastApiDocumentMetadata.EMPTY);
+        assertFalse(requestBody.get().contains("name=\"ledger_id\""));
+        assertFalse(requestBody.get().contains("name=\"category\""));
+    }
+
+    @Test
+    void uploadDocumentTurnsReadableRejectionIntoUnreadableError() {
+        String reason = "암호가 걸렸거나 배포용으로 저장된 HWP 문서는 읽을 수 없습니다.";
+        server.createContext("/documents", exchange -> sendJson(exchange, 422, "{\"detail\":\"" + reason + "\"}"));
+        MockMultipartFile file = new MockMultipartFile("file", "secret.hwp", "application/x-hwp", new byte[]{1});
+
+        CustomException exception = assertThrows(CustomException.class, () -> fastApiClient.uploadDocument(file, 11L));
+
+        assertEquals(ErrorCode.DOCUMENT_UNREADABLE, exception.getErrorCode());
+        assertEquals(reason, exception.getMessage());
+    }
+
+    @Test
+    void uploadDocumentTreatsValidationErrorListAsUploadFailure() {
+        server.createContext("/documents", exchange ->
+                sendJson(exchange, 422, "{\"detail\":[{\"loc\":[\"body\",\"file\"],\"msg\":\"Field required\"}]}"));
+        MockMultipartFile file = new MockMultipartFile("file", "a.pdf", MediaType.APPLICATION_PDF_VALUE, new byte[]{1});
+
+        CustomException exception = assertThrows(CustomException.class, () -> fastApiClient.uploadDocument(file, 12L));
+
+        assertEquals(ErrorCode.FASTAPI_UPLOAD_FAILED, exception.getErrorCode());
     }
 
     @Test
@@ -198,9 +250,13 @@ class FastApiClientTest {
     }
 
     private void sendJson(HttpExchange exchange, String body) throws IOException {
+        sendJson(exchange, 200, body);
+    }
+
+    private void sendJson(HttpExchange exchange, int status, String body) throws IOException {
         byte[] response = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
-        exchange.sendResponseHeaders(200, response.length);
+        exchange.sendResponseHeaders(status, response.length);
         exchange.getResponseBody().write(response);
         exchange.close();
     }

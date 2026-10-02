@@ -24,14 +24,22 @@ public class DocumentController {
     /**
      * POST /api/documents — 문서 업로드 (ADMIN 전용).
      * @RequestParam: multipart/form-data에서 각 파트를 개별 파라미터로 바인딩한다.
+     *
+     * <p>출처 정보(대장 ID·원래 주소·게시일·학년도)는 모두 선택이다. 대량 업로드 명령은 대장 값을,
+     * 관리자 화면은 '추가 정보(선택)' 입력을 보낸다. 같은 파일이 이미 있으면 409와 기존 문서를 돌려준다.</p>
      */
     @PostMapping
     public ResponseEntity<ApiResponse<DocumentUploadResponse>> upload(
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "categoryId", required = false) Long categoryId,
+            @RequestParam(value = "ledgerId", required = false) String ledgerId,
+            @RequestParam(value = "sourceUrl", required = false) String sourceUrl,
+            @RequestParam(value = "sourcePostedAt", required = false) String sourcePostedAt,
+            @RequestParam(value = "academicYear", required = false) Integer academicYear,
             @AuthenticationPrincipal String username
     ) {
-        DocumentUploadResponse response = documentService.upload(file, categoryId, username);
+        DocumentSource source = DocumentSource.of(ledgerId, sourceUrl, sourcePostedAt, academicYear);
+        DocumentUploadResponse response = documentService.upload(file, categoryId, source, username);
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 

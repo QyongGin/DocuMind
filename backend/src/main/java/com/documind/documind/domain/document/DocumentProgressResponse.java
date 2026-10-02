@@ -59,11 +59,12 @@ public class DocumentProgressResponse {
 
     /** 문서 처리 실패 응답을 생성한다. */
     public static DocumentProgressResponse failed(Document document) {
+        String reason = document.getProcessingError();
         return DocumentProgressResponse.builder()
                 .documentId(document.getId())
                 .percent(100)
                 .stage("failed")
-                .message("문서 처리에 실패했습니다.")
+                .message(reason != null && !reason.isBlank() ? reason : "문서 처리에 실패했습니다.")
                 .status("failed")
                 .build();
     }

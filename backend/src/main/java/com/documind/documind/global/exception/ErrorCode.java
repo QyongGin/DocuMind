@@ -38,6 +38,11 @@ public enum ErrorCode {
     FASTAPI_QUERY_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "AI 서버 질의응답 처리 중 오류가 발생했습니다."),
     DOCUMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "문서를 찾을 수 없습니다."),
     INVALID_FILE_TYPE(HttpStatus.BAD_REQUEST, "지원하지 않는 파일 형식이거나 확장자와 파일 내용이 다릅니다."),
+    INVALID_DOCUMENT_SOURCE(HttpStatus.BAD_REQUEST, "문서 출처 정보가 올바르지 않습니다."),
+    // 살아 있는(처리 중·완료) 문서에 같은 파일 지문이 있다. 실패한 문서와 지운 문서는 비교하지 않는다
+    DUPLICATE_DOCUMENT(HttpStatus.CONFLICT, "이미 올린 문서입니다."),
+    // AI 서버가 422로 거절한 문서(암호·배포용 HWP 등). 메시지는 AI 서버가 준 이유로 바꿔 쓴다
+    DOCUMENT_UNREADABLE(HttpStatus.UNPROCESSABLE_ENTITY, "문서 내용을 읽을 수 없습니다."),
 
     // 카테고리
     CATEGORY_NOT_FOUND(HttpStatus.NOT_FOUND, "카테고리를 찾을 수 없습니다."),

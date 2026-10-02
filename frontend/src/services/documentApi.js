@@ -7,12 +7,17 @@ export async function listDocuments() {
   })
 }
 
-export async function uploadDocument(file, { categoryId } = {}) {
+// 출처 정보(원래 주소·게시일·학년도)는 선택이다. 값이 있는 칸만 보낸다(#126)
+export async function uploadDocument(file, { categoryId, sourceUrl, sourcePostedAt, academicYear } = {}) {
   const formData = new FormData()
   formData.append('file', file)
-  if (categoryId) {
-    formData.append('categoryId', categoryId)
-  }
+  const optionalFields = { categoryId, sourceUrl, sourcePostedAt, academicYear }
+  Object.entries(optionalFields).forEach(([name, value]) => {
+    const text = value == null ? '' : String(value).trim()
+    if (text) {
+      formData.append(name, text)
+    }
+  })
 
   return apiRequest('/documents', {
     method: 'POST',

@@ -12,13 +12,22 @@ import org.springframework.web.client.RestClientException;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-    // CustomException 발생 시 ErrorCode에 정의된 상태코드와 메시지로 응답
+    // CustomException 발생 시 ErrorCode의 상태코드와 예외 메시지(기본은 ErrorCode 메시지)로 응답
     @ExceptionHandler(CustomException.class)
     public ResponseEntity<ApiResponse<Void>> handleCustomException(CustomException e) {
         ErrorCode errorCode = e.getErrorCode();
         return ResponseEntity
                 .status(errorCode.getHttpStatus())
-                .body(ApiResponse.fail(errorCode.getMessage()));
+                .body(ApiResponse.fail(e.getMessage()));
+    }
+
+    // 같은 파일 업로드: 409와 함께 기존 문서 번호·이름을 data로 돌려줘 대량 업로드 명령이 대장에 기록할 수 있게 한다
+    @ExceptionHandler(DuplicateDocumentException.class)
+    public ResponseEntity<ApiResponse<DuplicateDocumentException.ExistingDocument>> handleDuplicateDocument(
+            DuplicateDocumentException e) {
+        return ResponseEntity
+                .status(e.getErrorCode().getHttpStatus())
+                .body(ApiResponse.fail(e.getMessage(), e.getExisting()));
     }
 
     // FastAPI 호출 실패(연결 오류, 타임아웃, 4xx/5xx 등) 시 FASTAPI_UPLOAD_FAILED로 래핑
