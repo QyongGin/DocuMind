@@ -104,3 +104,7 @@ Assets/corpus/
 | olefile | BSD | HWP 5.0(OLE) 읽기 |
 | pypdfium2 | Apache-2.0 / BSD-3-Clause (PDFium BSD-3-Clause) | PDF 글자 수 |
 | pytest (개발) | MIT | 테스트 |
+
+HWP 5.0 글자 추출(`corpus/hwp.py`)은 한컴이 공개한 HWP 파일 형식 문서를 참고해 만들었다. 한컴의 사용 조건에 따라 아래 문구를 적는다.
+
+> 본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.

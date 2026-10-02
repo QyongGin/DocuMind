@@ -14,6 +14,20 @@ import { getPromptConfig, updatePromptConfig } from '../../services/promptApi.js
 import inqLogoUrl from '../../images/inq-logo.png'
 import inqSymbolUrl from '../../images/inq-symbol.png'
 
+// 업로드 허용 형식. 백엔드 DocumentFileType, AI 서버 ALLOWED_EXTENSIONS와 같게 유지한다
+const UPLOAD_EXTENSIONS = ['pdf', 'hwp', 'hwpx', 'docx', 'pptx', 'xlsx', 'html', 'htm']
+const UPLOAD_ACCEPT = UPLOAD_EXTENSIONS.map((extension) => `.${extension}`).join(',')
+const UPLOAD_FORMAT_LABEL = 'PDF, HWP, HWPX, DOCX, PPTX, XLSX, HTML'
+// 한컴 HWP 공개 문서 사용 조건: 제품 화면·설명서·도움말·소스에 이 문구를 적는다
+const HWP_SPEC_NOTICE = '본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.'
+
+function hasUploadExtension(file) {
+  const name = file?.name ?? ''
+  const dotIndex = name.lastIndexOf('.')
+  if (dotIndex < 0) return false
+  return UPLOAD_EXTENSIONS.includes(name.slice(dotIndex + 1).toLowerCase())
+}
+
 function formatFileSize(size) {
   if (!Number.isFinite(size) || size <= 0) return '-'
   if (size < 1024 * 1024) return `${Math.round(size / 1024)}KB`
@@ -292,6 +306,14 @@ function AdminDashboardPage() {
 
   const handleSelectFile = (file) => {
     if (!file || isUploading) return
+
+    // 끌어다 놓기는 input accept를 거치지 않으므로 확장자를 한 번 더 본다(최종 검사는 백엔드)
+    if (!hasUploadExtension(file)) {
+      resetSelectedFile()
+      setMessage('')
+      setErrorMessage(`지원하지 않는 파일 형식입니다. ${UPLOAD_FORMAT_LABEL} 파일만 올릴 수 있습니다.`)
+      return
+    }
 
     setSelectedFile(file)
     setMessage('')
@@ -622,11 +644,11 @@ function AdminDashboardPage() {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".pdf,.docx,.pptx,.xlsx"
+                    accept={UPLOAD_ACCEPT}
                     onChange={handleFileInputChange}
                     disabled={isUploading}
                   />
-                  <span>{selectedFile ? selectedFile.name : 'PDF, DOCX, PPTX, XLSX 업로드'}</span>
+                  <span>{selectedFile ? selectedFile.name : `${UPLOAD_FORMAT_LABEL} 업로드`}</span>
                   <small>{selectedFile ? formatFileSize(selectedFile.size) : '학교 안내 문서를 추가합니다.'}</small>
                 </label>
                 <label className="upload-category">
@@ -647,6 +669,7 @@ function AdminDashboardPage() {
                 <button type="submit" className="admin-primary-button" disabled={!selectedFile || isUploading}>
                   {isUploading ? '업로드 중' : '업로드'}
                 </button>
+                <p className="upload-notice">{HWP_SPEC_NOTICE}</p>
               </form>
 
               <form className="category-panel" onSubmit={handleCreateCategory}>

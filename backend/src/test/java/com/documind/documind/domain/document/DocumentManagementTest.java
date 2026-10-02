@@ -24,6 +24,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -64,9 +66,20 @@ class DocumentManagementTest {
     private User admin;
     private Document activeDoc;
     private static final String ADMIN_USERNAME = "admin";
+    // 업로드 검증이 파일 앞부분 서명을 보므로 시험 파일도 형식에 맞는 머리를 갖는다
+    private static final byte[] PDF_BYTES = withHead("%PDF-1.4\n".getBytes(StandardCharsets.US_ASCII));
+    private static final byte[] HWP_BYTES = withHead(new byte[]{
+            (byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0, (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1});
+
+    private static byte[] withHead(byte[] head) {
+        return Arrays.copyOf(head, 100);
+    }
 
     @BeforeEach
     void setUp() {
+        // 비동기 업로드 테스트가 공유 빈의 설정을 바꾸므로, 테스트마다 동기 모드로 되돌린다(실행 순서에 따라 결과가 바뀌지 않게)
+        ReflectionTestUtils.setField(documentService, "asyncProcessingEnabled", false);
+
         // 관리자 계정 생성
         admin = userRepository.save(User.create(ADMIN_USERNAME, "encoded-password", Role.ADMIN));
 
@@ -173,7 +186,7 @@ class DocumentManagementTest {
                 .thenReturn(new FastApiUploadResponse("success", "report.pdf", 7));
 
         MockMultipartFile file = new MockMultipartFile(
-                "file", "report.pdf", "application/pdf", new byte[100]
+                "file", "report.pdf", "application/pdf", PDF_BYTES
         );
 
         DocumentUploadResponse response = documentService.upload(file, ADMIN_USERNAME);
@@ -197,7 +210,7 @@ class DocumentManagementTest {
                 .thenReturn(new FastApiUploadResponse("success", "report.pdf", 7));
         Category category = categoryRepository.save(Category.create("학사"));
         MockMultipartFile file = new MockMultipartFile(
-                "file", "report.pdf", "application/pdf", new byte[100]
+                "file", "report.pdf", "application/pdf", PDF_BYTES
         );
 
         DocumentUploadResponse response = documentService.upload(file, category.getId(), ADMIN_USERNAME);
@@ -220,7 +233,7 @@ class DocumentManagementTest {
                     return new FastApiUploadResponse("success", "async.pdf", 5);
                 });
         MockMultipartFile file = new MockMultipartFile(
-                "file", "async.pdf", "application/pdf", new byte[100]
+                "file", "async.pdf", "application/pdf", PDF_BYTES
         );
 
         DocumentUploadResponse response = documentService.upload(file, ADMIN_USERNAME);
@@ -238,12 +251,41 @@ class DocumentManagementTest {
     @DisplayName("문서 업로드 - 존재하지 않는 카테고리는 CATEGORY_NOT_FOUND 예외를 반환한다")
     void upload_missingCategoryThrowsException() {
         MockMultipartFile file = new MockMultipartFile(
-                "file", "report.pdf", "application/pdf", new byte[100]
+                "file", "report.pdf", "application/pdf", PDF_BYTES
         );
 
         CustomException ex = assertThrows(CustomException.class,
                 () -> documentService.upload(file, 99999L, ADMIN_USERNAME));
         assertEquals(ErrorCode.CATEGORY_NOT_FOUND, ex.getErrorCode());
+        verify(fastApiClient, never()).uploadDocument(any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("문서 업로드 - 브라우저 MIME이 octet-stream인 HWP도 파일 서명이 맞으면 받고 MIME은 형식 표 값으로 저장한다")
+    void upload_hwpWithOctetStreamMimeIsAccepted() {
+        when(fastApiClient.uploadDocument(any(), anyLong()))
+                .thenReturn(new FastApiUploadResponse("success", "notice.hwp", 3));
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "notice.hwp", "application/octet-stream", HWP_BYTES
+        );
+
+        DocumentUploadResponse response = documentService.upload(file, ADMIN_USERNAME);
+
+        Document uploaded = documentRepository.findById(response.getDocumentId()).orElseThrow();
+        assertEquals(3, uploaded.getChunkCount());
+        assertEquals("application/x-hwp", uploaded.getMimeType());
+    }
+
+    @Test
+    @DisplayName("문서 업로드 - 확장자와 파일 내용이 다르면 INVALID_FILE_TYPE 예외를 반환하고 AI 서버를 부르지 않는다")
+    void upload_extensionAndContentMismatchThrowsException() {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "notice.hwp", "application/x-hwp", PDF_BYTES
+        );
+
+        CustomException ex = assertThrows(CustomException.class,
+                () -> documentService.upload(file, ADMIN_USERNAME));
+        assertEquals(ErrorCode.INVALID_FILE_TYPE, ex.getErrorCode());
         verify(fastApiClient, never()).uploadDocument(any(), anyLong());
     }
 

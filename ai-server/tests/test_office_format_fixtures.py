@@ -10,7 +10,8 @@ RAG 품질 개선이 PDF(모집요강) 중심으로 누적되면서(예: #103 Op
 이 테스트가 잠그는 것
 ---------------------
 각 office 형식에 대해 공유 파이프라인의 앞단을 end-to-end 로 확인한다.
-1. ``_load_documents`` 가 office 파일을 Markdown 으로 변환한다(MarkItDown).
+1. ``_load_documents`` 가 office 파일을 Markdown 으로 변환한다(xlsx·pptx 는 MarkItDown,
+   docx 는 2026-10 #125부터 mammoth HTML → ``format_loaders`` 표 격자).
 2. 표 셀 값이 변환 텍스트까지 보존된다(고유 토큰 추적).
 3. 공유 경로 ``_extract_table_facts`` 가 그 표에서 table fact 를 뽑고,
    표 값이 fact 까지 흐른다.

@@ -31,6 +31,7 @@ ai-server/chroma_db/
 tools/corpus/.venv/
 tools/**/__pycache__/
 tools/**/.pytest_cache/
+tools/hwp-fixture/*.class
 
 # ───────────────────────────────────────
 # Node.js / React (frontend)
