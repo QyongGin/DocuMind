@@ -21,7 +21,6 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -43,21 +42,13 @@ public class DocumentService {
     @Value("${document.processing.async-enabled:false}")
     private boolean asyncProcessingEnabled;
 
-    // 허용 MIME 타입 목록. FastAPI 파서가 지원하는 형식과 동기화
-    private static final List<String> ALLOWED_MIME_TYPES = Arrays.asList(
-            "application/pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // DOCX
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation", // PPTX
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" // XLSX
-    );
-
     /**
      * 문서를 업로드하고 FastAPI를 통해 청킹·임베딩·ChromaDB 저장을 요청한다.
      *
-     * @param file     업로드할 파일 (PDF/DOCX/PPTX/XLSX)
+     * @param file     업로드할 파일 (PDF/HWP/HWPX/DOCX/PPTX/XLSX/HTML)
      * @param username 업로드한 관리자 계정명
      * @return 업로드 결과 (document_id, 파일명, 파일 크기, 청크 수)
-     * @throws CustomException 허용하지 않는 파일 형식이거나 사용자를 찾을 수 없는 경우
+     * @throws CustomException 허용하지 않는 파일 형식(확장자와 파일 내용이 다른 경우 포함)이거나 사용자를 찾을 수 없는 경우
      */
     @Transactional
     public DocumentUploadResponse upload(MultipartFile file, String username) {
@@ -67,21 +58,18 @@ public class DocumentService {
     /**
      * 문서를 업로드하고 선택한 카테고리를 함께 저장한다.
      *
-     * @param file       업로드할 파일 (PDF/DOCX/PPTX/XLSX)
+     * @param file       업로드할 파일 (PDF/HWP/HWPX/DOCX/PPTX/XLSX/HTML)
      * @param categoryId 연결할 카테고리 PK. 미분류면 null
      * @param username   업로드한 관리자 계정명
      * @return 업로드 결과 (document_id, 파일명, 파일 크기, 청크 수)
-     * @throws CustomException 허용하지 않는 파일 형식, 사용자 없음, 카테고리 없음
+     * @throws CustomException 허용하지 않는 파일 형식(확장자와 파일 내용이 다른 경우 포함), 사용자 없음, 카테고리 없음
      */
     @Transactional
     public DocumentUploadResponse upload(MultipartFile file, Long categoryId, String username) {
         long processingStartNanos = System.nanoTime();
 
-        // 파일 형식 검증
-        String mimeType = file.getContentType();
-        if (mimeType == null || !ALLOWED_MIME_TYPES.contains(mimeType)) {
-            throw new CustomException(ErrorCode.INVALID_FILE_TYPE);
-        }
+        // 파일 형식 검증: 브라우저 MIME 대신 확장자 + 파일 앞부분 서명으로 확인한다
+        DocumentFileType fileType = resolveFileType(file);
 
         // 업로더 조회
         User uploader = userRepository.findByUsername(username)
@@ -104,7 +92,7 @@ public class DocumentService {
         // FastAPI 호출 시 document_id가 필요하므로 저장 후 호출 순서를 지킨다
         Document document = Document.create(
                 uploader, category, fileName, originalName,
-                file.getSize(), mimeType
+                file.getSize(), fileType.getMimeType()
         );
         documentRepository.save(document);
 
@@ -131,6 +119,22 @@ public class DocumentService {
                 .processingDurationMs(document.getProcessingDurationMs())
                 .processingStatus(document.getProcessingStatus())
                 .build();
+    }
+
+    // 확장자로 형식을 정하고, 파일 앞부분 서명이 그 형식과 맞는지 확인한다(예: .hwp인데 PDF 내용이면 거절)
+    private DocumentFileType resolveFileType(MultipartFile file) {
+        DocumentFileType fileType = DocumentFileType.fromFilename(file.getOriginalFilename())
+                .orElseThrow(() -> new CustomException(ErrorCode.INVALID_FILE_TYPE));
+        byte[] head;
+        try (InputStream inputStream = file.getInputStream()) {
+            head = inputStream.readNBytes(DocumentFileType.SIGNATURE_BYTES);
+        } catch (IOException e) {
+            throw new CustomException(ErrorCode.FILE_READ_FAILED);
+        }
+        if (!fileType.matches(head)) {
+            throw new CustomException(ErrorCode.INVALID_FILE_TYPE);
+        }
+        return fileType;
     }
 
     private void completeSynchronously(MultipartFile file, Document document, long processingStartNanos) {

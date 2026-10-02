@@ -38,6 +38,11 @@ from rag_table_fact_selector import (
     select_table_facts_for_question,
 )
 from opendataloader_contract_adapter import adapt_opendataloader_json_page
+from format_loaders import (
+    SUPPORTED_EXTENSIONS as TABLE_GRID_EXTENSIONS,
+    UnsupportedDocumentError,
+    load_markdown as load_table_grid_markdown,
+)
 
 try:
     from kiwipiepy import Kiwi
@@ -244,8 +249,8 @@ _char_splitter = RecursiveCharacterTextSplitter(
     length_function=len
 )
 
-# 허용 파일 확장자. Spring Boot DocumentService와 동기화 필요
-ALLOWED_EXTENSIONS = {"pdf", "docx", "pptx", "xlsx"}
+# 허용 파일 확장자. Spring Boot DocumentFileType·관리자 화면 업로드 형식과 동기화 필요
+ALLOWED_EXTENSIONS = {"pdf", "docx", "pptx", "xlsx", "hwp", "hwpx", "html", "htm"}
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -261,19 +266,21 @@ def health():
 def _load_documents(tmp_path: str, filename: str) -> list[Document]:
     """
     확장자에 따라 파서를 분기하고 LangChain Document 리스트를 반환한다.
-    두 파서 모두 Markdown 형태의 Document를 출력하므로 이후 청킹 코드는 동일하게 유지된다.
+    모든 파서가 Markdown 형태의 Document를 출력하므로 이후 청킹 코드는 동일하게 유지된다.
     """
     ext = filename.rsplit(".", 1)[-1].lower()
     if ext == "pdf":
         # opendataloader: 한글 PDF에 최적화, format="markdown"으로 구조 보존
         loader = OpenDataLoaderPDFLoader(file_path=tmp_path, format="markdown")
-    else:
-        # docx/pptx/xlsx: MarkItDown으로 Markdown 변환
-        # Word 헤딩 스타일을 ATX(#, ##, ###)로 정확히 변환해 MarkdownHeaderTextSplitter와 연동
-        from markitdown import MarkItDown
-        markdown = MarkItDown().convert(tmp_path).text_content
-        return [Document(page_content=markdown)]
-    return loader.load()
+        return loader.load()
+    if ext in TABLE_GRID_EXTENSIONS:
+        # hwp/hwpx/html/docx: 표를 칸 주소·병합 수가 있는 격자로 만든 뒤 마크다운 표로 낸다(format_loaders).
+        # DOCX의 Word 헤딩은 mammoth를 거쳐 그대로 ATX(#, ##)가 되어 MarkdownHeaderTextSplitter와 연동된다
+        return [Document(page_content=load_table_grid_markdown(tmp_path, ext))]
+    # pptx/xlsx: MarkItDown으로 Markdown 변환
+    from markitdown import MarkItDown
+    markdown = MarkItDown().convert(tmp_path).text_content
+    return [Document(page_content=markdown)]
 
 
 def _load_opendataloader_json_documents(tmp_path: str, filename: str) -> list[Document]:
@@ -2407,7 +2414,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
         total_start = time.perf_counter()
         _set_document_progress(document_id, 8, "parse", "문서를 파싱하고 있습니다.")
 
-        # 파서 분기: 확장자에 따라 PDF는 OpenDataLoader, DOCX·PPTX·XLSX는 MarkItDown으로 읽는다
+        # 파서 분기: PDF는 OpenDataLoader, HWP·HWPX·HTML·DOCX는 format_loaders, PPTX·XLSX는 MarkItDown으로 읽는다
         parse_start = time.perf_counter()
         raw_docs = _load_documents(tmp_path, filename)
         parse_elapsed = time.perf_counter() - parse_start
@@ -2564,6 +2571,11 @@ async def upload_document(
             "filename": filename,
             "chunks": chunk_count
         }
+    except UnsupportedDocumentError as error:
+        # 암호·배포용 HWP처럼 내용을 읽을 수 없는 문서: 이유를 진행률과 응답에 그대로 남긴다
+        logger.warning("[upload] document_id=%s filename=%s unsupported: %s", document_id, filename, error)
+        _set_document_progress(document_id, 100, "failed", str(error), status="failed")
+        raise HTTPException(status_code=422, detail=str(error)) from error
     except Exception:
         _set_document_progress(document_id, 100, "failed", "문서 처리에 실패했습니다.", status="failed")
         raise

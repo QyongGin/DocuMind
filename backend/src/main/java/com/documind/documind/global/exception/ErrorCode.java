@@ -37,7 +37,7 @@ public enum ErrorCode {
     FASTAPI_DELETE_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "AI 서버 문서 삭제 중 오류가 발생했습니다."),
     FASTAPI_QUERY_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "AI 서버 질의응답 처리 중 오류가 발생했습니다."),
     DOCUMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "문서를 찾을 수 없습니다."),
-    INVALID_FILE_TYPE(HttpStatus.BAD_REQUEST, "지원하지 않는 파일 형식입니다."),
+    INVALID_FILE_TYPE(HttpStatus.BAD_REQUEST, "지원하지 않는 파일 형식이거나 확장자와 파일 내용이 다릅니다."),
 
     // 카테고리
     CATEGORY_NOT_FOUND(HttpStatus.NOT_FOUND, "카테고리를 찾을 수 없습니다."),
