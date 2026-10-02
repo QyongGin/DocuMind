@@ -1,6 +1,6 @@
 """명령줄: `python -m corpus <명령>`.
 
-    collect        학교 누리집에서 수집(이어 받기). 평일 9~18시에는 멈춘다
+    collect        학교 누리집에서 수집(이어 받기)
     export-review  사람이 확인할 칸을 CSV로 내보내기
     import-review  확인한 CSV를 대장에 반영하고, 개인정보 '제외' 원본을 지운다
     add-file       이미 가진 파일을 대장에 등록(예: 2026학년도 모집요강)

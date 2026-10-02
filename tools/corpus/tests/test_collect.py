@@ -1,22 +1,20 @@
 """수집 통합: 합성 학교 사이트(conftest)를 가짜 HTTP로 돌린다. 네트워크는 쓰지 않는다."""
 
 import csv
-from datetime import date, datetime
+from datetime import date
 
-import pytest
 from conftest import PDF_PHONE, TODAY, FakeHttp, make_session, ok, school_routes
 
 from corpus import scope
 from corpus.collect import Collector, three_years_before
 from corpus.ledger import CSV_COLUMNS
-from corpus.polite import KST, Stop
 
 WWW, IPSI = scope.WWW, scope.IPSI
 
 
-def run(tmp_path, ledger, targets, routes=None, now=None):
+def run(tmp_path, ledger, targets, routes=None):
     http = FakeHttp(routes or school_routes())
-    session = make_session(http, now=now) if now else make_session(http)
+    session = make_session(http)
     collector = Collector(session, ledger, tmp_path, TODAY, log=lambda message: None)
     collector.run(targets)
     return http, collector
@@ -193,12 +191,6 @@ def test_departments(tmp_path, ledger, small_scope):
     assert rows["alpha/page/2002"]["pii_status"] == "보류"  # 교수진
     renamed = rows["cs/page/1741"]
     assert (renamed["title"], renamed["aliases"]) == ("학과소개(AI소프트웨어학과)", "컴퓨터정보공학과")
-
-
-def test_business_hours_stop_keeps_progress(tmp_path, ledger, small_scope):
-    with pytest.raises(Stop):
-        run(tmp_path, ledger, ["notices"], now=datetime(2026, 10, 5, 10, 0, tzinfo=KST))
-    assert ledger.stats()["rows"] == 0
 
 
 def test_stats_report_attachment_sizes(tmp_path, ledger, small_scope):

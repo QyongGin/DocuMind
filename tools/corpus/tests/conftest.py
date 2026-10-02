@@ -7,7 +7,7 @@
 import io
 import sys
 import zipfile
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from urllib.parse import quote
 
@@ -19,13 +19,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from corpus import scope  # noqa: E402
 from corpus.ledger import Ledger  # noqa: E402
-from corpus.polite import KST, PoliteSession  # noqa: E402
+from corpus.polite import PoliteSession  # noqa: E402
 from pdfgen import make_pdf  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 TODAY = date(2026, 10, 2)
-# 금요일 밤 10시: 업무 시간(평일 9~18시) 밖
-EVENING = datetime(2026, 10, 2, 22, 0, tzinfo=KST)
 
 
 def make_hwpx(paragraphs: list[str], tables: int = 0) -> bytes:
@@ -98,9 +96,9 @@ class FakeClock:
         self.now += seconds
 
 
-def make_session(http: FakeHttp, now: datetime = EVENING, **kwargs) -> PoliteSession:
+def make_session(http: FakeHttp, **kwargs) -> PoliteSession:
     clock = FakeClock()
-    session = PoliteSession(http=http, clock=clock.clock, sleep=clock.sleep, now=lambda: now, **kwargs)
+    session = PoliteSession(http=http, clock=clock.clock, sleep=clock.sleep, **kwargs)
     session.fake_clock = clock
     return session
 
