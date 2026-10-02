@@ -1,8 +1,7 @@
 """수집 예절을 코드로 강제하는 HTTP 세션 (수집 규칙 ①②③④⑩).
 
 - robots.txt를 호스트마다 읽고 막힌 주소는 요청하지 않는다
-- 요청은 한 번에 하나, 시작 간격 2초 이상
-- 평일 9~18시(한국 시간)에는 요청하지 않고 멈춘다(학교 업무 시간 회피)
+- 요청은 한 번에 하나, 시작 간격 2초 이상 (평일 9~18시 제한은 2026-10-02 사용자 결정으로 뺐다)
 - User-Agent에 프로젝트 이름을 적는다
 - 403·429·5xx가 이어지면 간격을 두 배로 늘리고, 연속 5번이면 멈춘다
 """
@@ -10,7 +9,7 @@
 import re
 import time
 import urllib.robotparser
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from urllib.parse import urlsplit
 
 import requests
@@ -22,7 +21,7 @@ MAX_INTERVAL = 30.0
 
 
 class Stop(Exception):
-    """수집을 멈춰야 하는 상황(업무 시간, 오류 연속). 나중에 이어 받으면 된다."""
+    """수집을 멈춰야 하는 상황(오류 연속, 요청 상한). 나중에 이어 받으면 된다."""
 
 
 class RobotsDisallowed(Exception):
@@ -58,11 +57,9 @@ class PoliteSession:
         user_agent: str = USER_AGENT,
         min_interval: float = 2.0,
         max_consecutive_errors: int = 5,
-        allow_business_hours: bool = False,
         http: requests.Session | None = None,
         clock=time.monotonic,
         sleep=time.sleep,
-        now=lambda: datetime.now(KST),
         timeout: float = 60.0,
         max_requests: int | None = None,
     ):
@@ -70,11 +67,9 @@ class PoliteSession:
         self.base_interval = min_interval
         self.interval = min_interval
         self.max_consecutive_errors = max_consecutive_errors
-        self.allow_business_hours = allow_business_hours
         self.http = http or requests.Session()
         self.clock = clock
         self.sleep = sleep
-        self.now = now
         self.timeout = timeout
         self.max_requests = max_requests
         self.consecutive_errors = 0
@@ -82,10 +77,6 @@ class PoliteSession:
         self._last_start: float | None = None
         self._robots: dict[str, urllib.robotparser.RobotFileParser] = {}
         self._wildcards: dict[str, list[re.Pattern[str]]] = {}
-
-    def in_business_hours(self) -> bool:
-        current = self.now()
-        return current.weekday() < 5 and 9 <= current.hour < 18
 
     def _wait_turn(self) -> None:
         if self._last_start is not None:
@@ -95,8 +86,6 @@ class PoliteSession:
         self._last_start = self.clock()
 
     def _raw_get(self, url: str, referer: str | None, stream: bool = False) -> requests.Response:
-        if not self.allow_business_hours and self.in_business_hours():
-            raise Stop("평일 9~18시에는 수집하지 않는다(수집 규칙 ②). 업무 시간이 끝난 뒤 이어 받는다")
         self._wait_turn()
         headers = {"User-Agent": self.user_agent}
         if referer:

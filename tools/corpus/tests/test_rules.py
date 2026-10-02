@@ -1,14 +1,13 @@
-"""개인정보 규칙, 대장 ID, HWP 레코드, 수집 예절(간격·업무 시간·robots·오류 연속)."""
+"""개인정보 규칙, 대장 ID, HWP 레코드, 수집 예절(간격·robots·오류 연속)."""
 
 import struct
 import zlib
-from datetime import datetime
 
 import pytest
 from conftest import FakeHttp, fixture, make_session
 
 from corpus import hwp, ids, pii
-from corpus.polite import KST, MAX_INTERVAL, RobotsDisallowed, Stop, wildcard_disallows
+from corpus.polite import MAX_INTERVAL, RobotsDisallowed, Stop, wildcard_disallows
 
 # ---- 개인정보 ----
 
@@ -151,24 +150,6 @@ def test_requests_are_spaced_by_interval():
     assert session.fake_clock.sleeps == [2.0, 2.0]
     assert all("DocuMind" in headers["User-Agent"] for headers in http.headers)
     assert "@" not in http.headers[0]["User-Agent"]  # 이메일을 넣지 않는다
-
-
-@pytest.mark.parametrize("moment, blocked", [
-    (datetime(2026, 10, 2, 9, 0, tzinfo=KST), True),     # 금 09:00
-    (datetime(2026, 10, 2, 17, 59, tzinfo=KST), True),   # 금 17:59
-    (datetime(2026, 10, 2, 18, 0, tzinfo=KST), False),   # 금 18:00
-    (datetime(2026, 10, 2, 8, 59, tzinfo=KST), False),   # 금 08:59
-    (datetime(2026, 10, 3, 11, 0, tzinfo=KST), False),   # 토 11:00
-])
-def test_business_hours_stop_before_any_request(moment, blocked):
-    http = FakeHttp({"https://example.inhatc.ac.kr/a": (200, "a", {})})
-    session = make_session(http, now=moment)
-    if blocked:
-        with pytest.raises(Stop):
-            session.get("https://example.inhatc.ac.kr/a")
-        assert http.requested == []
-    else:
-        session.get("https://example.inhatc.ac.kr/a")
 
 
 def test_robots_wildcard_rules_are_enforced():
