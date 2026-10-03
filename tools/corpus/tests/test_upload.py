@@ -50,7 +50,8 @@ class FakeBackend:
         if url.endswith("/api/categories"):
             new_id = max(self.categories.values()) + 1
             self.categories[json["name"]] = new_id
-            return FakeResponse(200, {"success": True, "data": {"id": new_id, "name": json["name"]}})
+            # 실제 백엔드(CategoryController)처럼 새로 만들면 201
+            return FakeResponse(201, {"success": True, "data": {"id": new_id, "name": json["name"]}})
         if url.endswith("/api/documents"):
             filename = files["file"][0]
             self.uploads.append({"filename": filename, "fields": dict(data), "auth": self.headers.get("Authorization")})

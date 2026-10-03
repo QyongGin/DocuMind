@@ -112,7 +112,8 @@ class BackendClient:
         for name in sorted(names - set(ids)):
             created = self.session.post(f"{self.base_url}/api/categories", json={"name": name}, timeout=30)
             self._raise_for_auth(created)
-            if created.status_code != 200:
+            # 백엔드는 새로 만들면 201 Created를 돌려준다(CategoryController)
+            if not 200 <= created.status_code < 300:
                 raise UploadStop(f"카테고리 '{name}'를 만들지 못했습니다({created.status_code}).")
             ids[name] = created.json()["data"]["id"]
         return ids
