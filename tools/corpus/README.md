@@ -66,11 +66,51 @@ python3.12 -m venv .venv
 
 `--root`를 주지 않으면 저장소의 `Assets/corpus/`를 쓴다. 대상은 `pages,regulations,faq,ipsi,depts,notices`.
 
+## 챗봇에 올리기 (`upload`, 맥북에서 실행)
+
+대장의 행을 챗봇 백엔드 API(화면 주소의 `/api`)로 올린다. 백엔드는 같은 파일(SHA-256)을 막고, 대장 정보
+(대장 ID·원래 주소·게시일·학년도)와 카테고리를 AI 서버로 넘겨 청크 메타데이터에 넣는다.
+
+| 대상(`--set`) | 고르는 행 | 올릴 곳 |
+|---|---|---|
+| `service` | `index_status='색인'`(지금 유효한 문서) | 서비스 챗봇 |
+| `dataset` | `split='학습'`이고 개인정보 `통과` | 데이터셋용 색인(서비스와 다른 compose 프로젝트, 다른 주소) |
+
+**준비**: 데스크탑이 켜져 있고 챗봇이 떠 있어야 한다(`docs/development/local-gpu/데스크탑-작업-시작-종료-절차.md`).
+관리자 비밀번호를 알고 있어야 한다. 비밀번호는 실행할 때 직접 입력하고 어디에도 저장하지 않는다
+(자동 실행이 필요하면 그때만 환경변수 `DOCUMIND_ADMIN_PASSWORD`에 넣는다).
+
+```bash
+cd tools/corpus
+# 1) 무엇을 올릴지 확인만(요청 없음): 고른 행 수·형식별 수·파일 이름 다섯 개
+.venv/bin/python -m corpus upload --base-url http://<챗봇 화면 주소> --set service --dry-run
+# 2) 표본부터: 형식을 골라 몇 개만
+.venv/bin/python -m corpus upload --base-url http://<챗봇 화면 주소> --set service --formats hwp,html --limit 10
+# 3) 전체(한 문서씩 처리가 끝날 때까지 기다리며 올린다. 중간에 끊겨도 다시 실행하면 이어 올린다)
+.venv/bin/python -m corpus upload --base-url http://<챗봇 화면 주소> --set service
+# 4) 실패한 문서만 다시
+.venv/bin/python -m corpus upload --base-url http://<챗봇 화면 주소> --set service --retry-failed
+```
+
+- 실행하면 대상·주소·고른 행 수를 보여 주고 `이 주소로 올릴까요? (y/N)`를 묻는다. 서비스와 데이터셋 주소를 헷갈리지 않게 꼭 확인한다.
+- 처리 순서는 한 번에 한 문서다. 백엔드 문서 처리 실행기가 스레드 1개·대기열 20칸이라 연달아 보내면 거절된다.
+- 결과는 `ledger.sqlite`의 `uploads` 표에 남는다: `ready`(올림) · `exists`(같은 파일이 이미 있음, 기존 문서 번호 기록) · `failed`(이유 기록).
+  `service` 대상은 대장의 `uploaded_document_id`도 채운다.
+- 실패가 **연속 5번**이면 멈춘다(서버가 꺼졌거나 로그인이 끊긴 경우). 원인을 고친 뒤 같은 명령을 다시 실행한다.
+- 실패 이유가 "암호가 걸렸거나 배포용…"이면 한글에서 일반 문서나 PDF로 다시 저장해 관리자 화면으로 올린다.
+
+결과 확인:
+
+```bash
+sqlite3 ../../Assets/corpus/ledger.sqlite "SELECT status, count(*) FROM uploads WHERE target='service' GROUP BY status"
+sqlite3 ../../Assets/corpus/ledger.sqlite "SELECT doc_id, reason FROM uploads WHERE target='service' AND status='failed'"
+```
+
 ## 결과물
 
 ```text
 Assets/corpus/
-├── ledger.sqlite      문서 대장 (ledger·failures·visits 테이블)
+├── ledger.sqlite      문서 대장 (ledger·failures·visits·uploads 테이블)
 ├── collect.log        수집 기록
 └── raw/               원본: <사이트>/<종류>/<번호> (글 본문은 <글>/body.html, 첨부는 <글>/a<번호>.<확장자>)
 ```

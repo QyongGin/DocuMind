@@ -38,4 +38,9 @@ public class ApiResponse<T> {
     public static <T> ApiResponse<T> fail(String message) {
         return new ApiResponse<>(false, null, message);
     }
+
+    /** 실패 응답 — 오류 메시지와 함께 호출자가 이어서 처리할 data를 담는다(예: 같은 파일일 때 기존 문서). */
+    public static <T> ApiResponse<T> fail(String message, T data) {
+        return new ApiResponse<>(false, data, message);
+    }
 }

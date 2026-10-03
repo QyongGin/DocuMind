@@ -3282,6 +3282,49 @@ button:disabled {
   font-weight: 400;
 }
 
+.upload-more {
+  display: grid;
+  gap: 10px;
+}
+
+.upload-more summary {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.upload-more[open] summary {
+  margin-bottom: 4px;
+}
+
+.upload-more input {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--chat-border);
+  border-radius: 14px;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 400;
+}
+
+.document-row__failed {
+  margin-right: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: #b42318;
+  background: #fef3f2;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.document-row .document-row__error {
+  color: #b42318;
+  font-size: 12px;
+  white-space: normal;
+}
+
 .upload-notice {
   margin: 0;
   color: var(--chat-muted);

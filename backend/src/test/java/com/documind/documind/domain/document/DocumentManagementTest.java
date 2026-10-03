@@ -9,13 +9,16 @@ import com.documind.documind.domain.category.CategoryRepository;
 import com.documind.documind.domain.category.CategoryResponse;
 import com.documind.documind.domain.category.CategoryService;
 import com.documind.documind.global.exception.CustomException;
+import com.documind.documind.global.exception.DuplicateDocumentException;
 import com.documind.documind.global.exception.ErrorCode;
 import com.documind.documind.global.infra.fastapi.FastApiClient;
+import com.documind.documind.global.infra.fastapi.FastApiDocumentMetadata;
 import com.documind.documind.global.infra.fastapi.FastApiUploadResponse;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.io.Resource;
@@ -23,9 +26,14 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.LocalDate;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -182,7 +190,7 @@ class DocumentManagementTest {
     @Test
     @DisplayName("문서 업로드 - FastAPI 응답 청크 수가 Document에 반영된다")
     void upload_chunkCountUpdated() {
-        when(fastApiClient.uploadDocument(any(), anyLong()))
+        when(fastApiClient.uploadDocument(any(MultipartFile.class), anyLong(), any(FastApiDocumentMetadata.class)))
                 .thenReturn(new FastApiUploadResponse("success", "report.pdf", 7));
 
         MockMultipartFile file = new MockMultipartFile(
@@ -206,7 +214,7 @@ class DocumentManagementTest {
     @Test
     @DisplayName("문서 업로드 - 선택한 카테고리가 문서에 저장되고 목록 응답에 반환된다")
     void upload_categorySavedAndReturnedInList() {
-        when(fastApiClient.uploadDocument(any(), anyLong()))
+        when(fastApiClient.uploadDocument(any(MultipartFile.class), anyLong(), any(FastApiDocumentMetadata.class)))
                 .thenReturn(new FastApiUploadResponse("success", "report.pdf", 7));
         Category category = categoryRepository.save(Category.create("학사"));
         MockMultipartFile file = new MockMultipartFile(
@@ -227,7 +235,7 @@ class DocumentManagementTest {
     @DisplayName("문서 업로드 - 비동기 모드에서는 PROCESSING 상태를 즉시 반환하고 백그라운드에서 완료한다")
     void upload_asyncProcessingReturnsImmediately() throws InterruptedException {
         ReflectionTestUtils.setField(documentService, "asyncProcessingEnabled", true);
-        when(fastApiClient.uploadDocument(any(Resource.class), eq("async.pdf"), anyLong()))
+        when(fastApiClient.uploadDocument(any(Resource.class), eq("async.pdf"), anyLong(), any(FastApiDocumentMetadata.class)))
                 .thenAnswer(invocation -> {
                     Thread.sleep(100);
                     return new FastApiUploadResponse("success", "async.pdf", 5);
@@ -257,13 +265,13 @@ class DocumentManagementTest {
         CustomException ex = assertThrows(CustomException.class,
                 () -> documentService.upload(file, 99999L, ADMIN_USERNAME));
         assertEquals(ErrorCode.CATEGORY_NOT_FOUND, ex.getErrorCode());
-        verify(fastApiClient, never()).uploadDocument(any(), anyLong());
+        verify(fastApiClient, never()).uploadDocument(any(MultipartFile.class), anyLong(), any(FastApiDocumentMetadata.class));
     }
 
     @Test
     @DisplayName("문서 업로드 - 브라우저 MIME이 octet-stream인 HWP도 파일 서명이 맞으면 받고 MIME은 형식 표 값으로 저장한다")
     void upload_hwpWithOctetStreamMimeIsAccepted() {
-        when(fastApiClient.uploadDocument(any(), anyLong()))
+        when(fastApiClient.uploadDocument(any(MultipartFile.class), anyLong(), any(FastApiDocumentMetadata.class)))
                 .thenReturn(new FastApiUploadResponse("success", "notice.hwp", 3));
         MockMultipartFile file = new MockMultipartFile(
                 "file", "notice.hwp", "application/octet-stream", HWP_BYTES
@@ -286,7 +294,107 @@ class DocumentManagementTest {
         CustomException ex = assertThrows(CustomException.class,
                 () -> documentService.upload(file, ADMIN_USERNAME));
         assertEquals(ErrorCode.INVALID_FILE_TYPE, ex.getErrorCode());
-        verify(fastApiClient, never()).uploadDocument(any(), anyLong());
+        verify(fastApiClient, never()).uploadDocument(any(MultipartFile.class), anyLong(), any(FastApiDocumentMetadata.class));
+    }
+
+    @Test
+    @DisplayName("문서 업로드 - 같은 파일을 다시 올리면 409와 기존 문서를 알리고 AI 서버를 부르지 않는다")
+    void upload_duplicateFileThrowsConflictWithExistingDocument() {
+        when(fastApiClient.uploadDocument(any(MultipartFile.class), anyLong(), any(FastApiDocumentMetadata.class)))
+                .thenReturn(new FastApiUploadResponse("success", "report.pdf", 7));
+        DocumentUploadResponse first = documentService.upload(
+                new MockMultipartFile("file", "report.pdf", "application/pdf", PDF_BYTES), ADMIN_USERNAME);
+
+        DuplicateDocumentException ex = assertThrows(DuplicateDocumentException.class, () -> documentService.upload(
+                new MockMultipartFile("file", "다른 이름.pdf", "application/pdf", PDF_BYTES), ADMIN_USERNAME));
+
+        assertEquals(ErrorCode.DUPLICATE_DOCUMENT, ex.getErrorCode());
+        assertEquals(first.getDocumentId(), ex.getExisting().documentId());
+        assertEquals("report.pdf", ex.getExisting().originalName());
+        verify(fastApiClient, times(1)).uploadDocument(any(MultipartFile.class), anyLong(), any(FastApiDocumentMetadata.class));
+    }
+
+    @Test
+    @DisplayName("문서 업로드 - 실패한 문서와 같은 파일은 다시 올릴 수 있다")
+    void upload_failedDocumentDoesNotBlockSameFile() {
+        when(fastApiClient.uploadDocument(any(MultipartFile.class), anyLong(), any(FastApiDocumentMetadata.class)))
+                .thenReturn(new FastApiUploadResponse("success", "report.pdf", 4));
+        Document failed = Document.create(admin, null, "failed.pdf", "report.pdf", 100L, "application/pdf",
+                DocumentSource.EMPTY, sha256(PDF_BYTES));
+        failed.failProcessing(10L, "AI 서버 문서 처리 중 오류가 발생했습니다.");
+        documentRepository.save(failed);
+
+        DocumentUploadResponse response = documentService.upload(
+                new MockMultipartFile("file", "report.pdf", "application/pdf", PDF_BYTES), ADMIN_USERNAME);
+
+        assertEquals(4, response.getChunkCount());
+    }
+
+    @Test
+    @DisplayName("문서 업로드 - 출처 정보와 카테고리를 DB에 저장하고 AI 서버 메타데이터로 넘긴다")
+    void upload_sourceInfoSavedAndSentToFastApi() {
+        when(fastApiClient.uploadDocument(any(MultipartFile.class), anyLong(), any(FastApiDocumentMetadata.class)))
+                .thenReturn(new FastApiUploadResponse("success", "notice.hwp", 2));
+        Category category = categoryRepository.save(Category.create("학사"));
+        DocumentSource source = DocumentSource.of(
+                "www/bbs/11/1/a2", "https://www.example.ac.kr/notice/1", "2026-08-01", 2026);
+
+        DocumentUploadResponse response = documentService.upload(
+                new MockMultipartFile("file", "notice.hwp", "application/octet-stream", HWP_BYTES),
+                category.getId(), source, ADMIN_USERNAME);
+
+        Document saved = documentRepository.findById(response.getDocumentId()).orElseThrow();
+        assertEquals(source, saved.getSource());
+        assertEquals(64, saved.getContentSha256().length());
+        ArgumentCaptor<FastApiDocumentMetadata> metadata = ArgumentCaptor.forClass(FastApiDocumentMetadata.class);
+        verify(fastApiClient).uploadDocument(any(MultipartFile.class), eq(response.getDocumentId()), metadata.capture());
+        assertEquals(new FastApiDocumentMetadata("www/bbs/11/1/a2", "https://www.example.ac.kr/notice/1",
+                LocalDate.of(2026, 8, 1), 2026, category.getId(), "학사"), metadata.getValue());
+        DocumentListResponse listed = documentService.list().stream()
+                .filter(document -> document.getId().equals(response.getDocumentId()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(2026, listed.getAcademicYear());
+        assertEquals("https://www.example.ac.kr/notice/1", listed.getSourceUrl());
+    }
+
+    @Test
+    @DisplayName("비동기 업로드 - AI 서버가 읽을 수 없다고 거절하면 그 이유를 남기고 진행률 메시지로 보인다")
+    void upload_asyncUnreadableDocumentRecordsReason() throws InterruptedException {
+        ReflectionTestUtils.setField(documentService, "asyncProcessingEnabled", true);
+        String reason = "암호가 걸렸거나 배포용으로 저장된 HWP 문서는 읽을 수 없습니다.";
+        when(fastApiClient.uploadDocument(any(Resource.class), eq("secret.hwp"), anyLong(), any(FastApiDocumentMetadata.class)))
+                .thenThrow(new CustomException(ErrorCode.DOCUMENT_UNREADABLE, reason));
+
+        DocumentUploadResponse response = documentService.upload(
+                new MockMultipartFile("file", "secret.hwp", "application/octet-stream", HWP_BYTES), ADMIN_USERNAME);
+
+        Document failed = waitForStatus(response.getDocumentId(), DocumentProcessingStatus.FAILED);
+        assertEquals(reason, failed.getProcessingError());
+        assertEquals(reason, documentService.progress(response.getDocumentId()).getMessage());
+    }
+
+    @Test
+    @DisplayName("비동기 업로드 - 예상하지 못한 오류의 내부 글은 실패 이유에 넣지 않는다")
+    void upload_asyncUnexpectedFailureHidesInternalMessage() throws InterruptedException {
+        ReflectionTestUtils.setField(documentService, "asyncProcessingEnabled", true);
+        when(fastApiClient.uploadDocument(any(Resource.class), eq("crash.pdf"), anyLong(), any(FastApiDocumentMetadata.class)))
+                .thenThrow(new IllegalStateException("NullPointer at com.documind.internal"));
+
+        DocumentUploadResponse response = documentService.upload(
+                new MockMultipartFile("file", "crash.pdf", "application/pdf", PDF_BYTES), ADMIN_USERNAME);
+
+        Document failed = waitForStatus(response.getDocumentId(), DocumentProcessingStatus.FAILED);
+        assertFalse(failed.getProcessingError().contains("com.documind"));
+        assertTrue(failed.getProcessingError().contains("AI 서버"));
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test

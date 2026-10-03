@@ -21,6 +21,9 @@ const UPLOAD_FORMAT_LABEL = 'PDF, HWP, HWPX, DOCX, PPTX, XLSX, HTML'
 // 한컴 HWP 공개 문서 사용 조건: 제품 화면·설명서·도움말·소스에 이 문구를 적는다
 const HWP_SPEC_NOTICE = '본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.'
 
+const EMPTY_UPLOAD_SOURCE = { sourceUrl: '', sourcePostedAt: '', academicYear: '' }
+const PROCESSING_FAILED_MESSAGE = '문서 색인 처리에 실패했습니다.'
+
 function hasUploadExtension(file) {
   const name = file?.name ?? ''
   const dotIndex = name.lastIndexOf('.')
@@ -113,6 +116,8 @@ function AdminDashboardPage() {
   const [selectedCategory, setSelectedCategory] = useState('전체')
   const [selectedFile, setSelectedFile] = useState(null)
   const [selectedUploadCategoryId, setSelectedUploadCategoryId] = useState('')
+  // 업로드 '추가 정보(선택)': 원래 주소·게시일·학년도(#126). 대량 업로드 명령과 같은 API 칸을 쓴다
+  const [uploadSource, setUploadSource] = useState(EMPTY_UPLOAD_SOURCE)
   const [categoryName, setCategoryName] = useState('')
   const [message, setMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
@@ -254,7 +259,8 @@ function AdminDashboardPage() {
       setUploadProgress(progress)
 
       if (progress?.status === 'failed') {
-        throw new Error('문서 색인 처리에 실패했습니다. ai-server 로그를 확인해야 합니다.')
+        // 백엔드가 저장한 실패 이유(예: 암호가 걸린 HWP)를 그대로 보여 담당자가 스스로 고칠 수 있게 한다
+        throw new Error(progress?.message || PROCESSING_FAILED_MESSAGE)
       }
 
       if (progress?.status === 'completed' || clampPercent(progress?.percent) >= 100) {
@@ -266,7 +272,7 @@ function AdminDashboardPage() {
         }
 
         if (targetDocument?.processingStatus === 'FAILED') {
-          throw new Error('문서 색인 처리에 실패했습니다. ai-server 로그를 확인해야 합니다.')
+          throw new Error(targetDocument.processingError || PROCESSING_FAILED_MESSAGE)
         }
       }
 
@@ -374,8 +380,12 @@ function AdminDashboardPage() {
     setUploadProgress({ percent: 0, message: '파일 업로드를 준비하고 있습니다.', status: 'processing' })
 
     try {
-      const uploadResult = await uploadDocument(selectedFile, { categoryId: selectedUploadCategoryId })
+      const uploadResult = await uploadDocument(selectedFile, {
+        categoryId: selectedUploadCategoryId,
+        ...uploadSource,
+      })
       resetSelectedFile()
+      setUploadSource(EMPTY_UPLOAD_SOURCE)
       if (uploadResult?.processingStatus === 'PROCESSING') {
         const completedDocument = await waitForDocumentProcessing(uploadResult.documentId)
         await finishUploadProgress()
@@ -666,6 +676,40 @@ function AdminDashboardPage() {
                     ))}
                   </select>
                 </label>
+                <details className="upload-more">
+                  <summary>추가 정보 (선택)</summary>
+                  <label className="upload-category">
+                    원래 주소
+                    <input
+                      type="url"
+                      value={uploadSource.sourceUrl}
+                      onChange={(event) => setUploadSource((current) => ({ ...current, sourceUrl: event.target.value }))}
+                      placeholder="https://"
+                      disabled={isUploading}
+                    />
+                  </label>
+                  <label className="upload-category">
+                    게시일
+                    <input
+                      type="date"
+                      value={uploadSource.sourcePostedAt}
+                      onChange={(event) => setUploadSource((current) => ({ ...current, sourcePostedAt: event.target.value }))}
+                      disabled={isUploading}
+                    />
+                  </label>
+                  <label className="upload-category">
+                    학년도
+                    <input
+                      type="number"
+                      min="1990"
+                      max="2100"
+                      value={uploadSource.academicYear}
+                      onChange={(event) => setUploadSource((current) => ({ ...current, academicYear: event.target.value }))}
+                      placeholder="예: 2026"
+                      disabled={isUploading}
+                    />
+                  </label>
+                </details>
                 <button type="submit" className="admin-primary-button" disabled={!selectedFile || isUploading}>
                   {isUploading ? '업로드 중' : '업로드'}
                 </button>
@@ -700,13 +744,21 @@ function AdminDashboardPage() {
                       disabled={document.processingStatus !== 'READY' && document.processingStatus != null}
                     >
                       <span>
-                        <strong>{document.originalName}</strong>
+                        <strong>
+                          {document.processingStatus === 'FAILED' && <em className="document-row__failed">실패</em>}
+                          {document.originalName}
+                        </strong>
                         <span className="document-row__meta">
                           <small>
-                            {document.categoryName || '미분류'} · {formatFileSize(document.fileSize)} · {document.chunkCount} chunks
+                            {document.categoryName || '미분류'}
+                            {document.academicYear && ` · ${document.academicYear}학년도`}
+                            {` · ${formatFileSize(document.fileSize)} · ${document.chunkCount} chunks`}
                             {formatDuration(document.processingDurationMs) && ` · 처리 ${formatDuration(document.processingDurationMs)}`}
                           </small>
                         </span>
+                        {document.processingStatus === 'FAILED' && document.processingError && (
+                          <span className="document-row__error">{document.processingError}</span>
+                        )}
                       </span>
                     </button>
                     <time>{formatDate(document.createdAt)}</time>

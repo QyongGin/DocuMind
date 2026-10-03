@@ -4,6 +4,7 @@ import com.documind.documind.domain.auth.User;
 import com.documind.documind.domain.category.Category;
 import jakarta.persistence.*;
 import lombok.*;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
@@ -69,6 +70,30 @@ public class Document {
     @Column(nullable = false)
     private Boolean isActive = true;
 
+    // 처리 실패 이유. 관리자 화면에 그대로 보여도 되는 문장만 담는다(내부 오류 글은 넣지 않는다). 성공하면 null
+    @Column(length = 500)
+    private String processingError;
+
+    // 문서 대장 ID(예: www/bbs/11/110588/a162900). 화면에서 직접 올린 문서는 null
+    @Column(length = 200)
+    private String sourceLedgerId;
+
+    // 원래 주소(학교 누리집). 답변 출처 링크에 쓴다
+    @Column(length = 1000)
+    private String sourceUrl;
+
+    // 원래 게시일
+    @Column
+    private LocalDate sourcePostedAt;
+
+    // 학년도. M2 검색 범위 좁히기에 쓴다
+    @Column
+    private Integer academicYear;
+
+    // 파일 내용의 SHA-256(16진수 64자). 같은 파일 다시 올리기를 막는다
+    @Column(length = 64)
+    private String contentSha256;
+
     // 문서 자동 요약 결과. 고도화 단계에서 사용하므로 현재는 NULL 유지
     @Column(columnDefinition = "TEXT")
     private String summary;
@@ -101,6 +126,26 @@ public class Document {
     public static Document create(User uploadedBy, Category category,
                                   String fileName, String originalName,
                                   Long fileSize, String mimeType) {
+        return create(uploadedBy, category, fileName, originalName, fileSize, mimeType, DocumentSource.EMPTY, null);
+    }
+
+    /**
+     * 출처 정보와 파일 지문을 함께 가진 업로드 문서 Entity를 생성한다.
+     *
+     * @param uploadedBy    문서를 업로드한 관리자
+     * @param category      문서 카테고리. 미분류면 null
+     * @param fileName      서버에 저장할 파일명
+     * @param originalName  사용자가 업로드한 원본 파일명
+     * @param fileSize      파일 크기(bytes)
+     * @param mimeType      파일 MIME 타입
+     * @param source        문서 대장 정보(대장 ID·원래 주소·게시일·학년도). 없으면 {@link DocumentSource#EMPTY}
+     * @param contentSha256 파일 내용 SHA-256. 모르면 null
+     * @return 초기 처리 상태의 문서 Entity
+     */
+    public static Document create(User uploadedBy, Category category,
+                                  String fileName, String originalName,
+                                  Long fileSize, String mimeType,
+                                  DocumentSource source, String contentSha256) {
         Document doc = new Document();
         doc.uploadedBy = uploadedBy;
         doc.category = category;
@@ -111,7 +156,21 @@ public class Document {
         doc.chunkCount = 0;
         doc.processingStatus = DocumentProcessingStatus.PROCESSING;
         doc.isActive = true;
+        doc.sourceLedgerId = source.ledgerId();
+        doc.sourceUrl = source.url();
+        doc.sourcePostedAt = source.postedAt();
+        doc.academicYear = source.academicYear();
+        doc.contentSha256 = contentSha256;
         return doc;
+    }
+
+    /**
+     * 문서 대장 정보를 값 객체로 돌려준다.
+     *
+     * @return 대장 ID·원래 주소·게시일·학년도
+     */
+    public DocumentSource getSource() {
+        return new DocumentSource(sourceLedgerId, sourceUrl, sourcePostedAt, academicYear);
     }
 
     /**
@@ -124,16 +183,19 @@ public class Document {
         this.chunkCount = chunkCount;
         this.processingDurationMs = processingDurationMs;
         this.processingStatus = DocumentProcessingStatus.READY;
+        this.processingError = null;
     }
 
     /**
-     * FastAPI 처리 실패 상태를 기록한다.
+     * FastAPI 처리 실패 상태와 이유를 기록한다.
      *
      * @param processingDurationMs 실패까지 걸린 시간(ms)
+     * @param reason               관리자 화면에 보여도 되는 실패 이유. 500자를 넘으면 자른다
      */
-    public void failProcessing(long processingDurationMs) {
+    public void failProcessing(long processingDurationMs, String reason) {
         this.processingDurationMs = processingDurationMs;
         this.processingStatus = DocumentProcessingStatus.FAILED;
+        this.processingError = reason == null || reason.length() <= 500 ? reason : reason.substring(0, 500);
     }
 
     /**

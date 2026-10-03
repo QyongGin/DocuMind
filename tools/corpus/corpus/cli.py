@@ -7,17 +7,23 @@
     remeasure      글을 읽지 못한 행을 원본으로 다시 재기(형식 오인 정정, 빈 파일 정리). 요청은 보내지 않는다
     stats          대장 집계(형식·주제·개인정보·첨부 실측 크기)
     failures       실패 목록
+    upload         대장 행을 서비스 백엔드 API로 올리기(관리자 비밀번호는 실행 때 입력, 이어 올리기)
 """
 
 import argparse
+import getpass
 import hashlib
 import json
+import os
 import shutil
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from . import extract, pii
+import requests
+
+from . import extract, pii, upload
 from .collect import TARGETS, Collector, counts_dict, remeasure
 from .ledger import Ledger
 from .polite import KST, PoliteSession, Stop
@@ -143,6 +149,39 @@ def cmd_failures(args) -> int:
     return 0
 
 
+def cmd_upload(args) -> int:
+    if not args.base_url.startswith(("http://", "https://")):
+        print("--base-url은 http:// 또는 https://로 시작해야 합니다.", file=sys.stderr)
+        return 2
+    root = Path(args.root)
+    ledger = ledger_at(root)
+    try:
+        formats = args.formats.split(",") if args.formats else None
+        rows = upload.select_rows(ledger.con, args.set, formats)
+        by_format = Counter(row["format"] for row in rows)
+        print(f"대상 {args.set} · 주소 {args.base_url} · 고른 행 {len(rows)}개 "
+              f"({', '.join(f'{fmt} {n}' for fmt, n in sorted(by_format.items()))})")
+        if args.dry_run:
+            for row in rows[:5]:
+                print(f"  {row['doc_id']} → {upload.upload_filename(row['title'], row['format'])} · 카테고리 {row.get('topic') or '-'}")
+            return 0
+        if not args.yes and input("이 주소로 올릴까요? (y/N) ").strip().lower() != "y":
+            print("올리지 않았습니다.")
+            return 1
+        password = os.environ.get("DOCUMIND_ADMIN_PASSWORD") or getpass.getpass(f"{args.username} 비밀번호: ")
+        client = upload.BackendClient(args.base_url, requests.Session())
+        client.login(args.username, password)
+        counts = upload.Uploader(ledger.con, root, client, args.set).run(rows, args.retry_failed, args.limit)
+        print(f"끝: 올림 {counts['ready']} · 이미 있음 {counts['exists']} · 실패 {counts['failed']} · "
+              f"전에 끝나 건너뜀 {counts['skipped_done']}")
+        return 0 if counts["failed"] == 0 else 1
+    except upload.UploadStop as stop:
+        print(str(stop), file=sys.stderr)
+        return 1
+    finally:
+        ledger.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="corpus",
@@ -189,6 +228,18 @@ def main(argv: list[str] | None = None) -> int:
     failures = commands.add_parser("failures", help="실패 목록")
     failures.add_argument("--limit", type=int, default=50)
     failures.set_defaults(func=cmd_failures)
+
+    up = commands.add_parser("upload", help="대장 행을 서비스 백엔드로 올리기(비밀번호는 실행 때 입력)")
+    up.add_argument("--base-url", required=True, help="챗봇 화면 주소(예: http://데스크탑이름). /api로 백엔드를 부른다")
+    up.add_argument("--set", choices=sorted(upload.SELECTIONS), required=True,
+                    help="service: 서비스 색인(색인 행) / dataset: 데이터셋용 색인(학습 몫)")
+    up.add_argument("--username", default="admin", help="관리자 아이디(기본 admin)")
+    up.add_argument("--formats", help="쉼표로 형식 고르기(예: hwp,html). 표본 시험용")
+    up.add_argument("--limit", type=int, help="이번에 올릴 최대 문서 수. 표본 시험용")
+    up.add_argument("--retry-failed", action="store_true", help="실패로 적힌 행도 다시 올린다")
+    up.add_argument("--dry-run", action="store_true", help="고른 행 수와 파일 이름만 보여 준다(요청 없음)")
+    up.add_argument("--yes", action="store_true", help="확인 질문 없이 바로 올린다")
+    up.set_defaults(func=cmd_upload)
 
     args = parser.parse_args(argv)
     if getattr(args, "interval", 2.0) < 2.0:

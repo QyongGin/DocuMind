@@ -1489,7 +1489,41 @@ def _apply_overlap(docs: list[Document]) -> list[Document]:
 
 # 색인이 정하는 metadata 키. 로더가 붙인 같은 키가 덮어쓰면 안 된다.
 # (PDF 로더는 source에 업로드 임시 파일 경로를 넣는다.)
-INDEXER_OWNED_METADATA_KEYS = frozenset({"document_id", "source", "chunk_index"})
+# 업로드 때 백엔드가 넘기는 문서 단위 메타데이터(문서 대장 정보·카테고리, #126). 청크마다 같은 값을 넣는다
+DOCUMENT_METADATA_KEYS = ("ledger_id", "source_url", "posted_at", "academic_year", "category_id", "category")
+INDEXER_OWNED_METADATA_KEYS = frozenset({"document_id", "source", "chunk_index", *DOCUMENT_METADATA_KEYS})
+
+
+def _document_metadata_from_form(
+    ledger_id: str | None = None,
+    source_url: str | None = None,
+    posted_at: str | None = None,
+    academic_year: int | None = None,
+    category_id: int | None = None,
+    category: str | None = None,
+) -> dict:
+    """업로드 요청의 문서 단위 메타데이터에서 값이 있는 칸만 남긴다(Chroma 메타데이터는 None을 받지 않는다)."""
+    values = {
+        "ledger_id": ledger_id,
+        "source_url": source_url,
+        "posted_at": posted_at,
+        "academic_year": academic_year,
+        "category_id": category_id,
+        "category": category,
+    }
+    return {
+        key: value.strip() if isinstance(value, str) else value
+        for key, value in values.items()
+        if value is not None and (not isinstance(value, str) or value.strip())
+    }
+
+
+def _apply_document_metadata(docs: list[Document], document_metadata: dict | None) -> None:
+    """문서 단위 메타데이터를 모든 색인 항목(원문 청크·표 사실·source block·retrieval chunk)에 넣는다."""
+    if not document_metadata:
+        return
+    for doc in docs:
+        doc.metadata.update(document_metadata)
 
 
 def _build_chunk_metadata(doc: Document, filename: str, document_id: int, chunk_index: int, page_lookup: list[dict]) -> dict:
@@ -2123,6 +2157,7 @@ def _store_document_chunks(
     document_id: int,
     page_lookup: list[dict],
     opendataloader_json_artifacts: OpenDataLoaderJsonIndexArtifacts | None = None,
+    document_metadata: dict | None = None,
 ) -> tuple[float, float, float, int, int, int]:
     """
     문서 청크를 batch embedding 후 ChromaDB에 batch 저장한다.
@@ -2135,6 +2170,7 @@ def _store_document_chunks(
         page_lookup,
         opendataloader_json_artifacts,
     )
+    _apply_document_metadata([*index_docs, *source_docs, *retrieval_docs], document_metadata)
     embedding_elapsed = 0.0
     chroma_elapsed = 0.0
     total_entries = len(index_docs)
@@ -2407,7 +2443,12 @@ def _delete_document_chroma_entries(
     )
 
 
-async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -> int:
+async def _run_upload_pipeline(
+    tmp_path: str,
+    filename: str,
+    document_id: int,
+    document_metadata: dict | None = None,
+) -> int:
     """문서 전처리 파이프라인: 로딩 → 정규화 → Two-Pass 청킹 → overlap → 임베딩 → ChromaDB 저장"""
 
     def _execute() -> int:
@@ -2490,6 +2531,7 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
             document_id,
             page_lookup,
             opendataloader_json_artifacts,
+            document_metadata,
         )
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
@@ -2533,10 +2575,20 @@ async def _run_upload_pipeline(tmp_path: str, filename: str, document_id: int) -
 @app.post("/documents")
 async def upload_document(
     file: UploadFile = File(...),
-    document_id: int = Form(None)
+    document_id: int = Form(None),
+    ledger_id: str | None = Form(None),
+    source_url: str | None = Form(None),
+    posted_at: str | None = Form(None),
+    academic_year: int | None = Form(None),
+    category_id: int | None = Form(None),
+    category: str | None = Form(None),
 ):
     _set_document_progress(document_id, 0, "upload", "파일 업로드를 준비하고 있습니다.")
     filename = file.filename or "upload"
+    # 문서 대장 정보·카테고리(#126): 백엔드가 검사한 값을 받아 청크마다 메타데이터로 넣는다
+    document_metadata = _document_metadata_from_form(
+        ledger_id, source_url, posted_at, academic_year, category_id, category
+    )
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -2555,16 +2607,17 @@ async def upload_document(
 
     _set_document_progress(document_id, 5, "upload", "파일 저장을 완료했습니다.")
     logger.info(
-        "[upload_file] document_id=%s filename=%s bytes=%s chunk_bytes=%s save=%.2fs",
+        "[upload_file] document_id=%s filename=%s bytes=%s chunk_bytes=%s save=%.2fs metadata_keys=%s",
         document_id,
         filename,
         bytes_written,
         UPLOAD_READ_CHUNK_BYTES,
-        time.perf_counter() - file_save_start
+        time.perf_counter() - file_save_start,
+        ",".join(sorted(document_metadata)) or "-",
     )
 
     try:
-        chunk_count = await _run_upload_pipeline(tmp_path, filename, document_id)
+        chunk_count = await _run_upload_pipeline(tmp_path, filename, document_id, document_metadata)
         _set_document_progress(document_id, 100, "completed", "문서 처리가 완료되었습니다.", status="completed")
         return {
             "status": "success",

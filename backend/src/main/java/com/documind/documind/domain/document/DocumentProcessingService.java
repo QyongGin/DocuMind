@@ -1,6 +1,8 @@
 package com.documind.documind.domain.document;
 
+import com.documind.documind.global.exception.CustomException;
 import com.documind.documind.global.infra.fastapi.FastApiClient;
+import com.documind.documind.global.infra.fastapi.FastApiDocumentMetadata;
 import com.documind.documind.global.infra.fastapi.FastApiUploadResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,18 +29,27 @@ public class DocumentProcessingService {
     private final FastApiClient fastApiClient;
     private final TransactionTemplate transactionTemplate;
 
+    private static final String UNEXPECTED_FAILURE_MESSAGE = "AI 서버가 문서를 처리하지 못했습니다. 잠시 뒤 다시 올려 주세요.";
+
     /**
      * 문서 색인을 백그라운드 스레드에서 수행한다.
      *
      * @param tempFilePath         요청 종료 뒤에도 읽을 수 있게 복사해 둔 임시 파일 경로
      * @param originalFilename     FastAPI multipart filename으로 전달할 원본 파일명
      * @param documentId           MySQL documents PK
+     * @param metadata             청크마다 넣을 문서 메타데이터(대장 정보·카테고리)
      * @param processingStartNanos 업로드 요청을 받은 시점의 nano time
      */
     @Async("documentProcessingExecutor")
-    public void processAsync(Path tempFilePath, String originalFilename, Long documentId, long processingStartNanos) {
+    public void processAsync(
+            Path tempFilePath,
+            String originalFilename,
+            Long documentId,
+            FastApiDocumentMetadata metadata,
+            long processingStartNanos
+    ) {
         try {
-            process(tempFilePath, originalFilename, documentId, processingStartNanos);
+            process(tempFilePath, originalFilename, documentId, metadata, processingStartNanos);
         } catch (RuntimeException ignored) {
             // 실패 상태와 상세 로그는 process()에서 이미 기록한다.
         }
@@ -48,20 +59,27 @@ public class DocumentProcessingService {
             Path tempFilePath,
             String originalFilename,
             Long documentId,
+            FastApiDocumentMetadata metadata,
             long processingStartNanos
     ) {
         try {
             FastApiUploadResponse response = fastApiClient.uploadDocument(
                     new FileSystemResource(tempFilePath),
                     originalFilename,
-                    documentId
+                    documentId,
+                    metadata
             );
             long processingDurationMs = elapsedMillis(processingStartNanos);
             markReady(documentId, response.getChunks(), processingDurationMs);
             return response;
+        } catch (CustomException e) {
+            // ErrorCode 메시지와 AI 서버 422 이유는 화면에 보여도 되는 문장이라 그대로 남긴다
+            markFailed(documentId, elapsedMillis(processingStartNanos), e.getMessage());
+            log.warn("문서 색인 처리 실패. documentId={} reason={}", documentId, e.getMessage(), e);
+            throw e;
         } catch (RuntimeException e) {
-            long processingDurationMs = elapsedMillis(processingStartNanos);
-            markFailed(documentId, processingDurationMs);
+            // 예상하지 못한 오류의 내부 글은 화면에 내보내지 않는다
+            markFailed(documentId, elapsedMillis(processingStartNanos), UNEXPECTED_FAILURE_MESSAGE);
             log.warn("문서 색인 처리 실패. documentId={}", documentId, e);
             throw e;
         } finally {
@@ -77,11 +95,11 @@ public class DocumentProcessingService {
         );
     }
 
-    private void markFailed(Long documentId, long processingDurationMs) {
+    private void markFailed(Long documentId, long processingDurationMs, String reason) {
         transactionTemplate.executeWithoutResult(status ->
                 documentRepository.findById(documentId)
                         .filter(Document::getIsActive)
-                        .ifPresent(document -> document.failProcessing(processingDurationMs))
+                        .ifPresent(document -> document.failProcessing(processingDurationMs, reason))
         );
     }
 
