@@ -35,7 +35,9 @@ services:
 
   chromadb:
     restart: unless-stopped
-    image: chromadb/chroma:1.0.0
+    # 서버 버전은 ai-server의 파이썬 클라이언트(requirements.txt의 chromadb)와 맞춘다.
+    # 버전을 바꾸면 저장 파일이 새 형식으로 바뀔 수 있으니 deploy/backup.sh로 먼저 백업한다.
+    image: chromadb/chroma:1.5.5
     expose:
       - "8000"
     volumes:
@@ -68,7 +70,8 @@ services:
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-qwen3-embedding:4b}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
       OLLAMA_EMBEDDING_WARMUP_ON_STARTUP: ${OLLAMA_EMBEDDING_WARMUP_ON_STARTUP:-false}
-      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-4096}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-8192}
+      OLLAMA_EMBEDDING_NUM_CTX: ${OLLAMA_EMBEDDING_NUM_CTX:-2048}
       OLLAMA_NUM_PREDICT: ${OLLAMA_NUM_PREDICT:-512}
       OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-0}
       CHUNK_SIZE: ${CHUNK_SIZE:-800}
