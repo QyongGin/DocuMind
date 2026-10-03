@@ -114,7 +114,11 @@ OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 # RAG 결정론 앵커(17/40)의 전제다. 0이 아니면 같은 입력에도 EXAONE 답이 흔들린다.
 OLLAMA_TEMPERATURE = _env_float("OLLAMA_TEMPERATURE", 0.0)
 OLLAMA_EMBEDDING_WARMUP_ON_STARTUP = _env_bool("OLLAMA_EMBEDDING_WARMUP_ON_STARTUP")
-OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 4096)
+# 생성 문맥(프롬프트 + 답). 4,096에서는 긴 질문의 근거가 잘렸다(2026-10-01 실측, EXAONE 27문항 중 4개).
+OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 8192)
+# 임베딩 문맥. 생성 문맥과 따로 둔다. 임베딩하는 글은 청크(800자)·표 사실(420자) 크기라
+# 2,048이면 충분하고, 생성 문맥을 늘려도 임베딩 모델이 GPU 메모리를 더 차지하지 않는다.
+OLLAMA_EMBEDDING_NUM_CTX = _env_int("OLLAMA_EMBEDDING_NUM_CTX", 2048)
 OLLAMA_NUM_PREDICT = _env_int("OLLAMA_NUM_PREDICT", 512)
 OLLAMA_NUM_THREAD = _env_int("OLLAMA_NUM_THREAD", 0, minimum=0) or None
 CHUNK_SIZE = _env_int("CHUNK_SIZE", 800, minimum=100)
@@ -141,6 +145,8 @@ if CHUNK_OVERLAP >= CHUNK_SIZE:
 ollama_client = Client(host=OLLAMA_BASE_URL)
 
 # 질의응답에 사용할 LLM. 임베딩 모델과 분리해 별도 관리
+# 사고 모드는 끈다(Ollama think=false). 켜져 있으면 답 앞에 생각 글을 만들어 느려지고,
+# 모델마다 기본값이 달라 같은 조건으로 비교할 수 없다.
 llm = OllamaLLM(
     model=OLLAMA_LLM_MODEL,
     base_url=OLLAMA_BASE_URL,
@@ -148,7 +154,8 @@ llm = OllamaLLM(
     keep_alive=OLLAMA_KEEP_ALIVE,
     num_ctx=OLLAMA_NUM_CTX,
     num_predict=OLLAMA_NUM_PREDICT,
-    num_thread=OLLAMA_NUM_THREAD
+    num_thread=OLLAMA_NUM_THREAD,
+    reasoning=False,
 )
 
 # 환경변수로 ChromaDB 모드 분기
@@ -201,7 +208,7 @@ _bm25_sparse_index = None
 _document_progress: dict[int, dict] = {}
 
 logger.info(
-    "[startup] ollama_base_url=%s llm_model=%s llm_temperature=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s query_retrieval_chunks_enabled=%s opendataloader_json_table_facts_enabled=%s chroma_host=%s chroma_port=%s",
+    "[startup] ollama_base_url=%s llm_model=%s llm_temperature=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s embedding_num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s query_retrieval_chunks_enabled=%s opendataloader_json_table_facts_enabled=%s chroma_host=%s chroma_port=%s",
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
     OLLAMA_TEMPERATURE,
@@ -209,6 +216,7 @@ logger.info(
     OLLAMA_KEEP_ALIVE,
     OLLAMA_EMBEDDING_WARMUP_ON_STARTUP,
     OLLAMA_NUM_CTX,
+    OLLAMA_EMBEDDING_NUM_CTX,
     OLLAMA_NUM_PREDICT,
     OLLAMA_NUM_THREAD or "auto",
     CHUNK_SIZE,
@@ -1551,8 +1559,8 @@ def _build_chunk_metadata(doc: Document, filename: str, document_id: int, chunk_
 
 
 def _ollama_embedding_options() -> dict:
-    """Ollama embed API에 전달할 runtime options를 만든다."""
-    options = {"num_ctx": OLLAMA_NUM_CTX}
+    """Ollama embed API에 전달할 runtime options를 만든다. 문맥은 생성 문맥이 아니라 임베딩 문맥을 쓴다."""
+    options = {"num_ctx": OLLAMA_EMBEDDING_NUM_CTX}
     if OLLAMA_NUM_THREAD is not None:
         options["num_thread"] = OLLAMA_NUM_THREAD
     return options
