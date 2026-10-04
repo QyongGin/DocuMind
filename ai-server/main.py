@@ -116,9 +116,10 @@ OLLAMA_TEMPERATURE = _env_float("OLLAMA_TEMPERATURE", 0.0)
 OLLAMA_EMBEDDING_WARMUP_ON_STARTUP = _env_bool("OLLAMA_EMBEDDING_WARMUP_ON_STARTUP")
 # 생성 문맥(프롬프트 + 답). 4,096에서는 긴 질문의 근거가 잘렸다(2026-10-01 실측, EXAONE 27문항 중 4개).
 OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 8192)
-# 임베딩 문맥. 생성 문맥과 따로 둔다. 임베딩하는 글은 가장 긴 것이 약 1,400토큰이라
-# (2026-10-03 표본 실측: 1,785자·1,372토큰) 2,048이면 잘리지 않고, 생성 문맥을 늘려도
-# 임베딩 모델이 GPU 메모리를 더 차지하지 않는다. 잘리지 않으면 문맥 크기는 벡터를 바꾸지 않는다.
+# 임베딩 문맥. 생성 문맥과 따로 둔다. 서비스 전체 색인(2026-10-04)에서 임베딩하는 글 5만여 개 중
+# 2,048토큰을 넘는 것은 한 PDF의 긴 청크 2개(2,098·2,124토큰)뿐이고 나머지는 1,372토큰 이하다.
+# 넘는 글은 끝부분이 잘린 채 임베딩된다(청크 길이 상한은 M2). 생성 문맥을 늘려도 임베딩 모델이
+# GPU 메모리를 더 차지하지 않고, 잘리지 않는 글은 문맥 크기가 벡터를 바꾸지 않는다.
 OLLAMA_EMBEDDING_NUM_CTX = _env_int("OLLAMA_EMBEDDING_NUM_CTX", 2048)
 OLLAMA_NUM_PREDICT = _env_int("OLLAMA_NUM_PREDICT", 512)
 OLLAMA_NUM_THREAD = _env_int("OLLAMA_NUM_THREAD", 0, minimum=0) or None
