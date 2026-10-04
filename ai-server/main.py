@@ -129,6 +129,9 @@ EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 64)
 UPLOAD_READ_CHUNK_BYTES = _env_int("UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)
 DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 5)
 BM25_INDEX_MAX_ENTRIES = _env_int("BM25_INDEX_MAX_ENTRIES", 50000)
+# Chroma에서 많은 항목을 가져올 때 한 번에 받을 수. Chroma 내부 SQLite는 한 질의의 변수 수에 한도가 있어,
+# 표 사실 45,878개를 한 번에 가져오다 "too many SQL variables"로 실패했다(2026-10-04 서비스 전체 색인).
+CHROMA_GET_PAGE_SIZE = _env_int("CHROMA_GET_PAGE_SIZE", 5000)
 TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
 TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
 EMBED_TABLE_RAW_CHUNKS = _env_bool("EMBED_TABLE_RAW_CHUNKS", True)
@@ -204,8 +207,10 @@ retrieval_chunk_collection = client.get_or_create_collection(RETRIEVAL_CHUNK_COL
 _progress_lock = Lock()
 _kiwi_lock = Lock()
 _bm25_index_lock = Lock()
+_table_fact_cache_lock = Lock()
 _kiwi_analyzer = None
 _bm25_sparse_index = None
+_table_fact_cache = None
 _document_progress: dict[int, dict] = {}
 
 logger.info(
@@ -2291,7 +2296,7 @@ def _store_document_chunks(
             )
         raise
 
-    _invalidate_bm25_sparse_index()
+    _invalidate_query_caches()
     return page_match_elapsed, embedding_elapsed, chroma_elapsed, total_entries, table_fact_count, len(retrieval_docs)
 
 
@@ -2441,7 +2446,7 @@ def _delete_document_chroma_entries(
             raise non_tolerated_aux_error
     finally:
         if deleted_chunks:
-            _invalidate_bm25_sparse_index()
+            _invalidate_query_caches()
 
     return (
         deleted_chunks,
@@ -3057,31 +3062,149 @@ def _extract_lexical_query_terms(question: str) -> tuple[set[str], set[str]]:
     return subject_terms, intent_terms
 
 
-def _score_table_fact_for_question(fact: str, question: str, allow_cost_subject_fallback: bool = False) -> int:
-    """질문과 table_fact의 lexical 관련도를 계산한다."""
+TABLE_PRIMARY_COUNT_COLUMN_PATTERN = re.compile(r"(모집\s*정원|모집정원|합계|총|전체|total)\s*=")
+
+
+@dataclass(frozen=True)
+class PreparedTableFact:
+    """채점에 쓰는 표 사실 하나. 질문과 상관없는 계산(소문자·공백 제거·금액·합계 열·통계어)을 미리 해 둔다."""
+
+    chunk_id: str
+    document: str
+    metadata: dict
+    lower: str
+    compact: str
+    has_money_value: bool
+    has_primary_count_column: bool
+    has_statistic_term: bool
+
+
+def _prepare_table_fact(fact: str, chunk_id: str = "", metadata: dict | None = None) -> PreparedTableFact:
+    """표 사실 글에서 질문과 무관한 채점 재료를 한 번만 계산한다."""
     fact_lower = fact.lower()
-    subject_terms, intent_terms = _extract_lexical_query_terms(question)
-    asks_cost_value = bool(intent_terms & INTENT_QUERY_TERMS["cost"])
-    has_money_value = bool(MONEY_VALUE_PATTERN.search(fact))
-    subject_matches = any(_term_in_text(term, fact) for term in subject_terms)
+    return PreparedTableFact(
+        chunk_id=chunk_id,
+        document=fact,
+        metadata=metadata or {},
+        lower=fact_lower,
+        compact=_compact_search_text(fact_lower),
+        has_money_value=bool(MONEY_VALUE_PATTERN.search(fact)),
+        has_primary_count_column=bool(TABLE_PRIMARY_COUNT_COLUMN_PATTERN.search(fact_lower)),
+        has_statistic_term=any(term in fact_lower for term in TABLE_STATISTIC_TERMS),
+    )
+
+
+def _prepare_query_terms(terms: set[str]) -> list[tuple[str, str]]:
+    """질문 단어마다 _term_in_text가 쓰는 소문자형과 공백 제거형을 한 번만 만든다."""
+    return [(term.lower(), _compact_search_text(term.lower())) for term in terms]
+
+
+def _prepared_term_in_fact(term: tuple[str, str], fact: PreparedTableFact) -> bool:
+    """_term_in_text와 같은 판정(일반 포함 또는 공백 제거 포함)을 미리 만든 값으로 한다."""
+    term_lower, term_compact = term
+    return term_lower in fact.lower or term_compact in fact.compact
+
+
+def _score_prepared_table_fact(
+    fact: PreparedTableFact,
+    subject_terms: list[tuple[str, str]],
+    intent_terms: list[tuple[str, str]],
+    raw_intent_terms: set[str],
+    allow_cost_subject_fallback: bool = False,
+) -> int:
+    """질문과 table_fact의 lexical 관련도를 계산한다. 표 사실·질문 단어는 미리 준비한 것을 받는다."""
+    asks_cost_value = bool(raw_intent_terms & INTENT_QUERY_TERMS["cost"])
+    subject_matches = any(_prepared_term_in_fact(term, fact) for term in subject_terms)
     if subject_terms and not subject_matches:
-        if not (allow_cost_subject_fallback and asks_cost_value and has_money_value):
+        if not (allow_cost_subject_fallback and asks_cost_value and fact.has_money_value):
             return 0
 
     score = 0
-    score += sum(12 for term in subject_terms if _term_in_text(term, fact))
-    score += sum(4 for term in intent_terms if _term_in_text(term, fact))
-    if asks_cost_value and has_money_value:
+    score += sum(12 for term in subject_terms if _prepared_term_in_fact(term, fact))
+    score += sum(4 for term in intent_terms if _prepared_term_in_fact(term, fact))
+    if asks_cost_value and fact.has_money_value:
         score += 24
 
-    asks_count_value = bool(intent_terms & {"모집", "인원", "정원", "모집인원", "모집정원"})
-    has_primary_count_column = bool(re.search(r"(모집\s*정원|모집정원|합계|총|전체|total)\s*=", fact_lower))
-    if asks_count_value and has_primary_count_column:
+    asks_count_value = bool(raw_intent_terms & {"모집", "인원", "정원", "모집인원", "모집정원"})
+    if asks_count_value and fact.has_primary_count_column:
         score += 20
-    if asks_count_value and any(term in fact_lower for term in TABLE_STATISTIC_TERMS):
+    if asks_count_value and fact.has_statistic_term:
         score -= 10
 
     return max(score, 0)
+
+
+def _score_table_fact_for_question(fact: str, question: str, allow_cost_subject_fallback: bool = False) -> int:
+    """질문과 table_fact의 lexical 관련도를 계산한다."""
+    subject_terms, intent_terms = _extract_lexical_query_terms(question)
+    return _score_prepared_table_fact(
+        _prepare_table_fact(fact),
+        _prepare_query_terms(subject_terms),
+        _prepare_query_terms(intent_terms),
+        intent_terms,
+        allow_cost_subject_fallback,
+    )
+
+
+def _get_collection_entries_paged(
+    chroma_collection,
+    where: dict,
+    include: list[str],
+    max_entries: int | None = None,
+) -> dict:
+    """where에 맞는 항목을 CHROMA_GET_PAGE_SIZE씩 나눠 가져온다. max_entries가 있으면 그 수까지만 가져온다."""
+    ids: list = []
+    documents: list = []
+    metadatas: list = []
+    offset = 0
+    while max_entries is None or len(ids) < max_entries:
+        page_limit = CHROMA_GET_PAGE_SIZE if max_entries is None else min(CHROMA_GET_PAGE_SIZE, max_entries - len(ids))
+        page = chroma_collection.get(where=where, include=include, limit=page_limit, offset=offset)
+        page_ids = page.get("ids") or []
+        ids.extend(page_ids)
+        documents.extend(page.get("documents") or [])
+        metadatas.extend(page.get("metadatas") or [])
+        if len(page_ids) < page_limit:
+            break
+        offset += len(page_ids)
+    return {"ids": ids, "documents": documents, "metadatas": metadatas}
+
+
+def _invalidate_table_fact_cache() -> None:
+    """문서 업로드/삭제 후 다음 표 질의에서 표 사실 캐시를 다시 만들도록 무효화한다."""
+    global _table_fact_cache
+    with _table_fact_cache_lock:
+        _table_fact_cache = None
+
+
+def _get_table_fact_cache() -> list[PreparedTableFact]:
+    """
+    table_fact 전체를 처음 쓸 때 한 번 Chroma에서 나눠 가져와 채점 재료와 함께 메모리에 둔다.
+    질의마다 표 사실 전체를 Chroma에서 다시 받지 않기 위한 query-time cache다(BM25 index와 같은 방식).
+    """
+    global _table_fact_cache
+    with _table_fact_cache_lock:
+        if _table_fact_cache is None:
+            started = time.perf_counter()
+            results = _get_collection_entries_paged(
+                collection,
+                where={"chunk_role": "table_fact"},
+                include=["documents", "metadatas"],
+            )
+            _table_fact_cache = [
+                _prepare_table_fact(str(document), str(chunk_id), metadata)
+                for chunk_id, document, metadata in zip(
+                    results["ids"],
+                    results["documents"],
+                    results["metadatas"],
+                )
+            ]
+            logger.info(
+                "[table_fact_cache_built] entries=%s elapsed=%.2fs",
+                len(_table_fact_cache),
+                time.perf_counter() - started,
+            )
+        return _table_fact_cache
 
 
 def _lookup_lexical_table_fact_candidates(question: str, limit: int = 5) -> list[dict]:
@@ -3091,24 +3214,19 @@ def _lookup_lexical_table_fact_candidates(question: str, limit: int = 5) -> list
         return []
 
     try:
-        results = collection.get(
-            where={"chunk_role": "table_fact"},
-            include=["documents", "metadatas"],
-        )
+        table_facts = _get_table_fact_cache()
     except Exception:
         logger.exception("[query_table_fact_lexical] failed")
         return []
 
-    candidates: list[tuple[int, str, dict, str]] = []
-    for chunk_id, document, metadata in zip(
-        results.get("ids", []),
-        results.get("documents", []),
-        results.get("metadatas", []),
-    ):
-        score = _score_table_fact_for_question(str(document), question)
+    prepared_subject_terms = _prepare_query_terms(subject_terms)
+    prepared_intent_terms = _prepare_query_terms(intent_terms)
+    candidates: list[tuple[int, PreparedTableFact]] = []
+    for fact in table_facts:
+        score = _score_prepared_table_fact(fact, prepared_subject_terms, prepared_intent_terms, intent_terms)
         if score <= 0:
             continue
-        candidates.append((score, str(chunk_id), metadata or {}, str(document)))
+        candidates.append((score, fact))
 
     candidates.sort(key=lambda candidate: candidate[0], reverse=True)
     selected = candidates[:limit]
@@ -3123,11 +3241,12 @@ def _lookup_lexical_table_fact_candidates(question: str, limit: int = 5) -> list
         {
             "rank": index + 1,
             "table_fact_score": score,
-            "chunk_id": chunk_id,
-            "document": document,
-            "metadata": metadata,
+            "chunk_id": fact.chunk_id,
+            "document": fact.document,
+            # 캐시의 metadata를 뒤 단계가 바꾸지 못하게 복사해서 넘긴다.
+            "metadata": dict(fact.metadata),
         }
-        for index, (score, chunk_id, metadata, document) in enumerate(selected)
+        for index, (score, fact) in enumerate(selected)
     ]
 
 
@@ -3285,6 +3404,12 @@ def _invalidate_bm25_sparse_index() -> None:
         _bm25_sparse_index = None
 
 
+def _invalidate_query_caches() -> None:
+    """문서 업로드/삭제 후 질의용 메모리 캐시(BM25 index, 표 사실)를 함께 무효화한다."""
+    _invalidate_bm25_sparse_index()
+    _invalidate_table_fact_cache()
+
+
 def _build_sparse_index_record(chunk_id: str, document: str, metadata: dict) -> SparseIndexRecord:
     """raw chunk 하나를 BM25 index record로 변환한다."""
     tokens = _tokenize_sparse_search(_build_sparse_search_text(document, metadata))
@@ -3305,10 +3430,11 @@ def _build_bm25_sparse_index() -> SparseSearchIndex:
     Chroma raw chunk를 한 번 읽어 인메모리 BM25 inverted index를 만든다.
     매 질의마다 collection 전체를 다시 전송받지 않기 위한 query-time cache다.
     """
-    results = collection.get(
+    results = _get_collection_entries_paged(
+        collection,
         where={"chunk_role": "raw"},
         include=["documents", "metadatas"],
-        limit=BM25_INDEX_MAX_ENTRIES + 1,
+        max_entries=BM25_INDEX_MAX_ENTRIES + 1,
     )
     raw_result_count = len(results.get("ids", []))
     if raw_result_count > BM25_INDEX_MAX_ENTRIES:
