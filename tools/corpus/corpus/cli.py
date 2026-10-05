@@ -8,6 +8,7 @@
     stats          대장 집계(형식·주제·개인정보·첨부 실측 크기)
     failures       실패 목록
     upload         대장 행을 서비스 백엔드 API로 올리기(관리자 비밀번호는 실행 때 입력, 이어 올리기)
+    evalset        평가셋 정본 검사·나누기·사람이 꼭 볼 문항 고르기·고정(`python -m corpus evalset -h`)
 """
 
 import argparse
@@ -25,10 +26,12 @@ import requests
 
 from . import extract, pii, upload
 from .collect import TARGETS, Collector, counts_dict, remeasure
+from .evalset import cli as evalset_cli
 from .ledger import Ledger
 from .polite import KST, PoliteSession, Stop
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[3] / "Assets" / "corpus"
+DEFAULT_EVALSET = DEFAULT_ROOT.parent / "eval" / "evalset.jsonl"
 
 
 def ledger_at(root: Path) -> Ledger:
@@ -240,6 +243,8 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--dry-run", action="store_true", help="고른 행 수와 파일 이름만 보여 준다(요청 없음)")
     up.add_argument("--yes", action="store_true", help="확인 질문 없이 바로 올린다")
     up.set_defaults(func=cmd_upload)
+
+    evalset_cli.add_parser(commands, DEFAULT_EVALSET)
 
     args = parser.parse_args(argv)
     if getattr(args, "interval", 2.0) < 2.0:
