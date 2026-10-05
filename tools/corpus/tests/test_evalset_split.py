@@ -1,4 +1,4 @@
-"""개발용·확인용 나누기(결정 ⑤), 꼭 볼 문항 고르기(결정 ⑦), 표본 추가, 고정."""
+"""연습용·실전용 나누기(결정 ⑤), 꼭 볼 문항 고르기(결정 ⑦), 표본 추가, 고정."""
 
 from collections import Counter
 from datetime import date
@@ -37,7 +37,7 @@ def test_same_seed_same_parts_and_groups_stay_together(ledger):
     for entry in items:
         by_doc.setdefault(entry["evidence"][0]["doc"], set()).add(first[entry["id"]])
     assert all(len(parts) == 1 for parts in by_doc.values())  # 같은 문서의 문항은 한쪽에만
-    held = sum(1 for part in first.values() if part == "확인")
+    held = sum(1 for part in first.values() if part == "실전")
     assert abs(held - round(len(items) * 0.4)) <= 3
 
 
@@ -48,7 +48,7 @@ def test_held_share_is_per_topic(ledger):
         entry["evidence"][0]["doc"] += f"/{entry['topic']}"
     parts = split.assign_parts(items, ledger, seed=1)
     for topic in ("학사", "입시"):
-        held = sum(1 for entry in items if entry["topic"] == topic and parts[entry["id"]] == "확인")
+        held = sum(1 for entry in items if entry["topic"] == topic and parts[entry["id"]] == "실전")
         assert 14 <= held <= 18  # 주제마다 40개의 40% 안팎
 
 
@@ -57,7 +57,7 @@ def test_big_document_is_split_by_section(ledger):
                   evidence=[{"doc": "gana/viewer/guide", "quote": "q", "section": f"장{number % 4}"}])
              for number in range(1, 25)]
     parts = split.assign_parts(items, ledger, seed=3)
-    assert set(parts.values()) == {"개발", "확인"}  # 한 문서라도 장 단위로 갈린다
+    assert set(parts.values()) == {"연습", "실전"}  # 한 문서라도 장 단위로 갈린다
     by_section = {}
     for entry in items:
         by_section.setdefault(entry["evidence"][0]["section"], set()).add(parts[entry["id"]])
@@ -66,17 +66,17 @@ def test_big_document_is_split_by_section(ledger):
 
 def test_choose_needs_and_auto_approve(ledger):
     items = many_items(20, 2)
-    parts = {entry["id"]: ("확인" if index % 2 else "개발") for index, entry in enumerate(items)}
+    parts = {entry["id"]: ("실전" if index % 2 else "연습") for index, entry in enumerate(items)}
     ready(items, parts)
     items[0]["cross"] = {"verdict": "불일치"}
     items[2]["cross"] = {"verdict": "애매"}
     items[4]["machine"]["warnings"] = ["부재 확인에 걸린 글 1건"]
-    held_refusal = refusal_item("ev-0900", part="확인", machine={"errors": [], "warnings": []}, cross={"verdict": "일치"})
+    held_refusal = refusal_item("ev-0900", part="실전", machine={"errors": [], "warnings": []}, cross={"verdict": "일치"})
     items.append(held_refusal)
     counts = split.choose_needs(items, seed=5, today=TODAY, sample_size=10)
-    assert (items[0]["need"], items[2]["need"], items[4]["need"], held_refusal["need"]) == ("불일치", "불일치", "경고", "확인용 거절")
+    assert (items[0]["need"], items[2]["need"], items[4]["need"], held_refusal["need"]) == ("불일치", "불일치", "경고", "실전용 거절")
     samples = [entry for entry in items if entry["need"] == "표본"]
-    assert len(samples) == 10 and all(entry["part"] == "확인" for entry in samples)
+    assert len(samples) == 10 and all(entry["part"] == "실전" for entry in samples)
     auto = [entry for entry in items if entry["need"] is None]
     assert all(entry["review"]["status"] == "자동 승인" for entry in auto)
     assert counts["자동 승인"] == len(auto)
@@ -87,7 +87,7 @@ def test_choose_needs_and_auto_approve(ledger):
 
 def test_choose_needs_requires_checks_cross_and_parts(ledger):
     items = many_items(2, 1)
-    ready(items, {entry["id"]: "개발" for entry in items})
+    ready(items, {entry["id"]: "연습" for entry in items})
     items[1]["machine"]["errors"] = ["인용이 원문에 없음"]
     with pytest.raises(ValueError, match="ev-0002"):
         split.choose_needs(items, seed=1, today=TODAY)
@@ -100,7 +100,7 @@ def test_choose_needs_requires_checks_cross_and_parts(ledger):
 
 def test_more_sample_and_sample_errors(ledger):
     items = many_items(10, 2)
-    ready(items, {entry["id"]: "확인" for entry in items})
+    ready(items, {entry["id"]: "실전" for entry in items})
     split.choose_needs(items, seed=2, today=TODAY, sample_size=4)
     for entry, status in zip([entry for entry in items if entry["need"] == "표본"], ["승인", "고침", "버림", "승인"]):
         entry["review"] = {"status": status}
@@ -111,12 +111,12 @@ def test_more_sample_and_sample_errors(ledger):
 
 
 def test_freeze_needs_all_reviews_and_reports_counts():
-    items = [item("ev-0001", part="개발", need="불일치", review={"status": "보류"}),
-             item("ev-0002", question="둘", part="확인", need=None, review={"status": "자동 승인"}),
-             item("ev-0003", question="셋", part="확인", need="표본", review={"status": "버림"})]
+    items = [item("ev-0001", part="연습", need="불일치", review={"status": "보류"}),
+             item("ev-0002", question="둘", part="실전", need=None, review={"status": "자동 승인"}),
+             item("ev-0003", question="셋", part="실전", need="표본", review={"status": "버림"})]
     with pytest.raises(ValueError, match="ev-0001"):
         split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)
     items[0]["review"] = {"status": "고침"}
     text = split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)
-    assert "본 2 (개발 1 / 확인 1), 쉬운 0, 버림 1" in text
+    assert "본 2 (연습 1 / 실전 1), 쉬운 0, 버림 1" in text
     assert "evalset_sha256: " in text and "split_seed: 7" in text

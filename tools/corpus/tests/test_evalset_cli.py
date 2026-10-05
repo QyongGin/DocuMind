@@ -30,7 +30,7 @@ def test_evalset_commands_end_to_end(ledger, tmp_path, capsys):
 
     schema.save(path, [entry for entry in saved.values() if entry["id"] != "ev-0004"])  # 돌려보낸 문항은 초안으로
     assert main([*root, "split", str(path), "--seed", "11", "--write"]) == 0
-    assert all(entry["part"] in ("개발", "확인") for entry in schema.load(path))
+    assert all(entry["part"] in ("연습", "실전") for entry in schema.load(path))
 
     assert main([*root, "need", str(path), "--seed", "11"]) == 1  # 교차 확인 전에는 고르지 않는다
     entries = schema.load(path)

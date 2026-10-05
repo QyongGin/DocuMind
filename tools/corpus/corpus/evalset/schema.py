@@ -11,13 +11,13 @@ from pathlib import Path
 
 SETS = ("본", "쉬운")
 SPLITS = ("평가", "학습")
-PARTS = ("개발", "확인")
+PARTS = ("연습", "실전")
 SHAPES = ("값", "목록", "절차", "예아니오", "설명", "거절")
 TAGS = ("표 근거", "글 근거", "해마다 바뀜", "연도 시험", "다른 말", "FAQ 제목", "조건", "비교·계산", "여러 근거")
 REFUSAL_KINDS = ("가까운 빈칸", "잘못된 전제", "자료 없음", "무관")
 FORBID_WHY = ("지난해 값", "옆 칸 값", "다른 학과 값", "지어낼 법한 값")
 STATUSES = ("승인", "고침", "버림", "보류", "자동 승인")
-NEEDS = ("불일치", "경고", "확인용 거절", "표본")
+NEEDS = ("불일치", "경고", "실전용 거절", "표본")
 CROSS_VERDICTS = ("일치", "불일치", "애매")
 ID_RE = re.compile(r"(ev|tr)-\d{4,}")
 REQUIRED = ("id", "rev", "set", "split", "question", "shape", "tags", "answer", "facts", "forbidden",

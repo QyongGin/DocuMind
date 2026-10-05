@@ -1,8 +1,8 @@
 """명령줄: `python -m corpus evalset <명령>`.
 
     check   기계 검사(인용 일치·사실 포함·문서 확인·중복·거절 기록·지난해 금지 값). --write면 결과를 정본에 쓴다
-    split   개발용·확인용 나누기(문서 묶음 단위, 씨앗). --write면 정본에 쓴다
-    need    사람이 꼭 볼 문항 고르기(불일치·경고·확인용 거절·표본), 나머지 자동 승인. --more N으로 표본 추가
+    split   연습용·실전용 나누기(문서 묶음 단위, 씨앗). --write면 정본에 쓴다
+    need    사람이 꼭 볼 문항 고르기(불일치·경고·실전용 거절·표본), 나머지 자동 승인. --more N으로 표본 추가
     report  분포 보고(문항 수·모양·주제·꼬리표·문서당 상한·검수 현황)
     freeze  고정 기록(버전·SHA-256·문항 수) 쓰기
     judge   문항 하나에 답 하나를 규칙으로 판정해 보기
@@ -58,8 +58,8 @@ def cmd_split(args) -> int:
     for item in items:
         item["part"] = parts[item["id"]]
     main = [item for item in items if item["set"] == "본"]
-    held = sum(1 for item in main if item["part"] == "확인")
-    print(f"본 문항 {len(main)} · 개발 {len(main) - held} · 확인 {held} (씨앗 {args.seed})")
+    held = sum(1 for item in main if item["part"] == "실전")
+    print(f"본 문항 {len(main)} · 연습 {len(main) - held} · 실전 {held} (씨앗 {args.seed})")
     if args.write:
         schema.save(args.file, items)
     return 0
@@ -132,9 +132,9 @@ def add_parser(commands, default_file: Path) -> None:
     check.add_argument("--write", action="store_true", help="검사 결과를 정본에 쓴다")
     check.set_defaults(func=cmd_check)
 
-    parts = with_file("split", "개발용·확인용 나누기")
+    parts = with_file("split", "연습용·실전용 나누기")
     parts.add_argument("--seed", type=int, required=True)
-    parts.add_argument("--held", type=float, default=split.HELD_RATIO, help="확인용 비율(기본 0.4)")
+    parts.add_argument("--held", type=float, default=split.HELD_RATIO, help="실전용 비율(기본 0.4)")
     parts.add_argument("--write", action="store_true")
     parts.set_defaults(func=cmd_split)
 

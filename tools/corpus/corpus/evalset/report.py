@@ -32,7 +32,7 @@ def build(items: list[dict], ledger: Ledger, caps: dict[str, int] | None = None)
     lines = [f"본 문항 {len(main)}/{MAIN_TOTAL} · 쉬운 문항 {len(easy)}/{EASY_TOTAL} · 버림 {len(items) - len(live)}"]
 
     parts = Counter(item.get("part") or "미정" for item in main)
-    lines.append(f"나눔: 개발 {parts['개발']} · 확인 {parts['확인']} · 미정 {parts['미정']}")
+    lines.append(f"나눔: 연습 {parts['연습']} · 실전 {parts['실전']} · 미정 {parts['미정']}")
     shapes = Counter(item["shape"] for item in main)
     lines.append("모양: " + " · ".join(f"{shape} {shapes[shape]}/{target}" for shape, target in SHAPE_TARGETS.items()))
     topics = Counter(item.get("topic") or "미정" for item in main)
