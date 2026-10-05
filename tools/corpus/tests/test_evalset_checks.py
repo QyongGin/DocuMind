@@ -114,6 +114,19 @@ def test_exported_index_text_wins_over_raw_file(ledger, tmp_path):
     assert "30,000원" in texts.raw("gana/page/fee")  # 교차 확인·지난해 판 대조는 원본에서 뽑은 글
 
 
+def test_quote_without_table_bars_matches_markdown_table(ledger, tmp_path):
+    """색인 글의 표는 `| 칸 | 칸 |` 모양이다. 초안 인용은 구분선 없이 써도 같은 줄로 본다."""
+    build_corpus(ledger, tmp_path)
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    (index_dir / checks.index_text_name("gana/page/fee")).write_text(
+        "| 구분 | 수시 1차 |\n| --- | --- |\n| 전형료 | 32,000원 |", encoding="utf-8")
+    texts = checks.TextSource(ledger, tmp_path, index_dir)
+    plain = item("ev-0001", evidence=[{"doc": "gana/page/fee", "quote": "전형료 32,000원"}],
+                 facts=[{"name": "전형료", "values": ["32,000원"]}])
+    assert checks.check_all([plain], ledger, texts, TODAY)["ev-0001"]["machine"]["errors"] == []
+
+
 def test_pdf_raw_text(corpus):
     pdf_item = item("ev-0001", question="Guide fee?", tags=["글 근거"], forbidden=[],
                     evidence=[{"doc": "gana/viewer/guide", "quote": "Fee 30000"}],
