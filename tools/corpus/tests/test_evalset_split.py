@@ -1,0 +1,122 @@
+"""개발용·확인용 나누기(결정 ⑤), 꼭 볼 문항 고르기(결정 ⑦), 표본 추가, 고정."""
+
+from collections import Counter
+from datetime import date
+
+import pytest
+from evalset_data import item, refusal_item
+
+from corpus.evalset import split
+
+TODAY = date(2026, 10, 5)
+
+
+def many_items(groups: int = 30, per_group: int = 3, topic: str = "학사") -> list[dict]:
+    """문서 하나에 문항 여러 개. 대장에 없는 문서는 문서 ID가 곧 묶음이다."""
+    items = []
+    for group in range(groups):
+        for index in range(per_group):
+            number = len(items) + 1
+            items.append(item(f"ev-{number:04d}", question=f"질문 {number}", topic=topic,
+                              evidence=[{"doc": f"gana/doc/{group}", "quote": "전형료 30,000원"}]))
+    return items
+
+
+def ready(items: list[dict], parts: dict[str, str]) -> list[dict]:
+    for entry in items:
+        entry.update(part=parts[entry["id"]], machine={"errors": [], "warnings": []}, cross={"verdict": "일치"})
+    return items
+
+
+def test_same_seed_same_parts_and_groups_stay_together(ledger):
+    items = many_items()
+    first = split.assign_parts(items, ledger, seed=7)
+    assert first == split.assign_parts(many_items(), ledger, seed=7)
+    assert first != split.assign_parts(many_items(), ledger, seed=8)
+    by_doc = {}
+    for entry in items:
+        by_doc.setdefault(entry["evidence"][0]["doc"], set()).add(first[entry["id"]])
+    assert all(len(parts) == 1 for parts in by_doc.values())  # 같은 문서의 문항은 한쪽에만
+    held = sum(1 for part in first.values() if part == "확인")
+    assert abs(held - round(len(items) * 0.4)) <= 3
+
+
+def test_held_share_is_per_topic(ledger):
+    items = many_items(20, 2, "학사") + many_items(20, 2, "입시")
+    for index, entry in enumerate(items, 1):  # ID·문서가 겹치지 않게 다시 붙인다
+        entry["id"] = f"ev-{index:04d}"
+        entry["evidence"][0]["doc"] += f"/{entry['topic']}"
+    parts = split.assign_parts(items, ledger, seed=1)
+    for topic in ("학사", "입시"):
+        held = sum(1 for entry in items if entry["topic"] == topic and parts[entry["id"]] == "확인")
+        assert 14 <= held <= 18  # 주제마다 40개의 40% 안팎
+
+
+def test_big_document_is_split_by_section(ledger):
+    items = [item(f"ev-{number:04d}", question=f"요강 질문 {number}", topic="입시",
+                  evidence=[{"doc": "gana/viewer/guide", "quote": "q", "section": f"장{number % 4}"}])
+             for number in range(1, 25)]
+    parts = split.assign_parts(items, ledger, seed=3)
+    assert set(parts.values()) == {"개발", "확인"}  # 한 문서라도 장 단위로 갈린다
+    by_section = {}
+    for entry in items:
+        by_section.setdefault(entry["evidence"][0]["section"], set()).add(parts[entry["id"]])
+    assert all(len(found) == 1 for found in by_section.values())
+
+
+def test_choose_needs_and_auto_approve(ledger):
+    items = many_items(20, 2)
+    parts = {entry["id"]: ("확인" if index % 2 else "개발") for index, entry in enumerate(items)}
+    ready(items, parts)
+    items[0]["cross"] = {"verdict": "불일치"}
+    items[2]["cross"] = {"verdict": "애매"}
+    items[4]["machine"]["warnings"] = ["부재 확인에 걸린 글 1건"]
+    held_refusal = refusal_item("ev-0900", part="확인", machine={"errors": [], "warnings": []}, cross={"verdict": "일치"})
+    items.append(held_refusal)
+    counts = split.choose_needs(items, seed=5, today=TODAY, sample_size=10)
+    assert (items[0]["need"], items[2]["need"], items[4]["need"], held_refusal["need"]) == ("불일치", "불일치", "경고", "확인용 거절")
+    samples = [entry for entry in items if entry["need"] == "표본"]
+    assert len(samples) == 10 and all(entry["part"] == "확인" for entry in samples)
+    auto = [entry for entry in items if entry["need"] is None]
+    assert all(entry["review"]["status"] == "자동 승인" for entry in auto)
+    assert counts["자동 승인"] == len(auto)
+    before = [dict(entry) for entry in items]
+    split.choose_needs(items, seed=99, today=TODAY)  # 이미 정한 문항은 다시 고르지 않는다
+    assert [entry.get("need") for entry in items] == [entry.get("need") for entry in before]
+
+
+def test_choose_needs_requires_checks_cross_and_parts(ledger):
+    items = many_items(2, 1)
+    ready(items, {entry["id"]: "개발" for entry in items})
+    items[1]["machine"]["errors"] = ["인용이 원문에 없음"]
+    with pytest.raises(ValueError, match="ev-0002"):
+        split.choose_needs(items, seed=1, today=TODAY)
+    assert all("need" not in entry for entry in items)  # 막히면 어느 문항도 바꾸지 않는다
+    items[1]["machine"]["errors"] = []
+    del items[1]["cross"]
+    with pytest.raises(ValueError):
+        split.choose_needs([items[1]], seed=1, today=TODAY)
+
+
+def test_more_sample_and_sample_errors(ledger):
+    items = many_items(10, 2)
+    ready(items, {entry["id"]: "확인" for entry in items})
+    split.choose_needs(items, seed=2, today=TODAY, sample_size=4)
+    for entry, status in zip([entry for entry in items if entry["need"] == "표본"], ["승인", "고침", "버림", "승인"]):
+        entry["review"] = {"status": status}
+    assert split.sample_errors(items) == (4, 2)
+    added = split.more_sample(items, seed=3, count=5)
+    assert len(added) == 5 and all(entry["review"] is None for entry in items if entry["id"] in added)
+    assert Counter(entry["need"] for entry in items)["표본"] == 9
+
+
+def test_freeze_needs_all_reviews_and_reports_counts():
+    items = [item("ev-0001", part="개발", need="불일치", review={"status": "보류"}),
+             item("ev-0002", question="둘", part="확인", need=None, review={"status": "자동 승인"}),
+             item("ev-0003", question="셋", part="확인", need="표본", review={"status": "버림"})]
+    with pytest.raises(ValueError, match="ev-0001"):
+        split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)
+    items[0]["review"] = {"status": "고침"}
+    text = split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)
+    assert "본 2 (개발 1 / 확인 1), 쉬운 0, 버림 1" in text
+    assert "evalset_sha256: " in text and "split_seed: 7" in text

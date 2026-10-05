@@ -130,10 +130,32 @@ Assets/corpus/
 글자 수는 HTML은 BeautifulSoup, PDF는 pypdfium2, HWP는 olefile, HWPX는 zip 안 `Contents/sectionN.xml`의 `<hp:t>`에서 꺼낸 글 기준이다(공백을 하나로 줄임).
 추출기를 고치거나 더하면 `remeasure`로 글을 읽지 못했던 행만 다시 잰다(사람이 확인한 행은 두고, 개인정보는 읽힌 글로 다시 판단).
 
+## 평가셋 (`evalset`, 맥북에서 실행)
+
+챗봇 시험지(평가셋)를 만드는 명령이다. 정본은 문항을 한 줄씩 쓴 JSONL 파일 하나(`Assets/eval/evalset.jsonl`, git 제외)다.
+학교 글이 들어가므로 저장소에 올리지 않는다.
+
+```text
+Claude 초안 → check(기계 검사) → 교차 확인 → split(개발용·확인용) → need(사람이 꼭 볼 문항, 나머지 자동 승인)
+           → 사람 검수 → report(분포·검수 현황) → freeze(버전·SHA-256)
+```
+
+| 명령 | 하는 일 |
+|---|---|
+| `evalset check [파일] [--index-dir 폴더] [--write]` | 인용이 색인 글에 그대로 있나, 필수 사실이 인용 안에 있나, 근거 문서가 평가 몫·서비스 색인 문서인가, 같은 질문이 없나, 거절 문항에 부재 확인 기록이 있나, 지난해 판에 금지 값이 있나. 오류는 초안으로 돌려보내고 경고는 사람이 본다 |
+| `evalset split [파일] --seed N [--write]` | 문서 묶음 단위로 개발용 60 : 확인용 40(주제마다). 문항이 10개를 넘는 묶음은 장(`evidence[0].section`) 단위 |
+| `evalset need [파일] --seed N [--write]` | 교차 확인 불일치·경고·확인용 거절·표본 30을 사람에게, 나머지는 자동 승인. 표본에서 2개 이상 틀리면 `--more 30` |
+| `evalset report [파일] [--cap 대장ID=수]` | 문항 수·답의 모양·주제·꼬리표·문서당 상한·검수 현황을 목표와 나란히 |
+| `evalset freeze [파일] --version v1 --index-backup 이름 --seed N` | 사람이 볼 문항이 모두 판정됐는지 확인하고 고정 기록을 쓴다 |
+| `evalset judge [파일] --id ev-0001 --answer "답"` | 규칙 판정(맞음·일부·모름·틀림·애매·빈 답)을 하나 해 본다 |
+
+`check`는 `--index-dir`의 색인 글(챗봇이 보는 글)을 먼저 쓰고, 없으면 원본 파일을 이 도구의 추출기로 읽는다.
+원본 추출(PDF는 pypdfium2, HWP는 olefile)은 서비스(OpenDataLoader·ai-server 로더)와 다른 읽기라서 교차 확인과 지난해 판 대조에 쓴다.
+
 ## 테스트
 
 `tests/fixtures/`의 화면은 학교 누리집(K2Web CMS)의 구조(클래스 이름·중첩)만 따른 **합성 화면**이다. 저장소가 공개라서
-학교 화면을 그대로 넣지 않는다. 가짜 HTTP(`tests/conftest.py`)로 수집 전체 흐름을 네트워크 없이 시험한다.
+학교 화면을 그대로 넣지 않는다. 가짜 HTTP(`tests/conftest.py`)로 수집 전체 흐름을 네트워크 없이 시험한다. 평가셋 테스트는 지어낸 학교(가나대학) 데이터(`tests/evalset_data.py`)만 쓴다.
 
 ## 의존성 라이선스
 
