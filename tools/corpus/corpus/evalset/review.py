@@ -92,7 +92,7 @@ def entry(item: dict, texts: TextSource, ledger: Ledger) -> dict:
                                            "answer", "facts", "forbidden", "year", "refusal", "review", "note")}
     data["why"] = need_why(item)
     cross = item.get("cross") or {}
-    data["cross"] = {key: cross.get(key) for key in ("answer", "quote", "where", "verdict", "label", "reader", "model")}
+    data["cross"] = {key: cross.get(key) for key in ("answer", "quote", "where", "note", "verdict", "label", "reader", "model")}
     data["warnings"] = (item.get("machine") or {}).get("warnings") or []
     sources = []
     if item["shape"] == "거절":

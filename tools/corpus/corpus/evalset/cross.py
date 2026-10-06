@@ -57,7 +57,8 @@ PROMPT = f"""너는 학교 문서로 만든 시험지의 교차 확인을 맡았
 2. 문서는 전체가 들어 있다. 질문과 관련된 곳을 직접 찾아 끝까지 읽는다. 표 아래 단서(※)·예외·다른 학년도 값도 확인한다.
 3. HTML 파일은 원본 HTML이다(rowspan·colspan으로 칸이 합쳐져 있다). PDF는 쪽마다 그림(page-NNN.png)과 글자(page-NNN.txt)가 있다. 표와 숫자는 그림으로 확인한다.
 4. 답이 문서에 없으면 answer에 "{NOT_FOUND}"라고 쓴다.
-5. 출력은 JSON 하나만 쓴다: {{"answers": [{{"id": "문항 ID", "answer": "한두 문장 답", "quote": "근거로 쓴 원문 글(그대로)", "where": "파일 이름과 쪽"}}]}}. 모든 질문에 답한다.
+5. answer에는 질문이 물은 것만 한두 문장으로 쓴다. 답을 바꾸는 조건·예외는 answer에 넣고, 질문과 상관없는 덧붙임(예: 단위가 적혀 있지 않다)은 note에 쓴다.
+6. 출력은 JSON 하나만 쓴다: {{"answers": [{{"id": "문항 ID", "answer": "답", "quote": "근거로 쓴 원문 글(HTML 태그는 빼고 글자 그대로)", "where": "파일 이름과 쪽", "note": "덧붙일 말, 없으면 빈 글"}}]}}. 모든 질문에 답한다.
 """
 
 
@@ -250,7 +251,7 @@ def apply_answers(items: list[dict], packet: Packet, answers: list[dict], model_
         item = by_id[entry["id"]]
         label = judge(item, entry["answer"])["label"]
         item["cross"] = {"model": model_label, "reader": reader, "answer": entry["answer"],
-                         "quote": entry.get("quote"), "where": entry.get("where"),
+                         "quote": entry.get("quote"), "where": entry.get("where"), "note": entry.get("note") or None,
                          "verdict": verdict(label), "label": label, "at": today.isoformat()}
     return sorted(wanted - answered)
 

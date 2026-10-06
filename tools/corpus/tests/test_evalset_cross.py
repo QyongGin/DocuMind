@@ -37,7 +37,7 @@ class FakeClaude:
         questions = json.loads((cwd / "questions.json").read_text(encoding="utf-8"))["questions"]
         self.calls.append({"cwd": cwd, "command": command, "questions": questions,
                            "files": sorted(path.relative_to(cwd).as_posix() for path in cwd.rglob("*") if path.is_file())})
-        reply = [{"id": question["id"], "answer": self.answers[question["id"]], "quote": "원문", "where": "1쪽"}
+        reply = [{"id": question["id"], "answer": self.answers[question["id"]], "quote": "원문", "where": "1쪽", "note": ""}
                  for question in questions if question["id"] in self.answers]
         return subprocess.CompletedProcess(command, 0, envelope(reply), "")
 
@@ -133,6 +133,7 @@ def test_run_fills_cross_with_rule_verdicts_and_keeps_answer_key_out(ledger, tmp
     assert "cross" not in by_id["ev-0004"] and result["unanswered"] == ["ev-0004"]
     assert by_id["ev-0001"]["cross"]["model"] == "claude-test · 다른 세션 · Claude Code 2.1.205"
     assert by_id["ev-0001"]["cross"]["reader"] == cross.READERS["html"] and by_id["ev-0001"]["cross"]["at"] == "2026-10-06"
+    assert by_id["ev-0001"]["cross"]["note"] is None  # 빈 덧붙임은 없음으로
     assert result["verdicts"] == {"일치": 2, "애매": 1, "불일치": 1} and result["failed"] == []
 
     for call in fake.calls:  # 확인하는 세션이 받은 폴더에 정답지·인용이 없다
@@ -195,8 +196,9 @@ def test_apply_answers_keeps_first_answer_and_existing_results():
     items = [checked(item("ev-0001")), {**checked(item("ev-0002")), "cross": {"verdict": "불일치", "answer": "전"}}]
     packet = cross.Packet("p001", ("gana/page/fee",), [{"id": "ev-0001", "question": "q"}, {"id": "ev-0002", "question": "q"}])
     missing = cross.apply_answers(items, packet, [
-        {"id": "ev-0001", "answer": "30,000원"}, {"id": "ev-0001", "answer": "25,000원"},  # 같은 문항 두 번
+        {"id": "ev-0001", "answer": "30,000원", "note": "단위는 원"}, {"id": "ev-0001", "answer": "25,000원"},  # 같은 문항 두 번
         {"id": "ev-0002", "answer": "30,000원"}, {"id": "ev-9999", "answer": "꾸러미에 없는 문항"},
     ], "m", "r", TODAY)
     assert missing == [] and items[0]["cross"]["answer"] == "30,000원" and items[0]["cross"]["verdict"] == "일치"
+    assert items[0]["cross"]["note"] == "단위는 원"
     assert items[1]["cross"] == {"verdict": "불일치", "answer": "전"}  # 이미 채운 결과는 그대로
