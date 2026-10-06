@@ -111,12 +111,20 @@ def test_more_sample_and_sample_errors(ledger):
 
 
 def test_freeze_needs_all_reviews_and_reports_counts():
-    items = [item("ev-0001", part="연습", need="불일치", review={"status": "보류"}),
-             item("ev-0002", question="둘", part="실전", need=None, review={"status": "자동 승인"}),
-             item("ev-0003", question="셋", part="실전", need="표본", review={"status": "버림"})]
+    passed = {"errors": [], "warnings": []}
+    items = [item("ev-0001", part="연습", need="불일치", review={"status": "보류"}, machine=passed),
+             item("ev-0002", question="둘", part="실전", need=None, review={"status": "자동 승인"}, machine=passed),
+             item("ev-0003", question="셋", part="실전", need="표본", review={"status": "버림"})]  # 버린 문항은 검사 없어도 됨
     with pytest.raises(ValueError, match="ev-0001"):
         split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)
     items[0]["review"] = {"status": "고침"}
+    items[0]["machine"] = None  # 고친 뒤 기계 검사 전
+    with pytest.raises(ValueError, match="기계 검사를 다시 해야 하는 문항.*ev-0001"):
+        split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)
+    items[0]["machine"] = {"errors": ["인용 없음"], "warnings": []}
+    with pytest.raises(ValueError, match="ev-0001"):
+        split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)
+    items[0]["machine"] = passed
     text = split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)
     assert "본 2 (연습 1 / 실전 1), 쉬운 0, 버림 1" in text
     assert "evalset_sha256: " in text and "split_seed: 7" in text
