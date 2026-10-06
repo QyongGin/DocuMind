@@ -107,6 +107,12 @@ def test_cross_review_merge_and_freeze_commands(ledger, tmp_path, capsys, monkey
          "at": "2026-10-06T10:02:00", "edits": {"question": "가나대 수시 1차 원서비는?"}},
         {"id": "ev-0003", "status": "승인", "reason": "", "changed": [], "sec": 20, "at": "2026-10-06T10:03:00"},
     )) + "\n", encoding="utf-8")
+    bad = tmp_path / "잘못된기록.jsonl"
+    bad.write_text(records.read_text(encoding="utf-8") + json.dumps({"id": "ev-9999", "status": "승인", "at": "x"}) + "\n",
+                   encoding="utf-8")
+    before = path.read_text(encoding="utf-8")
+    assert main([*root, "merge", str(path), "--records", str(bad), "--write"]) == 1  # 하나라도 틀리면 쓰지 않는다
+    assert path.read_text(encoding="utf-8") == before and "정본에 없는 문항: ev-9999" in capsys.readouterr().err
     assert main([*root, "merge", str(path), "--records", str(records), "--write"]) == 0
     assert "다시 해야 한다" in capsys.readouterr().out
     freeze = [*root, "freeze", str(path), "--version", "v1", "--index-backup", "b", "--seed", "3"]

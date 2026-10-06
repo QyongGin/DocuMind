@@ -189,3 +189,14 @@ def test_fence_passes_only_when_inside_read_and_outside_hidden(tmp_path, leak, r
     result = cross.fence(tmp_path, "m", runner=session)
     assert (result["passed"], result["leaked"], result["read_inside"]) == (passed, leak, read_inside)
     assert result["denials"] == 1
+
+
+def test_apply_answers_keeps_first_answer_and_existing_results():
+    items = [checked(item("ev-0001")), {**checked(item("ev-0002")), "cross": {"verdict": "불일치", "answer": "전"}}]
+    packet = cross.Packet("p001", ("gana/page/fee",), [{"id": "ev-0001", "question": "q"}, {"id": "ev-0002", "question": "q"}])
+    missing = cross.apply_answers(items, packet, [
+        {"id": "ev-0001", "answer": "30,000원"}, {"id": "ev-0001", "answer": "25,000원"},  # 같은 문항 두 번
+        {"id": "ev-0002", "answer": "30,000원"}, {"id": "ev-9999", "answer": "꾸러미에 없는 문항"},
+    ], "m", "r", TODAY)
+    assert missing == [] and items[0]["cross"]["answer"] == "30,000원" and items[0]["cross"]["verdict"] == "일치"
+    assert items[1]["cross"] == {"verdict": "불일치", "answer": "전"}  # 이미 채운 결과는 그대로
