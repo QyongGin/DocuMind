@@ -14,7 +14,7 @@ OpenAI Codex 문서에서 확인한 기준을 DocuMind에 다음처럼 적용한
 | 긴 작업에는 계획 문서를 사용해 목표, 진행률, 검증을 추적한다. | `docs/workflow/실행계획-ExecPlan-템플릿.md`를 사용한다. |
 | 반복 절차는 skills로 분리할 수 있다. | `skills/new-domain/SKILL.md` 같은 반복 절차 문서를 읽고 따른다. |
 
-AGENTS, `docs/`, `memory-bank`, `skills`의 책임 경계와 분리 기준은 `docs/workflow/AGENTS-및-AI문서-운영기준.md`를 따른다.
+AGENTS, `docs/`, ADR·현재 상태 문서, `skills`의 책임 경계와 분리 기준은 `docs/workflow/AGENTS-및-AI문서-운영기준.md`를 따른다.
 
 참고:
 
@@ -29,10 +29,10 @@ AGENTS, `docs/`, `memory-bank`, `skills`의 책임 경계와 분리 기준은 `d
 ```mermaid
 sequenceDiagram
     participant Agent as AI 에이전트
-    participant Memory as memory-bank
+    participant Status as 현재 상태 문서
     participant User as 사용자
 
-    Agent->>Memory: activeContext/progress/decisionLog 읽기
+    Agent->>Status: docs/project/현재-상태.md 읽기
     Agent->>User: 현재 이슈/브랜치/다음 단계 한 줄 보고
     User->>Agent: 현재 요청 전달
     Agent->>Agent: 코드/문서/이슈 상태 확인
@@ -132,7 +132,7 @@ git checkout -b feat/#123-short-work
 6. 테스트 또는 smoke test(간단 검증)를 실행한다.
 7. `git diff --check`로 줄 끝 공백과 patch 오류를 확인한다.
 8. 필요한 작업 보고서를 `docs/`에 작성한다. 2026-10-07부터 `docs/` 현재 문서는 같은 PR에 함께 커밋한다(공개 범위는 루트 `AGENTS.md` §6).
-9. `memory-bank/activeContext.md`, `memory-bank/progress.md`, 필요 시 `memory-bank/decisionLog.md`를 갱신하고 같은 PR에 함께 커밋한다(`memory-bank/archive/`는 제외).
+9. `docs/project/현재-상태.md`를 갱신하고, 설계·기술 결정이 있었으면 `docs/adr/`에 ADR을 쓴다. 같은 PR에 함께 커밋한다.
 10. 커밋 대상만 선별한다.
 
 ```bash
@@ -207,7 +207,7 @@ git push -u origin feat/#123-short-work
 | `backend/AGENTS.md`, `frontend/AGENTS.md`, `ai-server/AGENTS.md` | 공개 리뷰 체크리스트이므로 필요 시 커밋한다. |
 | 루트 `AGENTS.md`, `CLAUDE.md`(심볼릭 링크) | 커밋한다(2026-10-07~, 클라우드 세션용). |
 | `docs/` 현재 문서 | 커밋한다. `docs/archive/`(지난 기록)·`docs/local/`(접속 정보)는 커밋하지 않는다. |
-| `memory-bank/` 현재본 | 커밋한다. `memory-bank/archive/`는 커밋하지 않는다. |
+| `docs/adr/`, `docs/project/현재-상태.md` | 커밋한다. |
 | `Assets/` | 학교 데이터이므로 커밋하지 않는다. |
 | `outputs/`, 실험 결과 | 별도 요청이 없으면 커밋하지 않는다. |
 
@@ -254,6 +254,6 @@ DocuMind PR 제목과 본문은 기본적으로 한국어로 작성한다. 영�
 
 - 필요한 테스트 또는 문서 검사를 실행했는가
 - `git diff --check`를 통과했는가
-- `memory-bank/activeContext.md`가 다음 시작 위치를 가리키는가
-- `memory-bank/progress.md`에 로컬 작업 큐 변화가 반영되었는가
-- 중요한 기술 결정이 있으면 `memory-bank/decisionLog.md`에 append-only로 추가했는가
+- `docs/project/현재-상태.md`가 다음 시작 위치를 가리키는가
+- 이슈의 Projects 상태를 옮겼는가(할 일 / 진행 중 / develop 반영 / 릴리스)
+- 설계·기술 결정이 있으면 `docs/adr/`에 ADR을 썼는가(번복이면 옛 ADR을 '대체됨'으로)

@@ -6,12 +6,12 @@
 
 아래 순서로 읽는다.
 
-1. `memory-bank/activeContext.md` — 지금 손댈 위치
-2. `memory-bank/progress.md` — 작업 큐와 브랜치 상태
-3. `memory-bank/decisionLog.md` — 큰 결정과 번복 기록
-4. `docs/project/인하공전-챗봇-총괄계획.md` — **최상위 계획** (목표, 문제 29개, 마일스톤 M0~M6, 진행 순서표, 결정 기록 §7, 세션 로그 §9)
+1. `docs/project/현재-상태.md` — 지금 위치, 다음 할 일, 막힌 것(인수인계 노트)
+2. `docs/project/인하공전-챗봇-총괄계획.md` — **최상위 계획** (목표, 문제, 마일스톤 M0~M6 로드맵)
+3. 지금 작업과 관련된 ADR(`docs/adr/README.md` 목록)과 GitHub 이슈
+4. 운영 작업이면 `docs/development/알려진-문제.md`
 
-memory-bank 세 파일은 슬림 현재본이다(운영 규칙: `memory-bank/README.md`). 과거 상세 이력은 `memory-bank/archive/`에 있고 로컬 맥북에만 있다(커밋하지 않음).
+결정은 `docs/adr/`(결정 하나 = 파일 하나), 작업 목록과 진행 상태는 GitHub Issues·Projects, 한 일은 PR과 작업 보고서에 남긴다. 지난 기록(옛 memory-bank, 옛 결정 기록·세션 로그 포함)은 `docs/archive/`에 있고 로컬 맥북에만 있다(커밋하지 않음).
 
 읽은 직후 아래 형식으로 현재 상태를 보고한다.
 
@@ -27,7 +27,7 @@ RAG 작업이면 `ai-server/AGENTS.md`와 `docs/rag/README.md`도 읽는다. 문
 |---|---|---|
 | 작업 공간 | 맥북 저장소 | GitHub 저장소를 새로 클론(`develop` 브랜치를 골라 시작) |
 | 학교 데이터 `Assets/`(대장·원본·평가셋) | 있음 | **없음** — 학교 글은 공개 저장소에 올리지 않는다 |
-| 지난 기록 `docs/archive/`, `memory-bank/archive/`, 접속 정보 `docs/local/` | 있음 | 없음 |
+| 지난 기록 `docs/archive/`, 접속 정보 `docs/local/` | 있음 | 없음 |
 | 데스크탑(Tailscale) | 있음 | 없음 |
 | `claude -p`(교차 검증 `evalset cross`·`fence`) | 사용자 터미널에서 실행 | 기본 설치 목록에 없음 |
 | 맞는 일 | 전부 | 코드·테스트(합성 데이터)·문서·PR |
@@ -77,7 +77,7 @@ RAG 작업이면 `ai-server/AGENTS.md`와 `docs/rag/README.md`도 읽는다. 문
 - 테스트는 지어낸 학교(가나대학) 데이터만 쓴다. 학교 글이 든 데이터는 `Assets/`에 두고 커밋하지 않는다.
 - 새 동작에 테스트를 붙였으면 커밋한 뒤 동작을 일부러 망가뜨려 테스트가 잡는지 본다(변이 확인). 되돌리기는 바꾼 그 파일에만 한다.
 - Java 주석: public 클래스·메서드는 `/** */` Javadoc, private은 `//`.
-- 작업 하나가 끝날 때마다 `docs/`에 보고서를 쓴다(위치는 `docs/README.md`, 규칙은 `docs/workflow/문서-작성-및-학습-보고-규칙.md`). 끝날 때 memory-bank와 총괄계획 §9 세션 로그를 갱신한다.
+- 작업 하나가 끝날 때마다 `docs/`에 보고서를 쓴다(위치는 `docs/README.md`, 규칙은 `docs/workflow/문서-작성-및-학습-보고-규칙.md`). 끝날 때 `docs/project/현재-상태.md`를 갱신하고, 결정이 생겼으면 ADR을 쓴다.
 
 ## 5. 커밋·PR
 
@@ -86,15 +86,15 @@ RAG 작업이면 `ai-server/AGENTS.md`와 `docs/rag/README.md`도 읽는다. 문
 - PR 제목은 `type(scope): 요약`. 이슈 번호는 제목에 넣지 않고 본문 `Closes #번호`/`Related #번호`로 연결한다.
 - 진행: PR 전 확인(테스트, `git diff --check`, AI 서명 0) → 초안을 보여 주고 "올리고 바로 머지 / 올리기만 / 수정" 중 선택받기 → 승인 후 생성 → squash 머지(제목 `PR 제목 (#PR번호)`, 본문 비움, 브랜치 삭제). 상세: `docs/workflow/PR-작성-및-머지-절차.md`.
 - 공용 브랜치(main·develop) 기록은 다시 쓰지 않는다. develop은 PR로만 바꾼다.
-- 문서·memory-bank 변경은 그 작업의 PR에 함께 넣는다. 문서만 바뀐 경우 `docs(...)` PR로 올린다.
+- 문서 변경(보고서, 현재 상태, ADR)은 그 작업의 PR에 함께 넣는다. 문서만 바뀐 경우 `docs(...)` PR로 올린다.
 
 ## 6. 공개 범위
 
-이 저장소는 공개 저장소다. 2026-10-07부터 에이전트 문서(이 파일, `CLAUDE.md`, `memory-bank/` 현재본, `docs/` 현재 문서)를 커밋한다. 클라우드 세션도 같은 맥락으로 이어 가기 위해서다.
+이 저장소는 공개 저장소다. 2026-10-07부터 에이전트 문서(이 파일, `CLAUDE.md`, `docs/` 현재 문서)를 커밋한다(ADR-0021). 클라우드 세션도 같은 맥락으로 이어 가기 위해서다.
 
 | 커밋하지 않는 것 | 위치 |
 |---|---|
-| 지난 기록(GCP 시기 문서, 옛 보고서, 세션 인수인계 등) | `docs/archive/`, `memory-bank/archive/` |
+| 지난 기록(GCP 시기 문서, 옛 보고서, 세션 인수인계, 옛 memory-bank 등) | `docs/archive/` |
 | 접속 정보(Tailscale 주소, 사용자 이름) | `docs/local/` |
 | 학교 데이터(대장, 원본, 평가셋, 백업) | `Assets/` |
 | 발표·실험 산출물 | `outputs/`, `experiments/` |

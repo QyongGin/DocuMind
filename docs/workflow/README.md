@@ -4,7 +4,7 @@ AI 에이전트 작업 방식, 브랜치·이슈·PR 운영, 문서 작성 규�
 
 | 문서 | 역할 |
 |---|---|
-| `AGENTS-및-AI문서-운영기준.md` | 루트·모듈별 `AGENTS.md`, `docs/`, `memory-bank/`의 책임 분리와 공개 범위 |
+| `AGENTS-및-AI문서-운영기준.md` | 루트·모듈별 `AGENTS.md`, `docs/`, ADR·현재 상태 문서의 책임 분리와 공개 범위 |
 | `AI-에이전트-작업-흐름.md` | 이슈 시작, 브랜치, 커밋 대상, PR 흐름 |
 | `GitHub-develop-브랜치-및-파생이슈-운영기준-20260606.md` | develop 중심 브랜치 전략, parent/child 이슈 |
 | `PR-작성-및-머지-절차.md` | PR 전 확인, 초안, 승인, 생성, squash 머지, 이슈 닫기 |

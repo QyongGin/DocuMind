@@ -122,7 +122,7 @@ git commit -m "feat(ai): SelectedContext contract 연결 (#101)"
 
 주의:
 
-- `docs/`, `memory-bank/`, 루트 `AGENTS.md`의 현재본은 2026-10-07부터 커밋한다. `docs/archive/`, `docs/local/`, `memory-bank/archive/`, `Assets/`는 커밋하지 않는다.
+- `docs/` 현재 문서와 루트 `AGENTS.md`는 2026-10-07부터 커밋한다. `docs/archive/`, `docs/local/`, `Assets/`는 커밋하지 않는다.
 - 공개 협업 규칙인 `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/*`, `.github/PULL_REQUEST_TEMPLATE.md`, 모듈별 `AGENTS.md`는 필요하면 커밋할 수 있다.
 
 ### 4.4 PR 만들기
@@ -187,7 +187,7 @@ child issue로 만들지 않아도 되는 경우:
 |---|---|
 | 오탈자 수정 | 독립적인 추적 가치가 작다. |
 | 같은 PR 안에서 필요한 작은 helper 이름 정리 | 현재 issue의 구현 일부다. |
-| 로컬 memory-bank만 갱신 | GitHub 공개 issue로 관리할 내용이 아니다. |
+| 현재 상태 문서만 갱신 | 작업 PR에 함께 넣는다. 따로 issue로 관리할 내용이 아니다. |
 
 ## 6. #73 기준 child issue 후보
 

@@ -1,8 +1,7 @@
 # ───────────────────────────────────────
-# 에이전트 문서: 현재 문서(AGENTS.md·CLAUDE.md·memory-bank·docs)는 커밋한다(2026-10-07, 클라우드 세션용).
+# 에이전트 문서: 현재 문서(AGENTS.md·CLAUDE.md·docs)는 커밋한다(2026-10-07, 클라우드 세션용, ADR-0021).
 # 지난 기록과 로컬 전용 값(접속 주소 등)만 뺀다.
 # ───────────────────────────────────────
-memory-bank/archive/
 docs/archive/
 docs/local/
 .claude/
