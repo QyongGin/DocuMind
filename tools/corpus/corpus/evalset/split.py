@@ -117,11 +117,16 @@ def sample_errors(items: list[dict]) -> tuple[int, int]:
 
 
 def freeze_text(items: list[dict], version: str, index_backup: str, seed: int, today: date) -> str:
-    """고정 기록. 사람이 볼 문항이 모두 판정되고(보류 없음) 모든 문항이 나뉘어 있어야 한다."""
+    """고정 기록. 사람이 볼 문항이 모두 판정되고(보류 없음), 버리지 않은 문항이 모두 기계 검사를 통과했고,
+    모든 문항이 나뉘어 있어야 한다."""
     pending = [item["id"] for item in items if item.get("need")
                and (item.get("review") or {}).get("status") not in HUMAN_STATUSES]
     if pending:
         raise ValueError(f"아직 판정하지 않았거나 보류인 문항: {', '.join(pending[:10])}")
+    unchecked = [item["id"] for item in items if (item.get("review") or {}).get("status") != "버림"
+                 and (not item.get("machine") or item["machine"].get("errors"))]
+    if unchecked:
+        raise ValueError(f"기계 검사를 다시 해야 하는 문항(고친 뒤 검사 전이거나 오류): {', '.join(unchecked[:10])}")
     unassigned = [item["id"] for item in items if item.get("part") not in schema.PARTS]
     if unassigned:
         raise ValueError(f"연습용·실전용이 정해지지 않은 문항: {', '.join(unassigned[:10])}")

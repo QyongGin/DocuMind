@@ -130,6 +130,10 @@ class BackendClient:
     def progress(self, document_id: int):
         return self.session.get(f"{self.base_url}/api/documents/{document_id}/progress", timeout=30)
 
+    def chunks(self, document_id: int):
+        """문서의 색인 청크(관리자 문서 점검 화면과 같은 API). 평가셋 색인 글 내보내기에 쓴다."""
+        return self.session.get(f"{self.base_url}/api/documents/{document_id}/chunks", timeout=60)
+
     @staticmethod
     def _raise_for_auth(response) -> None:
         if response.status_code in (401, 403):

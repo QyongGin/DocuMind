@@ -136,21 +136,48 @@ Assets/corpus/
 학교 글이 들어가므로 저장소에 올리지 않는다.
 
 ```text
-Claude 초안 → check(기계 검사) → 교차 확인 → split(연습용·실전용) → need(사람이 꼭 볼 문항, 나머지 자동 승인)
-           → 사람 검수 → report(분포·검수 현황) → freeze(버전·SHA-256)
+export-index(색인 글, 데스크탑 켤 때) → Claude 초안 → check(기계 검사) → cross(교차 확인) → split(연습용·실전용)
+  → need(사람이 꼭 볼 문항, 나머지 자동 승인) → review-html(검수 화면) → 사람 검수 → merge(검수 기록 합치기)
+  → check(고친 문항 다시) → report(분포·검수 현황) → freeze(버전·SHA-256)
 ```
 
 | 명령 | 하는 일 |
 |---|---|
+| `evalset export-index --base-url 주소 --index-backup 이름` | 서비스 색인의 청크 글을 문서별 파일로 받는다(`Assets/eval/index_text/<백업 이름>/`, 문서 번호·청크 수·SHA-256 기록). 데스크탑 챗봇이 떠 있어야 하고 관리자 비밀번호는 실행 때 입력 |
 | `evalset check [파일] [--index-dir 폴더] [--write]` | 인용이 색인 글에 그대로 있나, 필수 사실이 인용 안에 있나, 근거 문서가 평가 몫·서비스 색인 문서인가, 같은 질문이 없나, 거절 문항에 부재 확인 기록이 있나, 지난해 판에 금지 값이 있나. 오류는 초안으로 돌려보내고 경고는 사람이 본다 |
+| `evalset cross [파일] [--write]` | 교차 확인. 다른 Claude 세션(`claude -p`)이 정답지 없이 질문과 원본(HTML 원본·PDF 쪽 그림과 글자·HWP 글자)만 받아 풀고, 규칙 판정으로 정답지와 비교해 `cross`(일치·불일치·애매)를 채운다. 질문·명령·출력은 정본 옆 `cross/<시각>/`에 남는다. `--dry-run`은 꾸러미만 만들고, `--from-record 폴더`는 남긴 출력으로 다시 채운다 |
+| `evalset fence` | 교차 확인 세션이 꾸러미 밖(가짜 정답지)을 못 읽는지 시험한다. 처음과 Claude Code 판이 바뀔 때 돌린다 |
 | `evalset split [파일] --seed N [--write]` | 문서 묶음 단위로 연습용 60 : 실전용 40(주제마다). 문항이 10개를 넘는 묶음은 장(`evidence[0].section`) 단위 |
 | `evalset need [파일] --seed N [--write]` | 교차 확인 불일치·경고·실전용 거절·표본 30을 사람에게, 나머지는 자동 승인. 표본에서 2개 이상 틀리면 `--more 30` |
+| `evalset review-html [파일] [--index-dir 폴더]` | 사람이 꼭 볼 문항만 담은 검수 화면 HTML 파일 하나를 만든다(정본 옆 `review/`). 브라우저로 열고 서버·인터넷을 쓰지 않는다 |
+| `evalset merge [파일] --records 기록.jsonl [--write]` | 검수 화면이 내려받은 검수 기록을 합친다. 고친 문항은 `rev`를 올리고 기계 검사를 비운다(다시 `check`). 같은 기록을 두 번 합쳐도 같다 |
 | `evalset report [파일] [--cap 대장ID=수]` | 문항 수·답의 모양·주제·꼬리표·문서당 상한·검수 현황을 목표와 나란히 |
-| `evalset freeze [파일] --version v1 --index-backup 이름 --seed N` | 사람이 볼 문항이 모두 판정됐는지 확인하고 고정 기록을 쓴다 |
+| `evalset freeze [파일] --version v1 --index-backup 이름 --seed N` | 사람이 볼 문항이 모두 판정됐고 버리지 않은 문항이 모두 기계 검사를 통과했는지 확인하고 고정 기록을 쓴다 |
 | `evalset judge [파일] --id ev-0001 --answer "답"` | 규칙 판정(맞음·일부·모름·틀림·애매·빈 답)을 하나 해 본다 |
 
 `check`는 `--index-dir`의 색인 글(챗봇이 보는 글)을 먼저 쓰고, 없으면 원본 파일을 이 도구의 추출기로 읽는다.
 원본 추출(PDF는 pypdfium2, HWP는 olefile)은 서비스(OpenDataLoader·ai-server 로더)와 다른 읽기라서 교차 확인과 지난해 판 대조에 쓴다.
+
+### 교차 확인 실행 (맥북 터미널)
+
+`cross`와 `fence`는 Claude Code(`claude`)를 부른다. 맥북 터미널에서 `claude auth status`가 `"loggedIn": true`인지 먼저 본다.
+확인하는 세션은 저장소 밖 임시 폴더의 꾸러미 안에서만 돈다. 명령에 붙는 설정과 이유:
+
+| 설정 | 이유 |
+|---|---|
+| `--tools Read,Grep,Glob` | 읽기 도구만. 명령 실행·웹·파일 쓰기 없음 |
+| `--restricted` | 파일 도구를 꾸러미 폴더 안에 가둔다. 사용자·프로젝트 설정 파일을 읽지 않는다 |
+| `--safe-mode` | CLAUDE.md·스킬·출력 형식 같은 사용자 맞춤을 끈다(지시문만 받게) |
+| `--permission-prompts none` | 허락을 물어야 하는 일은 모두 거절 |
+| `--strict-mcp-config`, `--no-session-persistence` | 외부 도구 서버 없음, 대화를 남기지 않음 |
+
+```bash
+python -m corpus evalset fence
+python -m corpus evalset cross --dry-run --keep-work
+python -m corpus evalset cross --write
+```
+
+`fence`가 '실패'면 `cross`를 돌리지 않는다. 꾸러미가 저장소 안(`.git`·`CLAUDE.md`·`AGENTS.md`가 위에 있는 폴더)이면 `cross`가 거부한다.
 
 ## 테스트
 
@@ -164,7 +191,8 @@ Claude 초안 → check(기계 검사) → 교차 확인 → split(연습용·�
 | requests | Apache-2.0 | HTTP |
 | beautifulsoup4 | MIT | HTML 해석 |
 | olefile | BSD | HWP 5.0(OLE) 읽기 |
-| pypdfium2 | Apache-2.0 / BSD-3-Clause (PDFium BSD-3-Clause) | PDF 글자 수 |
+| pypdfium2 | Apache-2.0 / BSD-3-Clause (PDFium BSD-3-Clause) | PDF 글자 수, 교차 확인 쪽 그림·글자 |
+| pillow | MIT-CMU | 교차 확인 PDF 쪽 그림 저장 |
 | pytest (개발) | MIT | 테스트 |
 
 HWP 5.0 글자 추출(`corpus/hwp.py`)은 한컴이 공개한 HWP 파일 형식 문서를 참고해 만들었다. 한컴의 사용 조건에 따라 아래 문구를 적는다.
