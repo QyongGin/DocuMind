@@ -16,7 +16,7 @@ DocuMind는 사내 문서를 외부로 보내지 않는 on-premise(내부 설치
 | `frontend/AGENTS.md` | Frontend 공개 리뷰 체크리스트 |
 | `ai-server/AGENTS.md` | AI server 공개 리뷰 체크리스트 |
 
-루트 `AGENTS.md`, `CLAUDE.md`, `memory-bank/`, `docs/`는 로컬 운영 자료로 취급한다. 공개 협업 규칙은 이 `CONTRIBUTING.md`와 모듈별 `AGENTS.md`에 둔다.
+루트 `AGENTS.md`(`CLAUDE.md`는 그 심볼릭 링크), `memory-bank/`, `docs/`는 AI 에이전트와 함께 쓰는 작업 문서다. 현재본은 커밋하고, 지난 기록(`docs/archive/`, `memory-bank/archive/`)과 접속 정보(`docs/local/`)·학교 데이터(`Assets/`)는 커밋하지 않는다. 공개 협업 규칙은 이 `CONTRIBUTING.md`와 모듈별 `AGENTS.md`에 둔다.
 
 ## 2. 작업 단위
 
