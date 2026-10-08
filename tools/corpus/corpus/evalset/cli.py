@@ -306,7 +306,7 @@ def add_parser(commands, default_file: Path) -> None:
     annotate.add_argument("--write", action="store_true", help="이중 라벨링 결과를 평가셋 파일에 쓴다")
     annotate.set_defaults(func=cmd_double_annotate)
 
-    isolation = sub.add_parser("isolation-test", help="이중 라벨링 세션이 작업 단위 밖을 못 읽는지 가짜 정답로 시험")
+    isolation = sub.add_parser("isolation-test", help="이중 라벨링 세션이 작업 단위 밖을 못 읽는지 가짜 정답으로 시험")
     isolation.add_argument("--model", default=double_annotation.DEFAULT_MODEL)
     isolation.add_argument("--work", help="시험 폴더(기본: 새 임시 폴더)")
     isolation.add_argument("--keep-work", action="store_true")
