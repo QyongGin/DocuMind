@@ -1,6 +1,6 @@
-"""평가셋 정본 형식: 문항 한 줄(JSONL)의 칸과 값 목록, 읽기·쓰기·검증, 지문.
+"""평가셋 파일 형식: 문항 한 줄(JSONL)의 칸과 값 목록, 읽기·쓰기·검증, 지문.
 
-평가 몫과 학습 몫(M2)이 같은 형식을 쓰고 `split`으로 나눈다. 칸 정의를 바꾸면 기계 검사·검수 화면·채점기가
+평가 몫과 학습 몫(M2)이 같은 형식을 쓰고 `split`으로 나눈다. 칸 정의를 바꾸면 자동 검증·리뷰 화면·채점기가
 모두 이 모듈을 따라간다.
 """
 
@@ -11,14 +11,14 @@ from pathlib import Path
 
 SETS = ("본", "쉬운")
 SPLITS = ("평가", "학습")
-PARTS = ("연습", "실전")
-SHAPES = ("값", "목록", "절차", "예아니오", "설명", "거절")
+PARTS = ("dev", "test")
+SHAPES = ("값", "목록", "절차", "예아니오", "설명", "답없음")
 TAGS = ("표 근거", "글 근거", "해마다 바뀜", "연도 시험", "다른 말", "FAQ 제목", "조건", "비교·계산", "여러 근거")
-REFUSAL_KINDS = ("가까운 빈칸", "잘못된 전제", "자료 없음", "무관")
+UNANSWERABLE_KINDS = ("가까운 빈칸", "잘못된 전제", "자료 없음", "무관")
 FORBID_WHY = ("지난해 값", "옆 칸 값", "다른 학과 값", "지어낼 법한 값")
 STATUSES = ("승인", "고침", "버림", "보류", "자동 승인")
-NEEDS = ("불일치", "경고", "실전용 거절", "표본")
-CROSS_VERDICTS = ("일치", "불일치", "애매")
+REVIEW_REASONS = ("불일치", "경고", "테스트셋 답없음", "표본")
+AGREEMENTS = ("일치", "불일치", "애매")
 ID_RE = re.compile(r"(ev|tr)-\d{4,}")
 REQUIRED = ("id", "rev", "set", "split", "question", "shape", "tags", "answer", "facts", "forbidden",
             "evidence", "made_by", "made_at")
@@ -60,7 +60,7 @@ def _strings(value) -> bool:
 
 
 def validate(item: dict) -> list[str]:
-    """형식 오류 목록. 빈 목록이면 형식은 맞다(내용이 맞는지는 기계 검사·사람이 본다)."""
+    """형식 오류 목록. 빈 목록이면 형식은 맞다(내용이 맞는지는 자동 검증·사람이 본다)."""
     missing = [key for key in REQUIRED if key not in item]
     if missing:
         return [f"빠진 칸: {', '.join(missing)}"]
@@ -73,7 +73,7 @@ def validate(item: dict) -> list[str]:
     if item.get("part") not in (None, *PARTS):
         errors.append(f"part 값이 목록에 없음: {item.get('part')}")
     if not isinstance(item["tags"], list) or any(tag not in TAGS for tag in item["tags"]):
-        errors.append(f"꼬리표가 목록에 없음: {item['tags']}")
+        errors.append(f"태그가 목록에 없음: {item['tags']}")
     if not str(item["question"]).strip():
         errors.append("질문이 비었음")
     if not str(item["answer"]).strip():
@@ -90,14 +90,14 @@ def validate(item: dict) -> list[str]:
             isinstance(entry, dict) and str(entry.get("doc", "")).strip() and str(entry.get("quote", "")).strip()
             for entry in item["evidence"]):
         errors.append("근거는 문서 ID와 인용 글이 있어야 함")
-    if item["shape"] == "거절":
-        refusal = item.get("refusal")
+    if item["shape"] == "답없음":
+        unanswerable = item.get("unanswerable")
         if item["facts"] or item["evidence"]:
-            errors.append("거절 문항은 필수 사실·근거가 없어야 함")
-        if not isinstance(refusal, dict) or refusal.get("kind") not in REFUSAL_KINDS:
-            errors.append(f"거절 문항은 refusal.kind({'·'.join(REFUSAL_KINDS)})가 있어야 함")
+            errors.append("답 없는 문항은 필수 사실·근거가 없어야 함")
+        if not isinstance(unanswerable, dict) or unanswerable.get("kind") not in UNANSWERABLE_KINDS:
+            errors.append(f"답 없는 문항은 unanswerable.kind({'·'.join(UNANSWERABLE_KINDS)})가 있어야 함")
         else:
-            check = refusal.get("check")
+            check = unanswerable.get("check")
             if check is not None and (not _strings(check.get("terms")) or not check.get("terms")
                                       or not isinstance(check.get("hits"), int) or check["hits"] < 0):
                 errors.append("부재 확인 기록은 찾은 낱말과 걸린 수가 있어야 함")
@@ -106,16 +106,16 @@ def validate(item: dict) -> list[str]:
             errors.append("답 있는 문항은 필수 사실이 하나 이상 있어야 함")
         if not item["evidence"]:
             errors.append("답 있는 문항은 근거가 하나 이상 있어야 함")
-        if item.get("refusal"):
-            errors.append("거절 문항이 아닌데 refusal이 있음")
+        if item.get("unanswerable"):
+            errors.append("답 없는 문항이 아닌데 unanswerable이 있음")
     if item["set"] == "쉬운" and "FAQ 제목" not in item["tags"]:
-        errors.append("쉬운 문항은 'FAQ 제목' 꼬리표가 있어야 함")
+        errors.append("쉬운 문항은 'FAQ 제목' 태그가 있어야 함")
     review = item.get("review")
     if review is not None and (not isinstance(review, dict) or review.get("status") not in STATUSES):
-        errors.append(f"검수 상태가 목록에 없음: {review}")
-    if item.get("need") not in (None, *NEEDS):
-        errors.append(f"need 값이 목록에 없음: {item.get('need')}")
-    cross = item.get("cross")
-    if cross is not None and (not isinstance(cross, dict) or cross.get("verdict") not in CROSS_VERDICTS):
-        errors.append(f"교차 확인 결과가 목록에 없음: {cross}")
+        errors.append(f"리뷰 상태가 목록에 없음: {review}")
+    if item.get("review_reason") not in (None, *REVIEW_REASONS):
+        errors.append(f"review_reason 값이 목록에 없음: {item.get('review_reason')}")
+    second = item.get("second_annotation")
+    if second is not None and (not isinstance(second, dict) or second.get("verdict") not in AGREEMENTS):
+        errors.append(f"이중 라벨링 결과가 목록에 없음: {second}")
     return errors

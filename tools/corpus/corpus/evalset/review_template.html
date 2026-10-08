@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>평가셋 검수 화면</title>
+<title>평가셋 리뷰 화면</title>
 <style>
 :root{
   color-scheme:light;
@@ -55,8 +55,8 @@ button{cursor:pointer}
 .row .rq{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .rm{grid-column:2;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;color:var(--muted)}
 .st-승인 .dot{background:var(--green)} .st-고침 .dot{background:var(--blue)} .st-버림 .dot{background:var(--red)} .st-보류 .dot{background:#8b5cf6}
-.need{font-size:11.5px;padding:0 7px;border-radius:999px;background:var(--subtle)}
-.n-불일치{background:#fff7e6;color:#7a4f06}.n-실전용{background:#f3efff;color:#5b3fb8}.n-경고{background:#fff1f2;color:#9f1f17}.n-표본{background:#eef3ff;color:#10245f}
+.reason{font-size:11.5px;padding:0 7px;border-radius:999px;background:var(--subtle)}
+.n-불일치{background:#fff7e6;color:#7a4f06}.n-테스트셋{background:#f3efff;color:#5b3fb8}.n-경고{background:#fff1f2;color:#9f1f17}.n-표본{background:#eef3ff;color:#10245f}
 .why{display:flex;flex-wrap:wrap;gap:8px;padding:10px 12px;border-radius:10px;font-size:13.5px}
 .why b{font-weight:600}
 .detail{display:grid;gap:14px;min-width:0}
@@ -78,8 +78,8 @@ button{cursor:pointer}
 .x{border:0;background:none;padding:0 0 0 2px;color:var(--muted);font-size:15px;line-height:1}
 .forb{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:8px;background:var(--red-soft);color:var(--red);font-size:13.5px}
 .forb small{color:var(--muted)}
-.cross{display:grid;gap:6px;font-size:13.5px}
-.cross .cv{padding:6px 10px;border-radius:8px;border:1px dashed var(--line)}
+.second{display:grid;gap:6px;font-size:13.5px}
+.second .cv{padding:6px 10px;border-radius:8px;border:1px dashed var(--line)}
 .mc{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--green-soft);color:#05714a;width:fit-content}
 .mc.warn{background:var(--amber-soft);color:var(--amber)}
 .inp,.txt,.sel{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--canvas)}
@@ -146,11 +146,11 @@ kbd{font-family:var(--mono);font-size:10.5px;color:var(--soft)}
 <body>
 <div class="shell">
   <aside class="rail">
-    <div class="brand"><b>평가셋 검수</b><span id="src-name"></span></div>
+    <div class="brand"><b>평가셋 리뷰</b><span id="src-name"></span></div>
     <nav class="nav" aria-label="화면">
-      <button type="button" data-view="review" aria-current="page">꼭 볼 문항 <span class="count" id="n-review">0</span></button>
-      <button type="button" data-view="log">검수 기록 <span class="count" id="n-log">0</span></button>
-      <button type="button" data-view="guide">검수 지침</button>
+      <button type="button" data-view="review" aria-current="page">휴먼 리뷰 대상 <span class="count" id="n-review">0</span></button>
+      <button type="button" data-view="log">리뷰 기록 <span class="count" id="n-log">0</span></button>
+      <button type="button" data-view="guide">리뷰 지침</button>
     </nav>
     <div class="railfoot"><span>파일 하나로 엽니다. 서버도 인터넷도 쓰지 않습니다.</span><span id="built"></span></div>
   </aside>
@@ -158,7 +158,7 @@ kbd{font-family:var(--mono);font-size:10.5px;color:var(--soft)}
     <section id="v-review" aria-labelledby="t-review">
       <div style="display:grid;gap:16px">
         <header class="hero">
-          <div><p id="hero-sub"></p><h1 id="t-review">꼭 볼 문항</h1></div>
+          <div><p id="hero-sub"></p><h1 id="t-review">휴먼 리뷰 대상</h1></div>
           <div class="herostats">
             <div class="prog"><span id="prog-txt"></span><div class="bar"><i id="prog-bar" style="width:0%"></i></div></div>
             <span class="timer" id="timer" title="이 문항에 쓴 시간">00:00</span>
@@ -177,7 +177,7 @@ kbd{font-family:var(--mono);font-size:10.5px;color:var(--soft)}
     </section>
     <section id="v-log" hidden aria-labelledby="t-log">
       <div style="display:grid;gap:16px">
-        <header class="hero"><div><p>판정할 때마다 쌓입니다. 끝나면 파일로 저장해 정본에 합칩니다.</p><h1 id="t-log">검수 기록</h1></div></header>
+        <header class="hero"><div><p>판정할 때마다 쌓입니다. 끝나면 파일로 저장해 평가셋 파일에 합칩니다.</p><h1 id="t-log">리뷰 기록</h1></div></header>
         <div class="savebar"><button type="button" class="btn primary" id="save">기록 파일로 저장</button><span id="save-state" class="muted"></span>
           <span class="muted">저장한 뒤 터미널에서: <span class="mono">python -m corpus evalset merge --records &lt;저장한 파일&gt; --write</span></span></div>
         <section class="metrics" id="metrics" aria-label="요약"></section>
@@ -186,17 +186,17 @@ kbd{font-family:var(--mono);font-size:10.5px;color:var(--soft)}
     </section>
     <section id="v-guide" hidden aria-labelledby="t-guide">
       <div style="display:grid;gap:16px">
-        <header class="hero"><div><p>판정 기준 (평가셋 검수 지침)</p><h1 id="t-guide">검수 지침</h1></div></header>
+        <header class="hero"><div><p>판정 기준 (평가셋 리뷰 지침)</p><h1 id="t-guide">리뷰 지침</h1></div></header>
         <div class="guide">
           <div class="gcard"><h3>볼 것 여섯 가지</h3><ol>
             <li>질문만 보고 답이 하나로 정해지나</li><li>정답이 근거 인용과 글자 그대로 맞나(앞뒤 글도 같은 뜻인가)</li><li>같은 값을 다르게 쓴 말이 허용 표기에 있나</li>
-            <li>금지 값이 정말 틀린 값인가</li><li>답의 모양은 하나, 꼬리표는 근거(표/글)부터</li><li>거절 문항은 가까운 문서를 봐도 정말 답이 없나</li></ol></div>
+            <li>금지 값이 정말 틀린 값인가</li><li>답 유형은 하나, 태그는 근거(표/글)부터</li><li>답 없는 문항은 가까운 문서를 봐도 정말 답이 없나</li></ol></div>
           <div class="gcard"><h3>판정 넷</h3><ul>
             <li><b>승인</b> 여섯 가지가 모두 맞다</li><li><b>고침</b> 고치면 쓸 수 있다 · 왜 고쳤는지 한 줄</li>
             <li><b>버림</b> 고쳐도 못 쓴다 · 이유 하나 고르기</li><li><b>보류</b> 판단이 안 선다 · 묻고 싶은 것 한 줄</li></ul></div>
           <div class="gcard"><h3>왜 왔나</h3><ul>
-            <li><b>불일치</b> 교차 확인이 다르게 답함 — 정답지와 교차 확인 중 어느 쪽이 원문과 맞나</li><li><b>실전용 거절</b> 정말 답이 없나</li>
-            <li><b>경고</b> 부재 확인에 걸린 글·기계 검사 경고</li><li><b>표본</b> 자동 승인이 맞았는지 재는 무작위 문항</li></ul></div>
+            <li><b>불일치</b> 이중 라벨링이 다르게 답함 — 정답과 이중 라벨링 중 어느 쪽이 원문과 맞나</li><li><b>테스트셋 답없음</b> 정말 답이 없나</li>
+            <li><b>경고</b> 부재 확인에 걸린 글·자동 검증 경고</li><li><b>표본</b> 자동 승인이 맞았는지 재는 무작위 문항</li></ul></div>
           <div class="gcard"><h3>단축키</h3><ul><li>A 승인 · E 고침 · D 버림 · H 보류</li><li>1~6 확인한 것 표시 · ↑↓ 문항 이동 · Esc 취소</li></ul></div>
         </div>
       </div>
@@ -205,8 +205,8 @@ kbd{font-family:var(--mono);font-size:10.5px;color:var(--soft)}
 </div>
 <script>
 const D=/*__DATA__*/null;
-const CHECKS=[["질문","답이 하나로 정해지나"],["정답=근거","글자 그대로 맞나"],["허용 표기","다른 표기 있나"],["금지 값","정말 틀린 값인가"],["모양·꼬리표","맞게 붙었나"],["거절","정말 답이 없나"]];
-const FIELD={question:"질문",answer:"정답",shape:"모양",tags:"꼬리표",facts:"허용 표기",forbidden:"금지 값"};
+const CHECKS=[["질문","답이 하나로 정해지나"],["정답=근거","글자 그대로 맞나"],["허용 표기","다른 표기 있나"],["금지 값","정말 틀린 값인가"],["모양·태그","맞게 붙었나"],["답없음","정말 답이 없나"]];
+const FIELD={question:"질문",answer:"정답",shape:"모양",tags:"태그",facts:"허용 표기",forbidden:"금지 값"};
 const HUMAN=["승인","고침","버림","보류"];
 const KEY="documind-review:"+D.built_at;
 const S={i:0,items:JSON.parse(JSON.stringify(D.items)),v:{},order:[],ck:{},acc:{},t0:Date.now(),mode:null,draft:null,okArm:false,drop:null,err:"",view:"review",saved:0};
@@ -225,30 +225,31 @@ function restore(){try{const s=JSON.parse(localStorage.getItem(KEY)||"null");if(
   S.items.forEach((it,k)=>{const v=S.v[it.id];if(v&&v.status==="고침"&&v.edits)S.items[k]=Object.assign({},it,v.edits);});return S.order.length;}catch(e){return 0;}}
 function pause(){const it=cur();if(it&&!S.v[it.id])S.acc[it.id]=(S.acc[it.id]||0)+(Date.now()-S.t0)/1000;S.t0=Date.now();}
 function select(k){if(k<0||k>=S.items.length||k===S.i)return;pause();S.i=k;S.mode=null;S.draft=null;S.okArm=false;S.drop=null;S.err="";renderReview();}
-const needCls=n=>"n-"+String(n||"").split(" ")[0];
+const reasonCls=n=>"n-"+String(n||"").split(" ")[0];
+const PART={dev:"개발셋",test:"테스트셋"};
 function renderRows(){
   $("#rows").innerHTML=S.items.map((it,k)=>{const v=S.v[it.id];return `<button type="button" class="row ${v?"st-"+v.status:""}" data-k="${k}" aria-current="${k===S.i}">
     <span class="dot"></span><span class="rq">${esc(it.question)}</span>
-    <span class="rm"><span class="mono">${esc(it.id)}</span><span class="need ${needCls(it.need)}">${esc(it.need)}</span><span>${esc(it.part||"")}용</span>${v?`<span>${esc(v.status)}</span>`:""}</span></button>`;}).join("");
+    <span class="rm"><span class="mono">${esc(it.id)}</span><span class="reason ${reasonCls(it.review_reason)}">${esc(it.review_reason)}</span><span>${esc(PART[it.part]||"분할 전")}</span>${v?`<span>${esc(v.status)}</span>`:""}</span></button>`;}).join("");
   $("#rows").querySelectorAll(".row").forEach(b=>b.onclick=()=>select(+b.dataset.k));
   const n=Object.keys(S.v).length;$("#prog-txt").textContent=`${n} / ${S.items.length} 판정`;$("#prog-bar").style.width=(S.items.length?n/S.items.length*100:0)+"%";
   $("#n-log").textContent=n;$("#list-count").textContent=S.items.length+"개";
 }
 function viewCard(it){
   const meta=`<div class="meta"><span class="mono muted">${esc(it.id)} · ${it.rev||1}판</span><span class="badge shape">${esc(it.shape)}</span>${it.set==="쉬운"?`<span class="badge easy">쉬운 문항</span>`:""}<span class="badge">${esc(it.topic||"주제 미정")}</span>${(it.tags||[]).map(t=>`<span class="badge">${esc(t)}</span>`).join("")}${it.year?`<span class="badge">${esc(it.year)}학년도</span>`:""}</div>`;
-  const facts=(it.facts||[]).length?it.facts.map(f=>`<div class="fact"><span class="fname">${esc(f.name)}</span>${f.values.map(v=>`<span class="val ${inQ(it,v)?"inq":""}" title="${inQ(it,v)?"근거 인용 안에 있는 표기":"인용에는 없는 다른 표기"}"><i></i>${esc(v)}</span>`).join("")}</div>`).join(""):`<span class="muted">거절 문항은 필수 사실이 없습니다</span>`;
+  const facts=(it.facts||[]).length?it.facts.map(f=>`<div class="fact"><span class="fname">${esc(f.name)}</span>${f.values.map(v=>`<span class="val ${inQ(it,v)?"inq":""}" title="${inQ(it,v)?"근거 인용 안에 있는 표기":"인용에는 없는 다른 표기"}"><i></i>${esc(v)}</span>`).join("")}</div>`).join(""):`<span class="muted">답 없는 문항은 필수 사실이 없습니다</span>`;
   const forb=(it.forbidden||[]).length?it.forbidden.map(f=>`<span class="forb">${esc(f.value)} <small>${esc(f.why)}</small></span>`).join(" "):`<span class="muted">없음</span>`;
-  const c=it.cross||{};
-  const cross=c.verdict?`<div class="cross"><div class="cv">${esc(c.answer==null?"(풀지 않음)":c.answer)}</div><span class="mc ${c.verdict==="일치"?"":"warn"}">${esc(c.verdict)}${c.label?" · 규칙 판정 "+esc(c.label):""}</span>${c.quote?`<div class="muted">교차 확인이 찾은 원문: “${esc(c.quote)}”${c.where?" · "+esc(c.where):""}</div>`:""}${c.note?`<div class="muted">덧붙인 말: ${esc(c.note)}</div>`:""}<div class="muted" style="font-size:12px">${esc(c.reader||"")}${c.model?" · "+esc(c.model):""}</div></div>`:`<span class="muted">없음</span>`;
+  const c=it.second_annotation||{};
+  const second=c.verdict?`<div class="second"><div class="cv">${esc(c.answer==null?"(풀지 않음)":c.answer)}</div><span class="mc ${c.verdict==="일치"?"":"warn"}">${esc(c.verdict)}${c.label?" · 규칙 기반 채점 "+esc(c.label):""}</span>${c.quote?`<div class="muted">이중 라벨링이 찾은 원문: “${esc(c.quote)}”${c.where?" · "+esc(c.where):""}</div>`:""}${c.note?`<div class="muted">덧붙인 말: ${esc(c.note)}</div>`:""}<div class="muted" style="font-size:12px">${esc(c.reader||"")}${c.model?" · "+esc(c.model):""}</div></div>`:`<span class="muted">없음</span>`;
   const warn=(it.warnings||[]).length?it.warnings.map(w=>`<span class="mc warn">! ${esc(w)}</span>`).join(" "):`<span class="mc">경고 없음</span>`;
   const prev=it.review&&HUMAN.includes(it.review.status)?`<div class="done">이전 판정: <b>${esc(it.review.status)}</b>${it.review.reason?" · "+esc(it.review.reason):""}</div>`:"";
-  return `<div class="why ${needCls(it.need)}"><b>왜 왔나 · ${esc(it.need)}</b><span>${esc(it.why)}</span><span class="muted">· ${esc(it.part||"")}용</span></div>${prev}${meta}
+  return `<div class="why ${reasonCls(it.review_reason)}"><b>왜 왔나 · ${esc(it.review_reason)}</b><span>${esc(it.why)}</span><span class="muted">· ${esc(PART[it.part]||"분할 전")}</span></div>${prev}${meta}
     <div class="field"><span class="lab">질문</span><div class="qtext">${esc(it.question)}</div></div>
     <div class="field"><span class="lab">정답 문장</span><div class="atext">${esc(it.answer)}</div></div>
     <div class="field"><span class="lab">필수 사실 · 허용 표기 <span class="muted">· 초록 점은 근거 인용 안에 있는 표기</span></span><div class="facts">${facts}</div></div>
     <div class="field"><span class="lab">금지 값 · 챗봇이 이 값을 말하면 틀림</span><div>${forb}</div></div>
-    <div class="field"><span class="lab">교차 확인 · 다른 세션이 정답지를 보지 않고 다른 읽기로 풂</span>${cross}</div>
-    <div class="field"><span class="lab">기계 검사</span><div style="display:flex;flex-wrap:wrap;gap:6px">${warn}</div></div>`;
+    <div class="field"><span class="lab">이중 라벨링 · 다른 세션이 정답을 보지 않고 다른 읽기로 풂</span>${second}</div>
+    <div class="field"><span class="lab">자동 검증</span><div style="display:flex;flex-wrap:wrap;gap:6px">${warn}</div></div>`;
 }
 function editCard(it){
   const facts=(it.facts||[]).map((f,fi)=>`<div class="fact"><span class="fname">${esc(f.name)}</span>${f.values.map((v,vi)=>`<span class="val ${inQ(it,v)?"inq":""}"><i></i>${esc(v)}<button type="button" class="x" data-f="${fi}" data-v="${vi}" aria-label="${esc(v)} 지우기">×</button></span>`).join("")}<span class="addv"><input type="text" id="add-${fi}" placeholder="다른 표기" aria-label="${esc(f.name)}의 다른 표기"><button type="button" class="btn" style="min-height:30px;padding:4px 10px" data-add="${fi}">추가</button></span></div>`).join("")||`<span class="muted">필수 사실 없음</span>`;
@@ -256,8 +257,8 @@ function editCard(it){
   return `<div class="meta"><span class="mono muted">${esc(it.id)}</span><span class="badge shape">고치는 중</span></div>
     <div class="field"><label for="e-q">질문</label><input class="inp" id="e-q" type="text" value="${esc(it.question)}"></div>
     <div class="field"><label for="e-a">정답 문장</label><textarea class="txt" id="e-a">${esc(it.answer)}</textarea></div>
-    <div class="field"><label for="e-s">답의 모양</label><select class="sel" id="e-s">${D.shapes.map(s=>`<option ${s===it.shape?"selected":""}>${esc(s)}</option>`).join("")}</select></div>
-    <div class="field"><span class="lab">꼬리표</span><div class="tagpick">${D.tags.map(t=>`<button type="button" data-tag="${esc(t)}" aria-pressed="${(it.tags||[]).includes(t)}">${esc(t)}</button>`).join("")}</div></div>
+    <div class="field"><label for="e-s">답 유형</label><select class="sel" id="e-s">${D.shapes.map(s=>`<option ${s===it.shape?"selected":""}>${esc(s)}</option>`).join("")}</select></div>
+    <div class="field"><span class="lab">태그</span><div class="tagpick">${D.tags.map(t=>`<button type="button" data-tag="${esc(t)}" aria-pressed="${(it.tags||[]).includes(t)}">${esc(t)}</button>`).join("")}</div></div>
     <div class="field"><span class="lab">필수 사실 · 허용 표기</span><div class="facts">${facts}</div></div>
     <div class="field"><span class="lab">금지 값</span><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">${forb}<span class="addv"><input type="text" id="fb-v" placeholder="금지 값" aria-label="새 금지 값"><select id="fb-w" aria-label="금지 이유">${D.forbid_why.map(w=>`<option>${esc(w)}</option>`).join("")}</select><button type="button" class="btn" style="min-height:30px;padding:4px 10px" id="fb-add">추가</button></span></div></div>`;
 }
@@ -293,15 +294,15 @@ function renderText(src,terms){
 }
 function renderSrcs(){
   const it=S.mode==="edit"?S.draft:cur();const parts=[];
-  if(it.refusal){const r=it.refusal,c=r.check||{};
+  if(it.unanswerable){const r=it.unanswerable,c=r.check||{};
     parts.push(`<section class="src" aria-label="부재 확인 기록"><div class="srchead"><b>부재 확인 기록</b><span class="badge">${esc(r.kind)}</span><span class="muted" style="font-size:12.5px">챗봇이 볼 수 있는 색인 글 전체에서 찾음${c.index?" · 색인 "+esc(c.index):""}</span></div>
       <div class="srcbody"><div class="meta"><span class="muted" style="font-size:12.5px">찾은 낱말</span>${(c.terms||[]).map(t=>`<span class="badge">${esc(t)}</span>`).join("")}</div>
       <div class="hits ${c.hits?"some":"zero"}"><b>${c.hits==null?"기록 없음":c.hits+"건"}</b><span>${c.hits?"걸림 · 걸린 문서에 답이 있는지 확인하세요":"걸린 글 없음"}</span></div>
       ${(c.hit_docs||[]).length?`<div class="muted">걸린 문서: ${c.hit_docs.map(esc).join(", ")}</div>`:""}</div></section>`);}
-  const terms=it.refusal?((it.refusal.check||{}).terms||[]):[];
+  const terms=it.unanswerable?((it.unanswerable.check||{}).terms||[]):[];
   (it.sources||[]).forEach(s=>{
     const cut=s.text!=null&&s.length>s.text.length?`<span class="muted" style="font-size:12.5px">긴 문서라 인용 앞뒤만 보임(전체 ${s.length.toLocaleString()}자)</span>`:"";
-    parts.push(`<section class="src" aria-label="근거 원문"><div class="srchead"><b>${esc(s.title)}</b><span class="mono muted">${esc(s.doc)}</span>${s.where?`<span class="badge">${esc(s.where)}</span>`:""}${s.url?`<a class="muted" style="font-size:12.5px" href="${esc(s.url)}" target="_blank" rel="noopener">원래 주소</a>`:""}${cut}<span class="muted" style="font-size:12.5px">${it.refusal?"노란 칠은 찾은 낱말":"노란 칠이 근거 인용"}</span></div><div class="srcbody">${renderText(s,terms)}</div></section>`);});
+    parts.push(`<section class="src" aria-label="근거 원문"><div class="srchead"><b>${esc(s.title)}</b><span class="mono muted">${esc(s.doc)}</span>${s.where?`<span class="badge">${esc(s.where)}</span>`:""}${s.url?`<a class="muted" style="font-size:12.5px" href="${esc(s.url)}" target="_blank" rel="noopener">원래 주소</a>`:""}${cut}<span class="muted" style="font-size:12.5px">${it.unanswerable?"노란 칠은 찾은 낱말":"노란 칠이 근거 인용"}</span></div><div class="srcbody">${renderText(s,terms)}</div></section>`);});
   $("#srcs").innerHTML=parts.join("")||`<section class="src"><div class="srcbody muted">보여 줄 원문이 없습니다.</div></section>`;
 }
 function renderActions(){
@@ -332,7 +333,7 @@ function saveEdit(){
   const o=cur(),d=S.draft,ch=[];Object.keys(FIELD).forEach(k=>{if(JSON.stringify(o[k])!==JSON.stringify(d[k]))ch.push(k);});
   if(!ch.length){S.err="바뀐 칸이 없습니다. 칸을 고치거나 취소하세요.";renderActions();return;}
   if(!String(d.question).trim()||!String(d.answer).trim()){S.err="질문과 정답 문장은 비울 수 없습니다.";renderActions();return;}
-  if(d.shape!=="거절"&&d.facts.some(f=>!f.values.length)){S.err="필수 사실마다 허용 표기가 하나 이상 있어야 합니다.";renderActions();return;}
+  if(d.shape!=="답없음"&&d.facts.some(f=>!f.values.length)){S.err="필수 사실마다 허용 표기가 하나 이상 있어야 합니다.";renderActions();return;}
   const edits={};ch.forEach(k=>edits[k]=d[k]);S.items[S.i]=d;record("고침",why,ch,edits);
 }
 function record(status,reason,changed,edits){
@@ -346,14 +347,14 @@ function renderLog(){
   const vs=S.order.map(id=>S.v[id]);const c={승인:0,고침:0,버림:0,보류:0};vs.forEach(v=>c[v.status]++);
   const s=vs.map(v=>v.sec).sort((a,b)=>a-b);const med=s.length?(s.length%2?s[(s.length-1)/2]:(s[s.length/2-1]+s[s.length/2])/2):null;
   $("#metrics").innerHTML=`<article><span>판정한 문항</span><strong>${vs.length} / ${S.items.length}</strong></article><article><span>승인 · 고침 · 버림 · 보류</span><strong style="font-size:20px">${c.승인} · ${c.고침} · ${c.버림} · ${c.보류}</strong></article><article><span>문항당 시간(중앙값)</span><strong>${med===null?"—":Math.round(med)+"초"}</strong></article><article><span>남은 문항 예상</span><strong>${med===null?"—":"약 "+Math.round(med*(S.items.length-vs.length)/60)+"분"}</strong></article>`;
-  $("#lrows").innerHTML=vs.length?vs.map(v=>`<tr><td class="mono">${esc(v.id)}</td><td>${esc(v.status)}</td><td>${esc(v.reason||"—")}</td><td>${v.changed.length?v.changed.map(k=>FIELD[k]).join(", "):"—"}</td><td>${v.sec}초</td></tr>`).join(""):`<tr><td colspan="5" class="muted">꼭 볼 문항에서 판정하면 여기에 쌓입니다.</td></tr>`;
+  $("#lrows").innerHTML=vs.length?vs.map(v=>`<tr><td class="mono">${esc(v.id)}</td><td>${esc(v.status)}</td><td>${esc(v.reason||"—")}</td><td>${v.changed.length?v.changed.map(k=>FIELD[k]).join(", "):"—"}</td><td>${v.sec}초</td></tr>`).join(""):`<tr><td colspan="5" class="muted">휴먼 리뷰 대상에서 판정하면 여기에 쌓입니다.</td></tr>`;
   const unsaved=S.order.length-S.saved;$("#save-state").textContent=vs.length?(unsaved>0?`저장 안 한 판정 ${unsaved}개`:"모두 저장함"):"";
 }
 function save(){
   if(!S.order.length)return;
   const lines=S.order.map(id=>JSON.stringify(S.v[id])).join("\n")+"\n";const d=new Date();
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([lines],{type:"application/x-ndjson"}));
-  a.download=`검수기록-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jsonl`;
+  a.download=`리뷰기록-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jsonl`;
   document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),2000);S.saved=S.order.length;persist();renderLog();
 }
 function renderReview(){if(!S.items.length)return;renderRows();renderCard();renderSrcs();renderActions();}

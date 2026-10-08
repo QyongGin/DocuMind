@@ -1,4 +1,4 @@
-"""평가셋 테스트용 지어낸 학교(가나대학) 데이터: 대장 행, 원본 파일, 정본 문항.
+"""평가셋 테스트용 지어낸 학교(가나대학) 데이터: 대장 행, 원본 파일, 평가셋 파일 문항.
 
 저장소가 공개라서 실제 학교 문서는 넣지 않는다.
 """
@@ -73,18 +73,18 @@ def item(item_id: str, **extra) -> dict:
         "facts": [{"name": "전형료", "values": ["30,000원", "3만 원"]}],
         "forbidden": [{"value": "25,000원", "why": "지난해 값"}],
         "evidence": [{"doc": "gana/page/fee", "quote": "전형료 30,000원", "where": "전형료 표"}],
-        "also": [], "year": 2027, "valid_until": None, "refusal": None,
+        "also": [], "year": 2027, "valid_until": None, "unanswerable": None,
         "made_by": "claude-opus-5-5", "made_at": "2026-10-05",
     }
     base.update(extra)
     return base
 
 
-def refusal_item(item_id: str, **extra) -> dict:
-    base = item(item_id, question="가나대 2028학년도 정원 몇 명이에요?", shape="거절", tags=["연도 시험"],
+def unanswerable_item(item_id: str, **extra) -> dict:
+    base = item(item_id, question="가나대 2028학년도 정원 몇 명이에요?", shape="답없음", tags=["연도 시험"],
                 answer="2028학년도 정원은 문서에서 확인할 수 없습니다.", facts=[],
                 forbidden=[{"value": "40명", "why": "지어낼 법한 값"}], evidence=[], year=2028,
-                refusal={"kind": "가까운 빈칸", "near": "gana/page/fee",
+                unanswerable={"kind": "가까운 빈칸", "near": "gana/page/fee",
                          "check": {"terms": ["2028", "정원"], "hits": 0, "hit_docs": [], "at": "2026-10-05",
                                    "index": "20261004-201713", "trace": False}})
     base.update(extra)

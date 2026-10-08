@@ -1,11 +1,11 @@
-"""검수 화면 HTML 만들기와 검수 기록 합치기(결정 ④·⑦)."""
+"""리뷰 화면 HTML 만들기와 리뷰 기록 합치기(결정 ④·⑦)."""
 
 import json
 from datetime import datetime
 
-from evalset_data import build_corpus, item, refusal_item
+from evalset_data import build_corpus, item, unanswerable_item
 
-from corpus.evalset import checks, review
+from corpus.evalset import review, validation
 
 BUILT = datetime(2026, 10, 6, 9, 30, 0)
 
@@ -38,24 +38,24 @@ def test_window_shows_short_text_whole_and_long_text_around_quote():
 def test_build_html_holds_only_items_people_must_see(ledger, tmp_path):
     build_corpus(ledger, tmp_path)
     items = [
-        item("ev-0001", need="불일치", part="실전",
-             cross={"answer": "25,000원입니다.", "verdict": "불일치", "label": "틀림", "reader": "원본 HTML", "model": "m"}),
-        refusal_item("ev-0002", need="실전용 거절", part="실전", cross={"verdict": "일치"}),
-        item("ev-0003", need=None, part="연습", review={"status": "자동 승인", "reason": "", "at": "2026-10-06", "sec": 0}),
-        item("ev-0004", question="</script><script>alert(1)</script> 원서비?", need="표본", part="실전"),
+        item("ev-0001", review_reason="불일치", part="test",
+             second_annotation={"answer": "25,000원입니다.", "verdict": "불일치", "label": "틀림", "reader": "원본 HTML", "model": "m"}),
+        unanswerable_item("ev-0002", review_reason="테스트셋 답없음", part="test", second_annotation={"verdict": "일치"}),
+        item("ev-0003", review_reason=None, part="dev", review={"status": "자동 승인", "reason": "", "at": "2026-10-06", "sec": 0}),
+        item("ev-0004", question="</script><script>alert(1)</script> 원서비?", review_reason="표본", part="test"),
     ]
-    html, count = review.build_html(items, checks.TextSource(ledger, tmp_path), ledger, BUILT, "evalset.jsonl")
+    html, count = review.build_html(items, validation.TextSource(ledger, tmp_path), ledger, BUILT, "evalset.jsonl")
     assert count == 3 and "</script><script>alert(1)" not in html  # 질문 글이 스크립트를 끝내지 못한다
     data = screen_data(html)
     assert [entry["id"] for entry in data["items"]] == ["ev-0001", "ev-0002", "ev-0004"]
     assert data["total"] == 4 and data["auto"] == 1 and data["built_at"] == "2026-10-06T09:30:00"
     first = data["items"][0]
-    assert first["why"] == "교차 확인 답: 25,000원입니다. — 규칙 판정 '틀림'"
+    assert first["why"] == "이중 라벨링 답: 25,000원입니다. — 규칙 기반 채점 '틀림'"
     source = first["sources"][0]
     start, end = source["spans"][0]
     assert source["doc"] == "gana/page/fee" and "전형료" in source["text"][start:end]
-    refusal = data["items"][1]
-    assert refusal["sources"][0]["where"] == "가까운 문서" and refusal["refusal"]["check"]["hits"] == 0
+    unanswerable = data["items"][1]
+    assert unanswerable["sources"][0]["where"] == "가까운 문서" and unanswerable["unanswerable"]["check"]["hits"] == 0
     assert "evalset merge --records" in html
 
 
@@ -65,7 +65,7 @@ def record(item_id: str, status: str, at: str, **extra) -> dict:
 
 
 def test_merge_applies_latest_record_and_is_idempotent():
-    items = [item("ev-0001", machine={"errors": [], "warnings": []}), item("ev-0002"), refusal_item("ev-0003")]
+    items = [item("ev-0001", validation={"errors": [], "warnings": []}), item("ev-0002"), unanswerable_item("ev-0003")]
     records = [
         record("ev-0001", "보류", "2026-10-06T10:00:00", reason="2차 기간도 넣나?"),
         record("ev-0001", "고침", "2026-10-06T10:05:00", reason="다른 표기 추가", changed=["facts"],
@@ -76,7 +76,7 @@ def test_merge_applies_latest_record_and_is_idempotent():
     result = review.merge(items, records)
     assert result["errors"] == [] and dict(result["counts"]) == {"고침": 1, "승인": 1, "버림": 1}
     fixed = items[0]
-    assert fixed["facts"][0]["values"][-1] == "삼만 원" and fixed["rev"] == 2 and fixed["machine"] is None
+    assert fixed["facts"][0]["values"][-1] == "삼만 원" and fixed["rev"] == 2 and fixed["validation"] is None
     assert fixed["review"] == {"status": "고침", "reason": "다른 표기 추가", "at": "2026-10-06T10:05:00", "sec": 42,
                                "changed": ["facts"]}
     assert items[2]["review"]["status"] == "버림" and items[2]["review"]["reason"] == "시점지남"
@@ -94,7 +94,7 @@ def test_merge_reports_bad_records_without_touching_items():
         {"status": "승인"},
     ])
     assert result["errors"] == ["ev-0001: 판정 값이 목록에 없음(통과)",
-                                "ev-0002: 고친 칸이 없거나 고칠 수 없는 칸(evidence)", "정본에 없는 문항: ev-9999"]
+                                "ev-0002: 고친 칸이 없거나 고칠 수 없는 칸(evidence)", "평가셋 파일에 없는 문항: ev-9999"]
     assert "review" not in items[0] and items[1]["rev"] == 1
 
     broken = review.merge(items, [record("ev-0002", "고침", "2026-10-06T10:00:00", edits={"answer": " "})])

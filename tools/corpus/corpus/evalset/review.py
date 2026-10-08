@@ -1,9 +1,9 @@
-"""검수 화면(결정 ④·⑦)과 검수 기록 합치기.
+"""리뷰 화면(결정 ④·⑦)과 리뷰 기록 합치기.
 
-- 검수 화면: 사람이 꼭 볼 문항(`need`가 있는 문항)만 담은 HTML 파일 하나. 맥북 브라우저로 열고 서버·인터넷을 쓰지 않는다.
+- 리뷰 화면: 휴먼 리뷰 대상(`review_reason`이 있는 문항)만 담은 HTML 파일 하나. 맥북 브라우저로 열고 서버·인터넷을 쓰지 않는다.
   근거 원문(색인 글, 없으면 원본에서 뽑은 글)을 앞뒤 글과 함께 보여 주고 인용 줄에 색을 칠한다.
-- 검수 기록: 화면이 내려받게 하는 JSONL(문항 ID·판정·이유·고친 칸·걸린 초). `merge`가 정본에 합친다.
-  고침은 고친 칸을 바꾸고 `rev`를 올리며 기계 검사 결과를 비운다(다시 `check`). 같은 기록을 두 번 합쳐도 결과가 같다.
+- 리뷰 기록: 화면이 내려받게 하는 JSONL(문항 ID·판정·이유·고친 칸·걸린 초). `merge`가 평가셋 파일에 합친다.
+  고침은 고친 칸을 바꾸고 `rev`를 올리며 자동 검증 결과를 비운다(다시 `validate`). 같은 기록을 두 번 합쳐도 결과가 같다.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from ..ledger import Ledger
 from . import schema
-from .checks import TextSource, quote_key
+from .validation import TextSource, quote_key
 
 TEMPLATE = Path(__file__).with_name("review_template.html")
 FULL_LIMIT = 12_000  # 이보다 짧은 문서는 전체를 보여 준다
@@ -27,7 +27,7 @@ DROP_REASONS = ("근거불일치", "답여럿", "바뀌지않는값", "개인정
 
 
 def quote_span(text: str, quote: str) -> tuple[int, int] | None:
-    """인용이 있는 글자 범위. 기계 검사(`quote_key`)처럼 공백과 표 구분선(`|`)은 무시하고 찾는다."""
+    """인용이 있는 글자 범위. 자동 검증(`quote_key`)처럼 공백과 표 구분선(`|`)은 무시하고 찾는다."""
     key = quote_key(quote)
     if not key:
         return None
@@ -59,17 +59,17 @@ def window(text: str, spans: list[tuple[int, int]]) -> tuple[int, str]:
     return start, text[start:end]
 
 
-def need_why(item: dict) -> str:
-    need = item.get("need")
-    cross = item.get("cross") or {}
-    if need == "불일치":
-        return f"교차 확인 답: {cross.get('answer') or '(없음)'} — 규칙 판정 '{cross.get('label') or cross.get('verdict')}'"
-    if need == "경고":
-        return "; ".join((item.get("machine") or {}).get("warnings") or []) or "기계 검사 경고"
-    if need == "실전용 거절":
-        return "실전용 거절 문항은 모두 사람이 확인"
-    if need == "표본":
-        return "실전용 자동 승인 문항 중 무작위 표본"
+def reason_text(item: dict) -> str:
+    reason = item.get("review_reason")
+    second = item.get("second_annotation") or {}
+    if reason == "불일치":
+        return f"이중 라벨링 답: {second.get('answer') or '(없음)'} — 규칙 기반 채점 '{second.get('label') or second.get('verdict')}'"
+    if reason == "경고":
+        return "; ".join((item.get("validation") or {}).get("warnings") or []) or "자동 검증 경고"
+    if reason == "테스트셋 답없음":
+        return "테스트셋 답 없는 문항은 모두 사람이 확인"
+    if reason == "표본":
+        return "테스트셋 자동 승인 문항 중 무작위 표본"
     return ""
 
 
@@ -87,16 +87,16 @@ def _source(texts: TextSource, ledger: Ledger, doc_id: str, quotes: list[str], w
 
 
 def entry(item: dict, texts: TextSource, ledger: Ledger) -> dict:
-    """검수 화면에 넣을 문항 하나."""
-    data = {key: item.get(key) for key in ("id", "rev", "part", "need", "set", "shape", "tags", "topic", "question",
-                                           "answer", "facts", "forbidden", "year", "refusal", "review", "note")}
-    data["why"] = need_why(item)
-    cross = item.get("cross") or {}
-    data["cross"] = {key: cross.get(key) for key in ("answer", "quote", "where", "note", "verdict", "label", "reader", "model")}
-    data["warnings"] = (item.get("machine") or {}).get("warnings") or []
+    """리뷰 화면에 넣을 문항 하나."""
+    data = {key: item.get(key) for key in ("id", "rev", "part", "review_reason", "set", "shape", "tags", "topic", "question",
+                                           "answer", "facts", "forbidden", "year", "unanswerable", "review", "note")}
+    data["why"] = reason_text(item)
+    second = item.get("second_annotation") or {}
+    data["second_annotation"] = {key: second.get(key) for key in ("answer", "quote", "where", "note", "verdict", "label", "reader", "model")}
+    data["warnings"] = (item.get("validation") or {}).get("warnings") or []
     sources = []
-    if item["shape"] == "거절":
-        near = (item.get("refusal") or {}).get("near")
+    if item["shape"] == "답없음":
+        near = (item.get("unanswerable") or {}).get("near")
         if near:
             sources.append(_source(texts, ledger, near, [], "가까운 문서"))
     else:
@@ -111,8 +111,8 @@ def entry(item: dict, texts: TextSource, ledger: Ledger) -> dict:
 
 
 def build_html(items: list[dict], texts: TextSource, ledger: Ledger, built_at: datetime, source_name: str) -> tuple[str, int]:
-    """(HTML, 담은 문항 수). 사람이 볼 이유(`need`)가 있는 문항만 담는다(이미 판정한 문항도 다시 볼 수 있게 담는다)."""
-    chosen = [item for item in sorted(items, key=lambda entry_: entry_["id"]) if item.get("need")]
+    """(HTML, 담은 문항 수). 휴먼 리뷰 이유(`review_reason`)가 있는 문항만 담는다(이미 판정한 문항도 다시 볼 수 있게 담는다)."""
+    chosen = [item for item in sorted(items, key=lambda entry_: entry_["id"]) if item.get("review_reason")]
     payload = {
         "built_at": built_at.isoformat(timespec="seconds"),
         "source": source_name,
@@ -141,7 +141,7 @@ def load_records(paths: list[str | Path]) -> list[dict]:
 
 
 def merge(items: list[dict], records: list[dict]) -> dict:
-    """검수 기록을 정본에 합친다. 문항마다 가장 늦은 기록만 쓴다. 돌려주는 것: {"counts": Counter, "errors": [...]}."""
+    """리뷰 기록을 평가셋 파일에 합친다. 문항마다 가장 늦은 기록만 쓴다. 돌려주는 것: {"counts": Counter, "errors": [...]}."""
     by_id = {item["id"]: item for item in items}
     latest: dict[str, dict] = {}
     for record in records:
@@ -156,7 +156,7 @@ def merge(items: list[dict], records: list[dict]) -> dict:
         item = by_id.get(item_id)
         status = record.get("status")
         if item is None:
-            errors.append(f"정본에 없는 문항: {item_id}")
+            errors.append(f"평가셋 파일에 없는 문항: {item_id}")
             continue
         if status not in RECORD_STATUSES:
             errors.append(f"{item_id}: 판정 값이 목록에 없음({status})")
@@ -177,7 +177,7 @@ def merge(items: list[dict], records: list[dict]) -> dict:
                 continue
             item.update(edits)
             item["rev"] = int(item.get("rev") or 1) + 1
-            item["machine"] = None  # 고친 문항은 기계 검사를 다시 한다(정본 형식 §3)
+            item["validation"] = None  # 고친 문항은 자동 검증을 다시 한다(평가셋 파일 형식 §3)
         item["review"] = {"status": status, "reason": str(record.get("reason") or ""), "at": record.get("at"),
                           "sec": int(record.get("sec") or 0)}
         if record.get("changed"):
