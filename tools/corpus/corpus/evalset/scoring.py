@@ -1,6 +1,6 @@
-"""규칙 판정(결정 ②): 답을 정답지와 비교해 맞음·일부·모름·틀림·애매·빈 답을 매긴다.
+"""규칙 기반 채점(결정 ②): 답을 정답과 비교해 맞음·일부·모름·틀림·애매·빈 답을 매긴다.
 
-규칙이 정하지 못하는 답은 '애매'로 두고 사람이 본다. 평가셋을 만들 때의 교차 확인과, 평가할 때의 채점기가
+규칙이 정하지 못하는 답은 '애매'로 두고 사람이 본다. 평가셋을 만들 때의 이중 라벨링과, 평가할 때의 채점기가
 같은 규칙을 쓴다. 판정 모델(다른 AI가 채점)은 쓰지 않는다.
 """
 
@@ -57,14 +57,14 @@ def numbers_with_units(normalized_text: str) -> set[str]:
     return set(_NUMBER_WITH_UNIT.findall(normalized_text))
 
 
-def judge(item: dict, answer: str | None, context: str | None = None) -> dict:
+def score(item: dict, answer: str | None, context: str | None = None) -> dict:
     """답 하나를 판정한다. context(모델이 받은 근거 글)를 주면 근거에 없는 숫자를 '지어낸 숫자'로 본다."""
     text = (answer or "").strip()
-    result = {"label": "빈 답", "matched": [], "missing": [], "forbidden_hits": [], "invented": [], "refusal": False}
+    result = {"label": "빈 답", "matched": [], "missing": [], "forbidden_hits": [], "invented": [], "abstained": False}
     if not text:
         return result
     normalized = normalize(text)
-    refusal = any(normalize(phrase) in normalized for phrase in REFUSAL_PHRASES)
+    abstained = any(normalize(phrase) in normalized for phrase in REFUSAL_PHRASES)
     forbidden = [entry["value"] for entry in item.get("forbidden", []) if contains(normalized, entry["value"])]
     matched, missing = [], []
     for fact in item.get("facts", []):
@@ -78,12 +78,12 @@ def judge(item: dict, answer: str | None, context: str | None = None) -> dict:
 
     if forbidden:
         label = "틀림"
-    elif item["shape"] == "거절":
-        if refusal:
+    elif item["shape"] == "답없음":
+        if abstained:
             label = "애매" if numbers else "맞음"  # 거절하며 덧붙인 숫자는 '지난해 값'처럼 밝혔는지 사람이 본다
         else:
             label = "틀림" if numbers else "애매"  # 답이 없는 질문에 구체 숫자를 단정하면 지어낸 답
-    elif refusal:
+    elif abstained:
         label = "애매" if matched else "모름"
     elif not matched:
         label = "애매"
@@ -94,5 +94,5 @@ def judge(item: dict, answer: str | None, context: str | None = None) -> dict:
     if label in ("맞음", "일부") and invented:
         label = "애매"
     result.update(label=label, matched=matched, missing=missing, forbidden_hits=forbidden, invented=invented,
-                  refusal=refusal)
+                  abstained=abstained)
     return result

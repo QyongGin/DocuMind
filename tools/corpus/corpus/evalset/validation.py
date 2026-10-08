@@ -1,4 +1,4 @@
-"""기계 검사(결정 ④·⑦): 사람이 보기 전에 정본 문항을 자동으로 거른다.
+"""자동 검증(결정 ④·⑦): 사람이 보기 전에 평가셋 파일 문항을 자동으로 거른다.
 
 오류(`errors`)가 있는 문항은 초안으로 돌려보내고, 경고(`warnings`)가 있는 문항은 사람이 꼭 본다.
 문서 글은 내보낸 색인 글(`Assets/eval/index_text/`)을 먼저 쓰고, 없으면 원본 파일에서 뽑은 글을 쓴다.
@@ -12,7 +12,7 @@ from pathlib import Path
 from .. import extract
 from ..ledger import Ledger
 from . import schema
-from .judge import contains, normalize
+from .scoring import contains, normalize
 
 EXCLUDE_NOTE = "[평가질문제외]"
 MIN_TEXT_CHARS = 100
@@ -42,7 +42,7 @@ class TextSource:
         return self._read(doc_id, prefer_index=True)
 
     def raw(self, doc_id: str) -> str | None:
-        """원본 파일에서 뽑은 글(서비스 파이프라인과 다른 읽기). 교차 확인·지난해 판 대조에 쓴다."""
+        """원본 파일에서 뽑은 글(서비스 파이프라인과 다른 읽기). 이중 라벨링·지난해 판 대조에 쓴다."""
         return self._read(doc_id, prefer_index=False)
 
     def _read(self, doc_id: str, prefer_index: bool) -> str | None:
@@ -95,7 +95,7 @@ def question_key(question: str) -> str:
 
 
 def _doc_errors(item: dict, row: dict | None, near: bool = False) -> list[str]:
-    """근거 문서(또는 거절 문항의 가까운 문서)가 평가 문항에 쓸 수 있는 문서인가."""
+    """근거 문서(또는 답 없는 문항의 가까운 문서)가 평가 문항에 쓸 수 있는 문서인가."""
     if row is None:
         return ["근거 문서가 대장에 없음"]
     errors = []
@@ -108,33 +108,33 @@ def _doc_errors(item: dict, row: dict | None, near: bool = False) -> list[str]:
     if row.get("kind") != "faq" and (row.get("text_chars") or 0) < MIN_TEXT_CHARS:
         errors.append(f"글이 {MIN_TEXT_CHARS}자 미만인 문서")
     if not near and item["set"] == "본" and row.get("kind") == "faq" and "다른 말" not in item["tags"]:
-        errors.append("FAQ를 근거로 한 본 문항은 '다른 말' 꼬리표가 있어야 함")
+        errors.append("FAQ를 근거로 한 본 문항은 '다른 말' 태그가 있어야 함")
     return errors
 
 
-def check_item(item: dict, ledger: Ledger, texts: TextSource) -> dict:
-    """문항 하나의 기계 검사 결과(`machine` 칸)와 대장에서 가져온 `topic`·`valid_until`."""
+def validate_item(item: dict, ledger: Ledger, texts: TextSource) -> dict:
+    """문항 하나의 자동 검증 결과(`validation` 칸)와 대장에서 가져온 `topic`·`valid_until`."""
     errors = schema.validate(item)
     warnings: list[str] = []
     result = {"quote_ok": None, "facts_in_quote": None, "doc_ok": None, "values_ok": not errors,
-              "dup_of": None, "refusal_ok": None, "prev_year_ok": None}
+              "dup_of": None, "unanswerable_ok": None, "prev_year_ok": None}
     fill: dict = {}
     if errors:
         result.update(errors=errors, warnings=warnings)
-        return {"machine": result, "fill": fill}
+        return {"validation": result, "fill": fill}
 
-    if item["shape"] == "거절":
-        refusal = item["refusal"]
-        check = refusal.get("check")
+    if item["shape"] == "답없음":
+        unanswerable = item["unanswerable"]
+        check = unanswerable.get("check")
         if not check:
             errors.append("부재 확인 기록이 없음")
-            result["refusal_ok"] = False
+            result["unanswerable_ok"] = False
         else:
-            result["refusal_ok"] = True
+            result["unanswerable_ok"] = True
             if check["hits"] > 0:
                 warnings.append(f"부재 확인에 걸린 글 {check['hits']}건 — 답이 있는지 사람이 봄")
-        if refusal.get("near"):
-            row = ledger.get(refusal["near"])
+        if unanswerable.get("near"):
+            row = ledger.get(unanswerable["near"])
             errors.extend(f"가까운 문서: {message}" for message in _doc_errors(item, row, near=True))
             if row:
                 fill.update(topic=row.get("topic"), valid_until=row.get("valid_until"))
@@ -179,32 +179,32 @@ def check_item(item: dict, ledger: Ledger, texts: TextSource) -> dict:
                 result["prev_year_ok"] = not absent
                 warnings.extend(f"금지 값이 지난해 판에 없음: {value}" for value in absent)
     result.update(errors=errors, warnings=warnings)
-    return {"machine": result, "fill": fill}
+    return {"validation": result, "fill": fill}
 
 
-def check_all(items: list[dict], ledger: Ledger, texts: TextSource, today: date) -> dict:
-    """모든 문항을 검사하고 `{문항 ID: {machine, fill}}`을 돌려준다. 같은 질문은 뒤의 문항을 오류로 본다."""
-    results = {item["id"]: check_item(item, ledger, texts) for item in items}
+def validate_all(items: list[dict], ledger: Ledger, texts: TextSource, today: date) -> dict:
+    """모든 문항을 검사하고 `{문항 ID: {validation, fill}}`을 돌려준다. 같은 질문은 뒤의 문항을 오류로 본다."""
+    results = {item["id"]: validate_item(item, ledger, texts) for item in items}
     seen: dict[str, str] = {}
     for item in sorted(items, key=lambda entry: entry["id"]):
         key = question_key(str(item.get("question", "")))
         if not key:
             continue
         if key in seen:
-            machine = results[item["id"]]["machine"]
-            machine["dup_of"] = seen[key]
-            machine["errors"].append(f"같은 질문이 이미 있음: {seen[key]}")
+            checked = results[item["id"]]["validation"]
+            checked["dup_of"] = seen[key]
+            checked["errors"].append(f"같은 질문이 이미 있음: {seen[key]}")
         else:
             seen[key] = item["id"]
     for result in results.values():
-        result["machine"]["at"] = today.isoformat()
+        result["validation"]["at"] = today.isoformat()
     return results
 
 
 def apply_results(items: list[dict], results: dict) -> None:
     for item in items:
         result = results[item["id"]]
-        item["machine"] = result["machine"]
+        item["validation"] = result["validation"]
         for key, value in result["fill"].items():
             if value is not None:
                 item[key] = value

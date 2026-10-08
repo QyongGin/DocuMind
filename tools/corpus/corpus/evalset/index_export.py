@@ -1,7 +1,7 @@
 """색인 글 내보내기(결정 ④-6): 서비스 색인의 청크 글을 문서별 파일로 받는다.
 
 맥북에서 백엔드 API(`/api/documents/{id}/chunks`, 관리자)를 부른다. 데스크탑이 켜져 있고 챗봇이 떠 있어야 한다.
-받은 글은 기계 검사의 인용 대조(`check --index-dir`), 검수 화면의 근거 원문, 거절 문항의 부재 확인에 쓴다.
+받은 글은 자동 검증의 인용 대조(`validate --index-dir`), 리뷰 화면의 근거 원문, 답 없는 문항의 부재 확인에 쓴다.
 학교 글이므로 저장소 밖(`Assets/eval/index_text/<색인 백업 이름>/`)에 둔다.
 """
 
@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ..ledger import Ledger
 from ..upload import BackendClient, UploadStop
-from .checks import index_text_name
+from .validation import index_text_name
 
 
 def rows(ledger: Ledger) -> list[tuple[str, int]]:

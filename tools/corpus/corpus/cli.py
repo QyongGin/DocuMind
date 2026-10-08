@@ -8,7 +8,7 @@
     stats          대장 집계(형식·주제·개인정보·첨부 실측 크기)
     failures       실패 목록
     upload         대장 행을 서비스 백엔드 API로 올리기(관리자 비밀번호는 실행 때 입력, 이어 올리기)
-    evalset        평가셋 정본 검사·나누기·사람이 꼭 볼 문항 고르기·고정(`python -m corpus evalset -h`)
+    evalset        평가셋 자동 검증·이중 라벨링·분할·휴먼 리뷰·버전 고정(`python -m corpus evalset -h`)
 """
 
 import argparse
