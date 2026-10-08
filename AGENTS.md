@@ -36,7 +36,7 @@ RAG 작업이면 `ai-server/AGENTS.md`와 `docs/rag/README.md`도 읽는다. 문
 
 챗봇의 연산·실행(서빙) 서버는 항상 **데스크탑**(로컬 GPU: RTX 4070 Super)이다. 데스크탑 실행은 `docker-compose.gpu.yml` override가 필수다(base `docker-compose.yml`만 올리면 CPU로 돈다). **GCP는 쓰지 않는다** — 과거 GCP 기록은 `docs/archive/`에 역사로만 남는다.
 
-**예외 — 모델 학습(파인튜닝)만 AWS에서 한다** (2026-10-01 결정): AWS EC2 g5.xlarge 1대(서울, NVIDIA A10G 24GB, vCPU 4, RAM 16GB, EBS 200GiB, Deep Learning AMI PyTorch 2.10·Ubuntu 24.04). 학습 결과물은 데스크탑으로 옮겨 Ollama로 서빙한다. 챗봇 실행·평가·색인은 데스크탑에서 한다. AWS에 올려도 되는 데이터 범위는 총괄계획 §4.6 안건 4.
+**예외 — 모델 학습(파인튜닝)만 AWS에서 한다** (2026-10-01 결정): AWS EC2 g5.xlarge 1대(서울, NVIDIA A10G 24GB, vCPU 4, RAM 16GB, EBS 200GiB, Deep Learning AMI PyTorch 2.10·Ubuntu 24.04). 학습 결과물은 데스크탑으로 옮겨 Ollama로 서빙한다. 챗봇 실행·평가·색인은 데스크탑에서 한다. AWS에 올려도 되는 데이터 범위는 ADR-0008·0010.
 
 제어와 접속은 두 평면으로 나뉜다.
 

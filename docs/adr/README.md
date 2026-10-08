@@ -1,6 +1,6 @@
 # ADR (Architecture Decision Record)
 
-> 지금 유효한 설계·기술 결정을 결정 하나에 파일 하나로 남긴다. 2026-10-07에 옛 `memory-bank/decisionLog.md`와 총괄계획 §7 결정 기록(110건)을 정리해 옮겼다. 원래 기록은 `docs/archive/`에 있다(로컬 전용).
+> 지금 유효한 설계·기술 결정을 결정 하나에 파일 하나로 남긴다. 2026-10-07에 옛 `memory-bank/decisionLog.md`와 ADR(옛 총괄계획 §7, 보관) 결정 기록(110건)을 정리해 옮겼다. 원래 기록은 `docs/archive/`에 있다(로컬 전용).
 
 ## 목록
 
