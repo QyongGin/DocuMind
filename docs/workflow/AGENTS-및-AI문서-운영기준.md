@@ -54,7 +54,7 @@ flowchart TD
 | `docs/project/현재-상태.md` | 지금 위치(마일스톤·이슈·브랜치), 다음 할 일, 막힌 것 (60줄 이하) | 지난 이력, 결정 이유, 운영 주의 |
 | `docs/adr/` | 지금 유효한 설계·기술 결정(결정 하나 = 파일 하나, 상태·대체 관계) | 작업 방식 규칙, 한 번 하고 끝난 운영 작업 |
 | `docs/development/알려진-문제.md` | 아직 고치지 않은 동작과 피해 가는 방법 | 해결된 문제의 긴 경위(→ PR·보고서) |
-| GitHub Issues·Projects | 작업 목록, 진행 상태(할 일 / 진행 중 / develop 반영 / 릴리스) | 설계 결정 원문 |
+| GitHub Issues·Projects 보드 [DocuMind](https://github.com/users/QyongGin/projects/2) | 작업 목록, 진행 상태(Status: 할 일 / 진행 중 / develop 반영 / 릴리스). 새 이슈는 보드에 넣고, PR이 develop에 머지되면 'develop 반영', 릴리스 뒤 이슈를 닫으면 '릴리스' | 설계 결정 원문 |
 | `skills/` | 반복 가능한 절차 지식 | 단발성 보고서, 현재 서버 상태 |
 | `CONTRIBUTING.md` | 공개 가능한 협업 규칙 | 개인 로컬 경로, Tailscale 주소, 비공개 운영 노트 |
 
