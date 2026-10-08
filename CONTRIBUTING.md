@@ -2,7 +2,7 @@
 
 DocuMind는 사내 문서를 외부로 보내지 않는 on-premise(내부 설치형) RAG(검색 증강 생성) 시스템이다. 이 문서는 공개 저장소에서 개발자와 리뷰어가 같은 기준으로 작업하기 위한 협업 규칙이다.
 
-이 문서에는 공개해도 되는 개발 절차만 둔다. 개인 서버 주소, 실제 `.env` 값, 로컬 배포 alias(별칭), `memory-bank/` 진행 상황, 비공개 운영 메모는 넣지 않는다.
+이 문서에는 공개해도 되는 개발 절차만 둔다. 개인 서버 주소, 실제 `.env` 값, 로컬 배포 alias(별칭), 비공개 운영 메모는 넣지 않는다.
 
 ## 1. 프로젝트 구성
 
@@ -16,7 +16,7 @@ DocuMind는 사내 문서를 외부로 보내지 않는 on-premise(내부 설치
 | `frontend/AGENTS.md` | Frontend 공개 리뷰 체크리스트 |
 | `ai-server/AGENTS.md` | AI server 공개 리뷰 체크리스트 |
 
-루트 `AGENTS.md`, `CLAUDE.md`, `memory-bank/`, `docs/`는 로컬 운영 자료로 취급한다. 공개 협업 규칙은 이 `CONTRIBUTING.md`와 모듈별 `AGENTS.md`에 둔다.
+루트 `AGENTS.md`(`CLAUDE.md`는 그 심볼릭 링크)와 `docs/`는 AI 에이전트와 함께 쓰는 작업 문서다. 현재 문서는 커밋하고, 지난 기록(`docs/archive/`)과 접속 정보(`docs/local/`)·학교 데이터(`Assets/`)는 커밋하지 않는다. 결정은 `docs/adr/`(ADR), 지금 위치는 `docs/project/현재-상태.md`에 둔다. 공개 협업 규칙은 이 `CONTRIBUTING.md`와 모듈별 `AGENTS.md`에 둔다.
 
 ## 2. 작업 단위
 
