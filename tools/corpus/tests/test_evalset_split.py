@@ -64,6 +64,22 @@ def test_big_document_is_split_by_section(ledger):
     assert all(len(found) == 1 for found in by_section.values())
 
 
+def test_second_batch_keeps_first_assignments_and_joins_assigned_groups(ledger):
+    """30문항씩 쌓아도 앞서 나눈 문항은 그대로, 이미 나뉜 문서의 새 문항은 같은 쪽(ADR-0022)."""
+    first = many_items(10, 3)
+    parts = split.assign_parts(first, ledger, seed=7)
+    for entry in first:
+        entry["part"] = parts[entry["id"]]
+    joined = item("ev-0999", question="같은 문서의 새 문항", topic="학사",
+                  evidence=[{"doc": "gana/doc/0", "quote": "전형료 30,000원"}])
+    items = first + many_items(20, 3)[30:] + [joined]
+    again = split.assign_parts(items, ledger, seed=99)
+    assert all(again[entry["id"]] == parts[entry["id"]] for entry in first)
+    assert again["ev-0999"] == parts["ev-0001"]
+    held = sum(1 for part in again.values() if part == "test")
+    assert abs(held - round(len(items) * 0.4)) <= 3  # 더한 뒤에도 전체로 40% 안팎
+
+
 def test_select_for_review_and_auto_approve(ledger):
     items = many_items(20, 2)
     parts = {entry["id"]: ("test" if index % 2 else "dev") for index, entry in enumerate(items)}
@@ -85,7 +101,7 @@ def test_select_for_review_and_auto_approve(ledger):
     assert [entry.get("review_reason") for entry in items] == [entry.get("review_reason") for entry in before]
 
 
-def test_select_for_review_requires_validation_annotation_and_parts(ledger):
+def test_select_for_review_requires_validation_and_annotation(ledger):
     items = many_items(2, 1)
     ready(items, {entry["id"]: "dev" for entry in items})
     items[1]["validation"]["errors"] = ["인용이 원문에 없음"]
@@ -95,6 +111,10 @@ def test_select_for_review_requires_validation_annotation_and_parts(ledger):
     items[1]["validation"]["errors"] = []
     del items[1]["second_annotation"]
     with pytest.raises(ValueError):
+        split.select_for_review([items[1]], seed=1, today=TODAY)
+    items[1]["second_annotation"] = {"verdict": "일치"}
+    items[1]["validation"] = None  # 자동 검증 전
+    with pytest.raises(ValueError, match="ev-0002"):
         split.select_for_review([items[1]], seed=1, today=TODAY)
 
 
@@ -128,3 +148,42 @@ def test_freeze_requires_all_reviews_and_reports_counts():
     text = split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)
     assert "본 2 (개발셋 1 / 테스트셋 1), 쉬운 0, 버림 1" in text
     assert "evalset_sha256: " in text and "split_seed: 7" in text
+
+
+def test_select_for_review_before_split_marks_only_disagreements_and_warnings(ledger):
+    """나누기 전에는 불일치·경고만 정하고 나머지는 분할 대기(자동 승인도 하지 않음)."""
+    items = many_items(3, 2)
+    ready(items, {entry["id"]: None for entry in items})
+    items[0]["second_annotation"] = {"verdict": "불일치"}
+    items[1]["validation"]["warnings"] = ["부재 확인에 걸린 글 1건"]
+    counts = split.select_for_review(items, seed=1, today=TODAY)
+    assert (items[0]["review_reason"], items[1]["review_reason"]) == ("불일치", "경고")
+    assert all("review_reason" not in entry and entry.get("review") is None for entry in items[2:])
+    assert counts["분할 대기"] == 4
+    parts = split.assign_parts(items, ledger, seed=1)
+    for entry in items:
+        entry["part"] = parts[entry["id"]]
+    split.select_for_review(items, seed=1, today=TODAY)
+    assert all("review_reason" in entry for entry in items)  # 나눈 뒤 다시 돌리면 남은 문항을 정한다
+    assert (items[0]["review_reason"], items[1]["review_reason"]) == ("불일치", "경고")
+
+
+def test_sample_total_is_capped_across_runs(ledger):
+    """표본은 평가셋 파일 전체에서 sample_size개까지(묶음마다 새로 다 뽑지 않음)."""
+    first = many_items(2, 1)
+    ready(first, {entry["id"]: "test" for entry in first})
+    split.select_for_review(first, seed=1, today=TODAY, sample_size=4)
+    assert sum(entry["review_reason"] == "표본" for entry in first) == 2
+    second = many_items(10, 1)[2:]
+    ready(second, {entry["id"]: "test" for entry in second})
+    items = first + second
+    split.select_for_review(items, seed=1, today=TODAY, sample_size=4)
+    assert sum(entry.get("review_reason") == "표본" for entry in items) == 4
+
+
+def test_freeze_requires_select_review():
+    passed = {"errors": [], "warnings": []}
+    items = [item("ev-0001", part="dev", review_reason=None, review={"status": "자동 승인"}, validation=passed),
+             item("ev-0002", question="둘", part="test", validation=passed)]
+    with pytest.raises(ValueError, match="고르기를 하지 않은 문항.*ev-0002"):
+        split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)

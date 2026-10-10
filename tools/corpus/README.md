@@ -135,9 +135,12 @@ Assets/corpus/
 RAG 챗봇의 평가셋(evaluation set)을 만들고 검증하는 명령이다. 평가셋 파일은 문항을 한 줄씩 쓴 JSONL 하나(`Assets/eval/evalset.jsonl`, git 제외)다. 학교 글이 들어가므로 저장소에 올리지 않는다.
 
 ```text
-export-index(색인 텍스트, 데스크탑 켤 때) → Claude 초안 → validate(자동 검증) → double-annotate(독립 이중 라벨링)
-  → split(개발셋·테스트셋 분할) → select-review(휴먼 리뷰 대상, 나머지 자동 승인) → review-html(리뷰 화면)
-  → 휴먼 리뷰 → merge(리뷰 기록 병합) → validate(고친 문항 다시) → report(분포·리뷰 현황) → freeze(버전 고정)
+30문항 묶음마다:
+  export-index(색인 텍스트, 데스크탑 켤 때) → Claude 초안 → validate(자동 검증) → double-annotate(독립 이중 라벨링)
+  → select-review(나누기 전: 불일치·경고만) → review-html(리뷰 화면) → 휴먼 리뷰 → merge(리뷰 기록 병합) → validate(고친 문항 다시)
+본 문항이 모이면 한 번:
+  split(개발셋·테스트셋 분할, 나뉜 문항은 그대로) → select-review(테스트셋 답없음·표본 30, 나머지 자동 승인)
+  → review-html → 휴먼 리뷰 → merge → validate → report(분포·리뷰 현황) → freeze(버전 고정)
 ```
 
 | 명령 | 하는 일 |
@@ -146,16 +149,17 @@ export-index(색인 텍스트, 데스크탑 켤 때) → Claude 초안 → valid
 | `evalset validate [파일] [--index-dir 폴더] [--write]` | 자동 검증: 인용이 색인 텍스트에 그대로 있나, 필수 사실이 인용 안에 있나, 근거 문서가 평가 몫·서비스 색인 문서인가, 같은 질문이 없나, 답 없는 문항에 부재 확인 기록이 있나, 지난해 판에 금지 값이 있나. 오류는 초안으로 돌려보내고 경고는 휴먼 리뷰로 |
 | `evalset double-annotate [파일] [--write]` | 독립 이중 라벨링(double annotation): 분리된 Claude 세션(`claude -p`)이 정답(ground truth) 없이 질문과 원본(HTML 원본·PDF 쪽 이미지와 텍스트·HWP 텍스트)만 받아 답하고, 규칙 기반 채점으로 정답과 비교해 `second_annotation`(일치·불일치·애매)을 채운다. 질문·명령·출력은 평가셋 파일 옆 `double_annotation/<시각>/`에 남는다. `--dry-run`은 작업 단위(packet)만 만들고, `--from-record 폴더`는 남긴 출력으로 다시 채운다 |
 | `evalset isolation-test` | 세션 격리 시험: 이중 라벨링 세션이 작업 단위 밖(가짜 정답 파일)을 못 읽는지 본다. 처음과 Claude Code 버전이 바뀔 때 돌린다 |
-| `evalset split [파일] --seed N [--write]` | 문서 묶음 단위로 개발셋(dev) 60 : 테스트셋(test) 40(주제마다). 문항이 10개를 넘는 묶음은 장(`evidence[0].section`) 단위 |
-| `evalset select-review [파일] --seed N [--write]` | 이중 라벨링 불일치·경고·테스트셋 답 없는 문항·표본 30을 휴먼 리뷰로, 나머지는 자동 승인. 표본에서 2개 이상 틀리면 `--more 30` |
+| `evalset split [파일] --seed N [--write]` | 문서 묶음 단위로 개발셋(dev) 60 : 테스트셋(test) 40(주제마다). 문항이 10개를 넘는 묶음은 장(`evidence[0].section`) 단위. 이미 나뉜 문항은 그대로 두고, 새 문항은 같은 묶음(장)의 쪽을 따르거나 새 묶음째 나눈다(ADR-0022) |
+| `evalset select-review [파일] --seed N [--write]` | 이중 라벨링 불일치·경고·테스트셋 답 없는 문항·표본 30을 휴먼 리뷰로, 나머지는 자동 승인. 나누기 전에는 불일치·경고만 정하고 나머지는 '분할 대기'로 둔다. 표본은 평가셋 파일 전체에서 30개까지. 표본에서 2개 이상 틀리면 `--more 30` |
 | `evalset review-html [파일] [--index-dir 폴더]` | 휴먼 리뷰 대상만 담은 리뷰 화면 HTML 파일 하나를 만든다(평가셋 파일 옆 `review/`). 브라우저로 열고 서버·인터넷을 쓰지 않는다 |
 | `evalset merge [파일] --records 기록.jsonl [--write]` | 리뷰 화면이 내려받은 리뷰 기록을 병합한다. 고친 문항은 `rev`를 올리고 자동 검증 결과를 비운다(다시 `validate`). 같은 기록을 두 번 병합해도 같다 |
 | `evalset report [파일] [--cap 대장ID=수]` | 문항 수·답 유형·주제·태그·문서당 상한·리뷰 현황을 목표와 나란히 |
-| `evalset freeze [파일] --version v1 --index-backup 이름 --seed N` | 휴먼 리뷰 대상이 모두 판정됐고 버리지 않은 문항이 모두 자동 검증을 통과했는지 확인하고 버전 고정 기록(SHA-256)을 쓴다 |
+| `evalset freeze [파일] --version v1 --index-backup 이름 --seed N` | 모든 문항이 휴먼 리뷰 대상 고르기를 거쳤고, 휴먼 리뷰 대상이 모두 판정됐고 버리지 않은 문항이 모두 자동 검증을 통과했는지 확인하고 버전 고정 기록(SHA-256)을 쓴다 |
 | `evalset score [파일] --id ev-0001 --answer "답"` | 규칙 기반 채점(맞음·일부·모름·틀림·애매·빈 답)을 하나 해 본다 |
 
 `validate`는 `--index-dir`의 색인 텍스트(챗봇이 보는 글)를 먼저 쓰고, 없으면 원본 파일을 이 도구의 추출기로 읽는다.
 원본 추출(PDF는 pypdfium2, HWP는 olefile)은 서비스(OpenDataLoader·ai-server 로더)와 다른 읽기라서 이중 라벨링과 지난해 판 대조에 쓴다.
+그래서 정답·인용 초안은 색인 텍스트로 쓴다. 원본 추출로 쓰면 PDF·HWP 문항에서 정답과 이중 라벨링이 같은 글을 보게 된다.
 
 평가셋 파일의 주요 칸: `validation`(자동 검증 결과), `second_annotation`(이중 라벨링 결과), `part`(`dev`·`test`), `review_reason`(휴먼 리뷰 이유), `review`(리뷰 결과), `unanswerable`(답 없는 문항의 종류·가까운 문서·부재 확인 기록). 답 유형(`shape`)은 값·목록·절차·예아니오·설명·답없음.
 

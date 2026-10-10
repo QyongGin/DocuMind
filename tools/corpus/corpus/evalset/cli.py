@@ -208,11 +208,12 @@ def cmd_split(args) -> int:
         parts = split.assign_parts(items, ledger, args.seed, args.held)
     finally:
         ledger.close()
+    kept = sum(1 for item in items if item.get("part") in schema.PARTS)
     for item in items:
         item["part"] = parts[item["id"]]
     main = [item for item in items if item["set"] == "본"]
     held = sum(1 for item in main if item["part"] == "test")
-    print(f"본 문항 {len(main)} · 개발셋 {len(main) - held} · 테스트셋 {held} (씨앗 {args.seed})")
+    print(f"본 문항 {len(main)} · 개발셋 {len(main) - held} · 테스트셋 {held} (씨앗 {args.seed}, 이미 나뉜 {kept}문항은 그대로)")
     if args.write:
         schema.save(args.file, items)
     return 0
@@ -312,15 +313,15 @@ def add_parser(commands, default_file: Path) -> None:
     isolation.add_argument("--keep-work", action="store_true")
     isolation.set_defaults(func=cmd_isolation_test)
 
-    parts = with_file("split", "개발셋·테스트셋 나누기")
+    parts = with_file("split", "개발셋·테스트셋 나누기(이미 나뉜 문항은 그대로)")
     parts.add_argument("--seed", type=int, required=True)
     parts.add_argument("--held", type=float, default=split.HELD_RATIO, help="테스트셋 비율(기본 0.4)")
     parts.add_argument("--write", action="store_true")
     parts.set_defaults(func=cmd_split)
 
-    selected = with_file("select-review", "휴먼 리뷰 대상 고르기")
+    selected = with_file("select-review", "휴먼 리뷰 대상 고르기(나누기 전에는 불일치·경고만)")
     selected.add_argument("--seed", type=int, required=True)
-    selected.add_argument("--sample", type=int, default=split.SAMPLE_SIZE, help="표본 수(기본 30)")
+    selected.add_argument("--sample", type=int, default=split.SAMPLE_SIZE, help="평가셋 파일 전체의 표본 수(기본 30, 이미 뽑은 표본을 뺀 만큼 더 뽑음)")
     selected.add_argument("--more", type=int, help="표본을 이만큼 더 뽑는다(표본 오류가 2개 이상일 때)")
     selected.add_argument("--write", action="store_true")
     selected.set_defaults(func=cmd_select_review)
