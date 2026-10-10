@@ -62,8 +62,9 @@ def build(items: list[dict], ledger: Ledger, caps: dict[str, int] | None = None)
 
     reasons = Counter(item.get("review_reason") or "-" for item in items)
     statuses = Counter((item.get("review") or {}).get("status") or "리뷰 전" for item in items)
+    unselected = sum(1 for item in items if "review_reason" not in item)
     lines.append("휴먼 리뷰 이유: " + " · ".join(f"{reason} {reasons[reason]}" for reason in schema.REVIEW_REASONS)
-                 + f" · 자동 승인 {statuses['자동 승인']}")
+                 + f" · 자동 승인 {statuses['자동 승인']} · 고르기 전 {unselected}")
     lines.append("리뷰: " + " · ".join(f"{status} {count}" for status, count in sorted(statuses.items())))
     checked, wrong = sample_errors(items)
     if checked:
