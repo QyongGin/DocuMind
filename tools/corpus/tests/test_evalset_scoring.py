@@ -64,3 +64,23 @@ def test_unanswerable_items():
     assert score(key, "2028학년도 정원은 45명입니다")["label"] == "틀림"  # 답이 없는데 숫자를 단정
     assert score(key, "2028은 확인할 수 없고, 2027학년도는 35명입니다")["label"] == "애매"
     assert score(key, "아직 정해지지 않았어요")["label"] == "애매"
+
+
+def test_guidance_facts_are_scored_separately():
+    """ADR-0023: 맞는데 안내가 빠진 답은 정확 '맞음' + 안내 '부족'. 안내 사실은 정확 판정의 빠진 사실에 넣지 않는다."""
+    key = item("ev-0006", question="가나대 휴학 중에 입대하면 어떻게 해요?", shape="절차", tags=["글 근거"], forbidden=[],
+               facts=[{"name": "입대휴학 전환", "values": ["입대휴학"]},
+                      {"name": "포털 신청", "values": ["포털"], "kind": "안내"},
+                      {"name": "입영통지서", "values": ["입영통지서"], "kind": "안내"}])
+    short = score(key, "입영이 확정되면 입대휴학으로 바꿀 수 있습니다")
+    assert (short["label"], short["missing"], short["guidance"]["label"]) == ("맞음", [], "부족")
+    half = score(key, "입대휴학으로 바꾸고 포털에서 신청합니다")
+    assert (half["label"], half["guidance"]["label"], half["guidance"]["missing"]) == ("맞음", "일부", ["입영통지서"])
+    full = score(key, "입영통지서를 챙겨 포털에서 입대휴학을 신청합니다")
+    assert (full["label"], full["guidance"]["label"]) == ("맞음", "충족")
+    assert score(key, "포털에 로그인하세요")["label"] == "애매"  # 핵심 없이 안내만 있으면 정확은 정하지 못한다
+    assert score(key, "")["guidance"]["label"] == "부족"
+
+
+def test_items_without_guidance_facts():
+    assert score(item("ev-0001"), "3만 원이에요")["guidance"] == {"label": "해당 없음", "matched": [], "missing": []}

@@ -2,10 +2,15 @@
 
 규칙이 정하지 못하는 답은 '애매'로 두고 사람이 본다. 평가셋을 만들 때의 이중 라벨링과, 평가할 때의 채점기가
 같은 규칙을 쓴다. 판정 모델(다른 AI가 채점)은 쓰지 않는다.
+
+점수는 둘이다(ADR-0023). 정확은 핵심 사실로 매기는 위 판정이고, 안내는 질문이 묻지 않았지만 문서에 있는
+다음 할 일(안내 사실)을 답이 알려 줬는지 충족·일부·부족(안내 사실이 없으면 해당 없음)으로 따로 센다.
 """
 
 import re
 import unicodedata
+
+from .schema import core_facts, guidance_facts
 
 # 서버 프롬프트의 거절 문구("제공된 문서에서는 확인할 수 없습니다")와 모델마다 다른 말투를 함께 잡는다
 REFUSAL_PHRASES = (
@@ -58,17 +63,19 @@ def numbers_with_units(normalized_text: str) -> set[str]:
 
 
 def score(item: dict, answer: str | None, context: str | None = None) -> dict:
-    """답 하나를 판정한다. context(모델이 받은 근거 글)를 주면 근거에 없는 숫자를 '지어낸 숫자'로 본다."""
+    """답 하나를 판정한다. context(모델이 받은 근거 글)를 주면 근거에 없는 숫자를 '지어낸 숫자'로 본다.
+
+    `label`·`matched`·`missing`은 핵심 사실로 매긴 정확 점수, `guidance`는 안내 사실로 매긴 안내 점수다.
+    """
     text = (answer or "").strip()
-    result = {"label": "빈 답", "matched": [], "missing": [], "forbidden_hits": [], "invented": [], "abstained": False}
+    result = {"label": "빈 답", "matched": [], "missing": [], "forbidden_hits": [], "invented": [], "abstained": False,
+              "guidance": guidance(item, "")}
     if not text:
         return result
     normalized = normalize(text)
     abstained = any(normalize(phrase) in normalized for phrase in REFUSAL_PHRASES)
     forbidden = [entry["value"] for entry in item.get("forbidden", []) if contains(normalized, entry["value"])]
-    matched, missing = [], []
-    for fact in item.get("facts", []):
-        (matched if any(contains(normalized, value) for value in fact["values"]) else missing).append(fact["name"])
+    matched, missing = _match(core_facts(item), normalized)
     # 질문에 있던 숫자(예: "2028학년도")를 답에서 되풀이한 것은 새로 단정한 숫자로 보지 않는다
     numbers = numbers_with_units(normalized) - numbers_with_units(normalize(item.get("question", "")))
     invented = []
@@ -94,5 +101,22 @@ def score(item: dict, answer: str | None, context: str | None = None) -> dict:
     if label in ("맞음", "일부") and invented:
         label = "애매"
     result.update(label=label, matched=matched, missing=missing, forbidden_hits=forbidden, invented=invented,
-                  abstained=abstained)
+                  abstained=abstained, guidance=guidance(item, text))
     return result
+
+
+def guidance(item: dict, answer: str) -> dict:
+    """안내 점수: 안내 사실을 몇 개 알려 줬나. 정확 판정과 섞지 않는다(맞는데 짧은 답은 정확 '맞음' + 안내 '부족')."""
+    facts = guidance_facts(item)
+    if not facts:
+        return {"label": "해당 없음", "matched": [], "missing": []}
+    matched, missing = _match(facts, normalize(answer or ""))
+    label = "충족" if not missing else ("일부" if matched else "부족")
+    return {"label": label, "matched": matched, "missing": missing}
+
+
+def _match(facts: list[dict], normalized: str) -> tuple[list[str], list[str]]:
+    matched, missing = [], []
+    for fact in facts:
+        (matched if any(contains(normalized, value) for value in fact["values"]) else missing).append(fact["name"])
+    return matched, missing

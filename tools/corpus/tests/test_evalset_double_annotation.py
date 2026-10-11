@@ -202,3 +202,13 @@ def test_apply_answers_keeps_first_answer_and_existing_results():
     assert missing == [] and items[0]["second_annotation"]["answer"] == "30,000원" and items[0]["second_annotation"]["verdict"] == "일치"
     assert items[0]["second_annotation"]["note"] == "단위는 원"
     assert items[1]["second_annotation"] == {"verdict": "불일치", "answer": "전"}  # 이미 채운 결과는 그대로
+
+
+def test_terse_answer_agrees_when_only_guidance_is_missing():
+    """ADR-0023: 일치·불일치는 정확(핵심 사실)으로만 가르고, 안내는 따로 적는다."""
+    key = checked(item("ev-0001", facts=[{"name": "전형료", "values": ["30,000원"]},
+                                         {"name": "접수 마감", "values": ["9. 19."], "kind": "안내"}]))
+    packet = double_annotation.Packet("p001", ("gana/page/fee",), [{"id": "ev-0001", "question": "q"}])
+    double_annotation.apply_answers([key], packet, [{"id": "ev-0001", "answer": "30,000원입니다"}], "m", "r", TODAY)
+    second = key["second_annotation"]
+    assert (second["verdict"], second["label"], second["guidance"]) == ("일치", "맞음", "부족")

@@ -36,6 +36,17 @@ def test_schema_rejects_bad_values_and_round_trips(tmp_path):
     assert schema.fingerprint(loaded) == schema.fingerprint([dict(reversed(list(good.items()))), item("ev-0002")])
 
 
+def test_fact_kinds():
+    guided = item("ev-0001", facts=[{"name": "전형료", "values": ["30,000원"]},
+                                    {"name": "접수 마감", "values": ["9. 19."], "kind": "안내"}])
+    assert schema.validate(guided) == []
+    assert schema.guidance_facts(guided)[0]["name"] == "접수 마감" and schema.core_facts(guided)[0]["name"] == "전형료"
+    bad_kind = item("ev-0002", facts=[{"name": "전형료", "values": ["30,000원"], "kind": "덤"}])
+    assert any("필수 사실 종류" in error for error in schema.validate(bad_kind))
+    only_guidance = item("ev-0003", facts=[{"name": "접수 마감", "values": ["9. 19."], "kind": "안내"}])
+    assert any("핵심 필수 사실" in error for error in schema.validate(only_guidance))
+
+
 def test_good_item_passes_and_gets_topic(corpus):
     result = run([item("ev-0001")], corpus)["ev-0001"]
     checked = result["validation"]

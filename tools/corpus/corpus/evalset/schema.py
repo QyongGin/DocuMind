@@ -16,6 +16,8 @@ SHAPES = ("값", "목록", "절차", "예아니오", "설명", "답없음")
 TAGS = ("표 근거", "글 근거", "해마다 바뀜", "연도 시험", "다른 말", "FAQ 제목", "조건", "비교·계산", "여러 근거")
 UNANSWERABLE_KINDS = ("가까운 빈칸", "잘못된 전제", "자료 없음", "무관")
 FORBID_WHY = ("지난해 값", "옆 칸 값", "다른 학과 값", "지어낼 법한 값")
+# 필수 사실의 종류(ADR-0023): 핵심은 질문이 물은 것(정확 점수), 안내는 묻지 않았지만 문서에 있는 다음 할 일(안내 점수)
+FACT_KINDS = ("핵심", "안내")
 STATUSES = ("승인", "고침", "버림", "보류", "자동 승인")
 REVIEW_REASONS = ("불일치", "경고", "테스트셋 답없음", "표본")
 AGREEMENTS = ("일치", "불일치", "애매")
@@ -55,6 +57,19 @@ def fingerprint(items: list[dict]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def fact_kind(fact: dict) -> str:
+    """필수 사실의 종류. `kind`가 없으면 핵심이다(ADR-0023 전에 만든 문항도 그대로 읽힌다)."""
+    return fact.get("kind") or "핵심"
+
+
+def core_facts(item: dict) -> list[dict]:
+    return [fact for fact in item.get("facts") or [] if fact_kind(fact) == "핵심"]
+
+
+def guidance_facts(item: dict) -> list[dict]:
+    return [fact for fact in item.get("facts") or [] if fact_kind(fact) == "안내"]
+
+
 def _strings(value) -> bool:
     return isinstance(value, list) and all(isinstance(text, str) and text.strip() for text in value)
 
@@ -82,6 +97,8 @@ def validate(item: dict) -> list[str]:
             isinstance(fact, dict) and str(fact.get("name", "")).strip() and _strings(fact.get("values")) and fact["values"]
             for fact in item["facts"]):
         errors.append("필수 사실은 이름과 허용 표기(하나 이상)가 있어야 함")
+    elif any(fact.get("kind") is not None and fact.get("kind") not in FACT_KINDS for fact in item["facts"]):
+        errors.append(f"필수 사실 종류가 목록에 없음({'·'.join(FACT_KINDS)})")
     if not isinstance(item["forbidden"], list) or not all(
             isinstance(entry, dict) and str(entry.get("value", "")).strip() and entry.get("why") in FORBID_WHY
             for entry in item["forbidden"]):
@@ -104,6 +121,8 @@ def validate(item: dict) -> list[str]:
     else:
         if not item["facts"]:
             errors.append("답 있는 문항은 필수 사실이 하나 이상 있어야 함")
+        elif isinstance(item["facts"], list) and all(isinstance(fact, dict) for fact in item["facts"]) and not core_facts(item):
+            errors.append("답 있는 문항은 핵심 필수 사실이 하나 이상 있어야 함(안내 사실만으로는 정확 점수를 낼 수 없음)")
         if not item["evidence"]:
             errors.append("답 있는 문항은 근거가 하나 이상 있어야 함")
         if item.get("unanswerable"):

@@ -155,7 +155,7 @@ RAG 챗봇의 평가셋(evaluation set)을 만들고 검증하는 명령이다. 
 | `evalset merge [파일] --records 기록.jsonl [--write]` | 리뷰 화면이 내려받은 리뷰 기록을 병합한다. 고친 문항은 `rev`를 올리고 자동 검증 결과를 비운다(다시 `validate`). 같은 기록을 두 번 병합해도 같다 |
 | `evalset report [파일] [--cap 대장ID=수]` | 문항 수·답 유형·주제·태그·문서당 상한·리뷰 현황을 목표와 나란히 |
 | `evalset freeze [파일] --version v1 --index-backup 이름 --seed N` | 모든 문항이 휴먼 리뷰 대상 고르기를 거쳤고, 휴먼 리뷰 대상이 모두 판정됐고 버리지 않은 문항이 모두 자동 검증을 통과했는지 확인하고 버전 고정 기록(SHA-256)을 쓴다 |
-| `evalset score [파일] --id ev-0001 --answer "답"` | 규칙 기반 채점(맞음·일부·모름·틀림·애매·빈 답)을 하나 해 본다 |
+| `evalset score [파일] --id ev-0001 --answer "답"` | 규칙 기반 채점을 하나 해 본다. 정확(핵심 사실: 맞음·일부·모름·틀림·애매·빈 답)과 안내(안내 사실: 충족·일부·부족·해당 없음)를 따로 낸다(ADR-0023) |
 
 `validate`는 `--index-dir`의 색인 텍스트(챗봇이 보는 글)를 먼저 쓰고, 없으면 원본 파일을 이 도구의 추출기로 읽는다.
 원본 추출(PDF는 pypdfium2, HWP는 olefile)은 서비스(OpenDataLoader·ai-server 로더)와 다른 읽기라서 이중 라벨링과 지난해 판 대조에 쓴다.
