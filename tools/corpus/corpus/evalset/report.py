@@ -49,6 +49,8 @@ def build(items: list[dict], ledger: Ledger, caps: dict[str, int] | None = None)
     lines.append(f"학교와 무관한 답 없는 문항 {unrelated}(최대 {UNRELATED_MAX}, {_mark(unrelated <= UNRELATED_MAX)})")
     faq_based = sum(1 for item in answerable if (ledger.get(item["evidence"][0]["doc"]) or {}).get("kind") == "faq")
     lines.append(f"FAQ를 근거로 한 본 문항 {faq_based}(최대 {len(main) // 4}, {_mark(faq_based <= len(main) // 4)})")
+    guided = sum(1 for item in answerable if schema.guidance_facts(item))
+    lines.append(f"안내 사실이 있는 본 문항 {guided}/{len(answerable)} — 안내 점수(ADR-0023)를 내는 문항")
 
     per_doc = Counter(item["evidence"][0]["doc"] for item in live if item["evidence"])
     over = [f"{doc} {count}/{caps.get(doc, DOC_CAP)}" for doc, count in sorted(per_doc.items())

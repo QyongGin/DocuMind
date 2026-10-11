@@ -14,7 +14,10 @@ def test_evalset_commands_end_to_end(ledger, tmp_path, capsys):
     ledger.close()
     path = tmp_path / "evalset.jsonl"
     schema.save(path, [
-        item("ev-0001"),
+        item("ev-0001", facts=[{"name": "전형료", "values": ["30,000원", "3만 원"]},
+                               {"name": "접수 마감", "values": ["9. 19."], "kind": "안내"}],
+             evidence=[{"doc": "gana/page/fee", "quote": "전형료 30,000원", "where": "전형료 표"},
+                       {"doc": "gana/page/fee", "quote": "원서 접수: 2026. 9. 8.(월) ~ 9. 19.(금)", "where": "표 아래"}]),
         item("ev-0002", question="가나대 실기 추가 비용은?", tags=["표 근거"], forbidden=[],
              evidence=[{"doc": "gana/page/fee", "quote": "실기 추가 15,000원"}],
              facts=[{"name": "실기 추가", "values": ["15,000원"]}]),
@@ -44,6 +47,7 @@ def test_evalset_commands_end_to_end(ledger, tmp_path, capsys):
     assert main([*root, "report", str(path), "--cap", "gana/page/fee=1"]) == 0
     report = capsys.readouterr().out
     assert "본 문항 3/250" in report and "gana/page/fee 2/1" in report
+    assert "안내 사실이 있는 본 문항 1/2" in report
 
     entries = schema.load(path)
     for entry in entries:

@@ -51,7 +51,7 @@ UNWRAP_TAGS = ("div", "span", "article", "section", "form", "fieldset", "font")
 KEEP_ATTRS = ("rowspan", "colspan")
 
 # 이중 라벨링 세션에 주는 지시문. 정답·인용 위치는 넣지 않는다. 바꾸면 이전 실행과 결과를 나란히 비교할 수 없다
-PROMPT = f"""너는 학교 문서로 만든 시험지의 이중 라벨링을 맡았다. 이 폴더 밖의 파일은 읽지 않는다.
+PROMPT = f"""너는 학교 문서로 만든 평가셋의 이중 라벨링을 맡았다. 이 폴더 밖의 파일은 읽지 않는다.
 
 1. questions.json의 질문마다 docs 폴더의 문서만 근거로 답한다. 문서 밖 지식이나 짐작은 쓰지 않는다.
 2. 문서는 전체가 들어 있다. 질문과 관련된 곳을 직접 찾아 끝까지 읽는다. 표 아래 단서(※)·예외·다른 학년도 값도 확인한다.
@@ -249,10 +249,12 @@ def apply_answers(items: list[dict], packet: Packet, answers: list[dict], model_
             continue
         answered.add(entry["id"])
         item = by_id[entry["id"]]
-        label = score(item, entry["answer"])["label"]
+        result = score(item, entry["answer"])
+        label = result["label"]  # 일치·불일치는 정확(핵심 사실)으로만 가른다. 안내는 따로 적어 둔다(ADR-0023)
         item["second_annotation"] = {"model": model_label, "reader": reader, "answer": entry["answer"],
                          "quote": entry.get("quote"), "where": entry.get("where"), "note": entry.get("note") or None,
-                         "verdict": verdict(label), "label": label, "at": today.isoformat()}
+                         "verdict": verdict(label), "label": label, "guidance": result["guidance"]["label"],
+                         "at": today.isoformat()}
     return sorted(wanted - answered)
 
 
