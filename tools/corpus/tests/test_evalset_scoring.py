@@ -108,3 +108,10 @@ def test_bare_table_number_in_context_is_not_invented():
     assert score(key, "정원은 50명입니다.", table)["invented"] == []
     assert score(key, "정원은 50명입니다.", table)["label"] == "맞음"
     assert score(key, "정원은 50명입니다.", "|자유전공학부|500|")["invented"] == ["50명"]
+
+
+def test_refusal_phrasings_seen_in_baseline():
+    """베이스라인 답없음 거절 말투: '명시하고 있지 않습니다', '답변을 드리기 어렵습니다'."""
+    key = unanswerable_item("ev-0009")
+    assert score(key, "제공된 문서에서는 2028학년도 정원을 명시하고 있지 않습니다.")["label"] == "맞음"
+    assert score(key, "정원에 대해 정확히 답변 드리기 어렵습니다. 입학팀에 문의하세요.")["label"] == "맞음"
