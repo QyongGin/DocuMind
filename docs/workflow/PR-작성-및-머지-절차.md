@@ -14,6 +14,7 @@
 | 확인 | 방법 |
 |---|---|
 | 테스트 | 바뀐 모듈의 테스트 실행 (ai-server: `ai-server/venv/bin/python -m pytest -q`) |
+| CI | PR을 올리면 GitHub Actions가 바뀐 모듈의 테스트를 다시 돌린다(ADR-0024). 맥북에서 통과해도 의존성 목록 누락·커밋하지 않은 파일은 CI에서 드러난다 |
 | 공백 오류 | `git diff --check origin/develop...HEAD` |
 | AI 서명 | `git log origin/develop..HEAD --format=%B \| grep -c 'Co-Authored-By'` 결과가 0 |
 | 다른 브랜치를 합친 경우 | 합친 결과를 다시 컴파일하고 테스트한다. **git의 "자동 병합 성공"은 코드가 맞다는 뜻이 아니다.** 같은 기능이 두 브랜치의 다른 위치에 있으면 둘 다 들어간다 |
@@ -35,7 +36,7 @@
 gh pr create --base develop --head <브랜치> --title "<제목>" --body-file <본문 파일>
 ```
 
-머지까지 승인받았으면, 로컬에서 `develop`으로 먼저 전환한 뒤 squash 머지한다.
+머지까지 승인받았으면, **CI 검사 `ci-ok`가 통과한 것을 확인한 뒤**(`gh pr checks <PR번호> --watch`), 로컬에서 `develop`으로 먼저 전환해 squash 머지한다. develop 브랜치 규칙이 `ci-ok` 통과를 요구하므로 실패하면 머지되지 않는다. 실패하면 로그(`gh run view --log-failed`)를 보고 고쳐 다시 푸시한다.
 
 ```bash
 gh pr merge <PR번호> --squash --subject "<제목> (#<PR번호>)" --body "" --delete-branch
