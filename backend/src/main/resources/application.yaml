@@ -25,6 +25,9 @@ fastapi:
   connect-timeout: ${FASTAPI_CONNECT_TIMEOUT:5s}
   # FastAPI 응답 타임아웃. 모델 cold start와 첫 토큰 생성 시간을 고려해 설정
   response-timeout: ${FASTAPI_RESPONSE_TIMEOUT:180s}
+  # FastAPI 일반 응답을 메모리에 모으는 한도(WebClient 기본 256KB). 가장 큰 문서의 청크 목록 응답이 약 1~1.5MB라
+  # (안전진단 보고서 739청크, 청크 글만 약 1MB, 이슈 #149) 10배 여유를 둔다. 스트리밍 응답에는 쓰지 않는다
+  max-in-memory-size: ${FASTAPI_MAX_IN_MEMORY_SIZE:16MB}
   # SSE 스트리밍 응답 타임아웃. 기본 5분, 더 긴 답변이 필요하면 환경변수 FASTAPI_STREAM_TIMEOUT으로 조정
   stream-timeout: ${FASTAPI_STREAM_TIMEOUT:5m}
 

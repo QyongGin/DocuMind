@@ -82,7 +82,7 @@ RAG 작업이면 `ai-server/AGENTS.md`와 `docs/rag/README.md`도 읽는다. 문
 ## 5. 커밋·PR
 
 - 커밋 메시지와 PR에 AI 서명(`Co-Authored-By: Claude`, "Generated with Claude Code" 등)을 넣지 않는다.
-- PR 본문은 `.github/PULL_REQUEST_TEMPLATE.md`의 다섯 섹션(관련 이슈, 배경, 변경 내용, 확인한 내용, 주의할 점)만 쓴다. 이모지와 템플릿에 없는 섹션은 넣지 않는다. 구현 세부·실행 시간 같은 것은 보고서에 두고 PR은 리뷰에 필요한 것만 쓴다.
+- PR 본문은 `.github/PULL_REQUEST_TEMPLATE.md`의 다섯 섹션(관련 이슈, 배경, 변경 내용, 확인한 내용, 주의할 점)만 쓴다. 배경·변경 내용·확인한 내용의 주장에는 근거 종류([실측]·[원문]·[코드]·[계산]·[판단])를 붙이고, 원문은 짧게 인용한다(2026-10-12 사용자 요청). 이모지와 템플릿에 없는 섹션은 넣지 않는다. 구현 세부·실행 시간 같은 것은 보고서에 두고 PR은 리뷰에 필요한 것만 쓴다.
 - PR 제목은 `type(scope): 요약`. 이슈 번호는 제목에 넣지 않고 본문 `Closes #번호`/`Related #번호`로 연결한다.
 - 진행: PR 전 확인(테스트, `git diff --check`, AI 서명 0) → 초안을 보여 주고 "올리고 바로 머지 / 올리기만 / 수정" 중 선택받기 → 승인 후 생성 → CI `ci-ok` 통과 확인(ADR-0024) → squash 머지(제목 `PR 제목 (#PR번호)`, 본문 비움, 브랜치 삭제). 상세: `docs/workflow/PR-작성-및-머지-절차.md`.
 - 공용 브랜치(main·develop) 기록은 다시 쓰지 않는다. develop은 PR로만 바꾼다.
