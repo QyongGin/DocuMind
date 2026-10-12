@@ -2662,6 +2662,9 @@ class QueryRequest(BaseModel):
     question: str
     top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=20)  # 검색할 유사 청크 수
     system_prompt: str | None = None  # Spring Boot 관리자 프롬프트 설정. 미전달 시 기본값 사용
+    # 평가용(M1 11번 채점기): 이 답을 만든 바로 그 실행의 단계별 후보(글 전체)·프롬프트·생성 종료 이유를 함께 돌려준다.
+    # 운영 경로(Spring Boot)는 보내지 않으므로 응답이 바뀌지 않는다. /query에만 있다.
+    include_eval_trace: bool = False
 
 
 class RagTraceRequest(BaseModel):
@@ -6558,10 +6561,33 @@ def _trace_query_retrieval(
     }
 
 
-def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) -> tuple[str | None, list, dict]:
+def _record_eval_stage(stages: dict | None, name: str, docs: list, metadatas: list, ids: list) -> None:
+    """평가용 기록: 한 단계의 후보를 글 전체와 함께 남긴다. stages가 None(운영 경로)이면 아무것도 하지 않는다."""
+    if stages is None:
+        return
+    stages[name] = [
+        {
+            "chunk_id": str(chunk_id),
+            "document_id": str((meta or {}).get("document_id", "")),
+            "ledger_id": (meta or {}).get("ledger_id"),
+            "chunk_index": (meta or {}).get("chunk_index"),
+            "chunk_role": (meta or {}).get("chunk_role", "raw"),
+            "text": doc,
+        }
+        for doc, meta, chunk_id in zip(docs, metadatas, ids)
+    ]
+
+
+def _prepare_query(
+    question: str,
+    top_k: int,
+    system_prompt: str | None = None,
+    eval_stages: dict | None = None,
+) -> tuple[str | None, list, dict]:
     """
     질문 임베딩 → ChromaDB 검색 → 프롬프트 + 출처 조합.
     문서가 없으면 prompt를 None으로 반환한다. 호출자가 빈 응답 처리를 담당한다.
+    eval_stages(평가용 dict)를 주면 단계별 후보·문맥·프롬프트를 그 안에 기록한다. 검색·답은 주지 않을 때와 같다.
     """
     prepare_start = time.perf_counter()
     analysis = _analyze_query(question)
@@ -6587,6 +6613,9 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
     legacy_vector_hits = int(results.get("legacy_vector_hits") or 0)
     bm25_docs, bm25_metadatas, bm25_ids = _lookup_bm25_raw_chunks(analysis, limit=top_k)
     lexical_docs, lexical_metadatas, lexical_ids = _lookup_lexical_table_facts(question)
+    _record_eval_stage(eval_stages, "vector", docs, metadatas, ids)
+    _record_eval_stage(eval_stages, "bm25", bm25_docs, bm25_metadatas, bm25_ids)
+    _record_eval_stage(eval_stages, "table_fact", lexical_docs, lexical_metadatas, lexical_ids)
     if bm25_docs:
         docs = bm25_docs + docs
         metadatas = bm25_metadatas + metadatas
@@ -6597,12 +6626,17 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         ids = lexical_ids + ids
     docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
     metadatas = _attach_runtime_table_facts(question, docs, metadatas, analysis)
+    _record_eval_stage(eval_stages, "expanded", docs, metadatas, ids)
     docs, metadatas, ids = _prioritize_query_results(docs, metadatas, ids, question)
+    _record_eval_stage(eval_stages, "prioritized", docs, metadatas, ids)
     docs, metadatas, ids = _rerank_by_query_analysis(docs, metadatas, ids, question, analysis)
+    _record_eval_stage(eval_stages, "reranked", docs, metadatas, ids)
     docs, metadatas, ids = _focus_candidates_with_query_evidence(docs, metadatas, ids, analysis)
+    _record_eval_stage(eval_stages, "focused", docs, metadatas, ids)
     docs = docs[:top_k]
     metadatas = metadatas[:top_k]
     ids = ids[:top_k]
+    _record_eval_stage(eval_stages, "final", docs, metadatas, ids)
 
     if not docs:
         prepare_elapsed = time.perf_counter() - prepare_start
@@ -6662,6 +6696,9 @@ def _prepare_query(question: str, top_k: int, system_prompt: str | None = None) 
         priority_table_evidence.evidence_text if priority_table_evidence else "",
         _prompt_priority_query_evidence_text(priority_query_evidence),
     )
+    if eval_stages is not None:
+        eval_stages["context"] = context
+        eval_stages["prompt"] = prompt
     priority_table_fact_answer = _priority_table_fact_answer_for_request(
         priority_table_evidence,
         system_prompt,
@@ -6894,14 +6931,57 @@ async def debug_rag_trace(request: RagTraceRequest):
     )
 
 
+def _eval_response(response: dict, eval_stages: dict | None, answer_path: str, generation: dict | None = None) -> dict:
+    """평가용 옵션을 켠 요청이면 응답에 eval_trace를 붙인다. 끈 요청(운영)은 응답을 그대로 돌려준다."""
+    if eval_stages is None:
+        return response
+    trace = {key: value for key, value in eval_stages.items() if key not in ("context", "prompt")}
+    return {
+        **response,
+        "eval_trace": {
+            "answer_path": answer_path,
+            "stages": trace,
+            "context": eval_stages.get("context", ""),
+            "prompt": eval_stages.get("prompt", ""),
+            "generation": generation,
+            "runtime": _eval_runtime_settings(),
+        },
+    }
+
+
+def _eval_runtime_settings() -> dict:
+    """평가 실행 기록(manifest)에 남길 서버 설정. 같은 설정·같은 평가셋이면 점수를 다시 만들 수 있게 한다."""
+    return {
+        "llm_model": OLLAMA_LLM_MODEL,
+        "llm_temperature": OLLAMA_TEMPERATURE,
+        "embedding_model": OLLAMA_EMBEDDING_MODEL,
+        "num_ctx": OLLAMA_NUM_CTX,
+        "embedding_num_ctx": OLLAMA_EMBEDDING_NUM_CTX,
+        "num_predict": OLLAMA_NUM_PREDICT,
+        "query_retrieval_chunks_enabled": QUERY_RETRIEVAL_CHUNKS_ENABLED,
+    }
+
+
+async def _generate_answer(prompt: str, with_generation_info: bool) -> tuple[str, dict | None]:
+    """LLM 답을 만든다. 평가용이면 agenerate로 Ollama 마지막 응답(done_reason 등)도 받는다(ainvoke도 내부에서 같은 호출)."""
+    if not with_generation_info:
+        return await llm.ainvoke(prompt), None
+    result = await llm.agenerate([prompt])
+    generation = result.generations[0][0]
+    info = generation.generation_info or {}
+    return generation.text, {key: info.get(key) for key in ("done_reason", "eval_count", "prompt_eval_count")}
+
+
 @app.post("/query")
 async def query_document(request: QueryRequest):
     """
     RAG 질의응답 파이프라인 (동기):
     1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query)
-    2. EXAONE LLM 비동기 호출 → 답변 반환
+    2. LLM 비동기 호출 → 답변 반환
+    include_eval_trace가 참이면(평가용) 같은 실행의 단계별 후보·프롬프트·생성 종료 이유를 eval_trace로 함께 돌려준다.
     """
     query_start = time.perf_counter()
+    eval_stages: dict | None = {} if request.include_eval_trace else None
     # _prepare_query는 embed_query·Chroma 조회가 모두 동기 블로킹이다.
     # async 핸들러에서 직접 호출하면 이벤트 루프가 묶여 다른 요청이 대기하므로
     # asyncio.to_thread()로 별도 스레드에서 실행한다.
@@ -6909,11 +6989,12 @@ async def query_document(request: QueryRequest):
         _prepare_query,
         request.question,
         request.top_k,
-        request.system_prompt
+        request.system_prompt,
+        eval_stages,
     )
 
     if prompt is None:
-        return {"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
+        return _eval_response({"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}, eval_stages, "no_documents")
 
     priority_answer = query_metrics.get("priority_table_fact_answer")
     if priority_answer:
@@ -6925,7 +7006,7 @@ async def query_document(request: QueryRequest):
             query_metrics["prepare_elapsed"],
             time.perf_counter() - query_start,
         )
-        return {"answer": priority_answer, "sources": sources}
+        return _eval_response({"answer": priority_answer, "sources": sources}, eval_stages, "priority_table_fact")
 
     priority_answer = query_metrics.get("priority_query_evidence_answer")
     if priority_answer:
@@ -6937,11 +7018,11 @@ async def query_document(request: QueryRequest):
             query_metrics["prepare_elapsed"],
             time.perf_counter() - query_start,
         )
-        return {"answer": priority_answer, "sources": sources}
+        return _eval_response({"answer": priority_answer, "sources": sources}, eval_stages, "priority_query_evidence")
 
     # async 핸들러에서 ainvoke()로 이벤트 루프 블로킹 방지
     llm_start = time.perf_counter()
-    answer = await llm.ainvoke(prompt)
+    answer, generation = await _generate_answer(prompt, eval_stages is not None)
     llm_elapsed = time.perf_counter() - llm_start
     logger.info(
         "[query] top_k=%s sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs llm=%.2fs total=%.2fs",
@@ -6954,7 +7035,7 @@ async def query_document(request: QueryRequest):
         time.perf_counter() - query_start
     )
 
-    return {"answer": answer, "sources": sources}
+    return _eval_response({"answer": answer, "sources": sources}, eval_stages, "llm", generation)
 
 
 @app.post("/query/stream")
