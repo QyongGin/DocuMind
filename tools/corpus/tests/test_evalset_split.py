@@ -187,3 +187,55 @@ def test_freeze_requires_select_review():
              item("ev-0002", question="둘", part="test", validation=passed)]
     with pytest.raises(ValueError, match="고르기를 하지 않은 문항.*ev-0002"):
         split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)
+
+
+def test_dropped_items_are_not_split_or_counted(ledger):
+    """버린 문항은 나누지 않는다. 단위 크기와 주제별 40%에 섞이면 나눈 결과가 틀어진다."""
+    items = many_items(10, 2)
+    items[0]["review"] = {"status": "버림"}
+    parts = split.assign_parts(items, ledger, seed=5)
+    assert items[0]["id"] not in parts and len(parts) == len(items) - 1
+    assert parts == split.assign_parts([entry for entry in items if entry is not items[0]], ledger, seed=5)
+
+
+def test_freeze_does_not_require_part_for_dropped_items():
+    passed = {"errors": [], "warnings": []}
+    items = [item("ev-0001", part="dev", review_reason=None, review={"status": "자동 승인"}, validation=passed),
+             item("ev-0002", question="둘", part=None, review_reason="경고", review={"status": "버림"})]
+    text = split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)
+    assert "본 1 (개발셋 1 / 테스트셋 0), 쉬운 0, 버림 1" in text
+
+
+def test_unanswerable_items_follow_their_section(ledger):
+    """답 없는 문항도 장 이름(unanswerable.section)이 있으면 같은 장의 답 있는 문항과 같은 단위로 나뉜다."""
+    answered = [item(f"ev-{number:04d}", question=f"요강 질문 {number}", topic="입시",
+                     evidence=[{"doc": "gana/viewer/guide", "quote": "q", "section": f"장{number % 4}"}])
+                for number in range(1, 25)]
+    near = {"kind": "가까운 빈칸", "near": "gana/viewer/guide",
+            "check": {"terms": ["낱말"], "hits": 0, "hit_docs": [], "at": "2026-10-05", "index": "x", "trace": False}}
+    blanks = [unanswerable_item(f"ev-{number:04d}", question=f"없는 질문 {number}", topic="입시",
+                                unanswerable={**near, "section": f"장{number % 4}"}) for number in range(25, 33)]
+    loose = unanswerable_item("ev-0033", question="장 없는 질문", topic="입시", unanswerable=near)
+    items = answered + blanks + [loose]
+    parts = split.assign_parts(items, ledger, seed=3)
+    for entry in blanks:
+        same_section = [other for other in answered if other["evidence"][0]["section"] == entry["unanswerable"]["section"]]
+        assert {parts[other["id"]] for other in same_section} == {parts[entry["id"]]}
+    groups = split.units(items, ledger)
+    assert [entry["id"] for key, members in groups.items() if key.endswith("#장 없음") for entry in members] == ["ev-0033"]
+
+
+def test_report_counts_unanswerable_section_as_split(ledger):
+    """분포 보고의 '장이 빠진 큰 묶음'은 답 없는 문항의 장 이름도 본다."""
+    from corpus.evalset import report
+
+    answered = [item(f"ev-{number:04d}", question=f"요강 질문 {number}", topic="입시",
+                     evidence=[{"doc": "gana/viewer/guide", "quote": "q", "section": "장1"}]) for number in range(1, 12)]
+    near = {"kind": "가까운 빈칸", "near": "gana/viewer/guide",
+            "check": {"terms": ["낱말"], "hits": 0, "hit_docs": [], "at": "2026-10-05", "index": "x", "trace": False}}
+    blank = unanswerable_item("ev-0012", question="없는 질문", topic="입시", unanswerable=near)
+    unsplit = [line for line in report.build(answered + [blank], ledger) if line.startswith("장(section)이 빠진")]
+    assert unsplit != ["장(section)이 빠진 큰 묶음: 없음"]
+    blank["unanswerable"] = {**near, "section": "장1"}
+    unsplit = [line for line in report.build(answered + [blank], ledger) if line.startswith("장(section)이 빠진")]
+    assert unsplit == ["장(section)이 빠진 큰 묶음: 없음"]

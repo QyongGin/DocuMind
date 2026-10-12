@@ -208,12 +208,14 @@ def cmd_split(args) -> int:
         parts = split.assign_parts(items, ledger, args.seed, args.held)
     finally:
         ledger.close()
-    kept = sum(1 for item in items if item.get("part") in schema.PARTS)
-    for item in items:
+    live = [item for item in items if not schema.dropped(item)]
+    kept = sum(1 for item in live if item.get("part") in schema.PARTS)
+    for item in live:
         item["part"] = parts[item["id"]]
-    main = [item for item in items if item["set"] == "본"]
+    main = [item for item in live if item["set"] == "본"]
     held = sum(1 for item in main if item["part"] == "test")
-    print(f"본 문항 {len(main)} · 개발셋 {len(main) - held} · 테스트셋 {held} (씨앗 {args.seed}, 이미 나뉜 {kept}문항은 그대로)")
+    print(f"본 문항 {len(main)} · 개발셋 {len(main) - held} · 테스트셋 {held} (씨앗 {args.seed}, 이미 나뉜 {kept}문항은 그대로, "
+          f"버림 {len(items) - len(live)}문항은 나누지 않음)")
     if args.write:
         schema.save(args.file, items)
     return 0

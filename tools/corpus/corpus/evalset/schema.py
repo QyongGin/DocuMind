@@ -70,6 +70,18 @@ def guidance_facts(item: dict) -> list[dict]:
     return [fact for fact in item.get("facts") or [] if fact_kind(fact) == "안내"]
 
 
+def dropped(item: dict) -> bool:
+    """휴먼 리뷰에서 버린 문항. 분할·집계·고정에서 뺀다(기록은 파일에 남긴다)."""
+    return (item.get("review") or {}).get("status") == "버림"
+
+
+def section_of(item: dict) -> str | None:
+    """분할 단위를 장으로 나눌 때 쓰는 장 이름. 답 있는 문항은 첫 근거의 장, 답 없는 문항은 가까운 문서의 장."""
+    if item.get("evidence"):
+        return item["evidence"][0].get("section")
+    return (item.get("unanswerable") or {}).get("section")
+
+
 def _strings(value) -> bool:
     return isinstance(value, list) and all(isinstance(text, str) and text.strip() for text in value)
 
@@ -118,6 +130,9 @@ def validate(item: dict) -> list[str]:
             if check is not None and (not _strings(check.get("terms")) or not check.get("terms")
                                       or not isinstance(check.get("hits"), int) or check["hits"] < 0):
                 errors.append("부재 확인 기록은 찾은 낱말과 걸린 수가 있어야 함")
+            section = unanswerable.get("section")
+            if section is not None and not (isinstance(section, str) and section.strip()):
+                errors.append("답 없는 문항의 장 이름(unanswerable.section)은 비어 있지 않은 글이어야 함")
     else:
         if not item["facts"]:
             errors.append("답 있는 문항은 필수 사실이 하나 이상 있어야 함")

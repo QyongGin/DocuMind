@@ -13,7 +13,7 @@ from ..ledger import Ledger
 from . import schema
 
 HELD_RATIO = 0.4
-SECTION_THRESHOLD = 10  # 한 문서 묶음의 문항이 이보다 많으면 장(evidence[0].section) 단위로 나눈다
+SECTION_THRESHOLD = 10  # 한 문서 묶음의 문항이 이보다 많으면 장(schema.section_of) 단위로 나눈다
 SAMPLE_SIZE = 30
 REASON_ORDER = ("불일치", "경고", "테스트셋 답없음")
 HUMAN_STATUSES = ("승인", "고침", "버림")
@@ -41,7 +41,7 @@ def units(items: list[dict], ledger: Ledger, section_threshold: int = SECTION_TH
             result[key] = members
             continue
         for item in members:
-            section = (item["evidence"][0].get("section") if item["evidence"] else None) or "장 없음"
+            section = schema.section_of(item) or "장 없음"
             result.setdefault(f"{key}#{section}", []).append(item)
     return result
 
@@ -52,7 +52,9 @@ def assign_parts(items: list[dict], ledger: Ledger, seed: int, held_ratio: float
 
     이미 나뉜 문항(`part`가 있는 문항)은 그대로 둔다(ADR-0022). 새 문항은 같은 단위에 나뉜 문항이 있으면
     그쪽을 따르고, 없으면 새 단위째 배정한다. 30문항씩 쌓거나 학기마다 더해도 앞서 나눈 결과가 바뀌지 않는다.
+    버린 문항은 나누지 않는다(돌려주는 표에 없다). 버린 문항이 단위 크기와 주제별 40%에 섞이면 나눈 결과가 틀어진다.
     """
+    items = [item for item in items if not schema.dropped(item)]
     by_topic: dict[str, list[tuple[str, list[dict]]]] = defaultdict(list)
     totals: Counter = Counter()
     held_so_far: Counter = Counter()
@@ -146,7 +148,7 @@ def sample_errors(items: list[dict]) -> tuple[int, int]:
 
 def freeze_text(items: list[dict], version: str, index_backup: str, seed: int, today: date) -> str:
     """버전 고정 기록. 모든 문항이 휴먼 리뷰 대상 고르기를 거쳤고, 사람이 볼 문항이 모두 판정되고(보류 없음),
-    버리지 않은 문항이 모두 자동 검증을 통과했고, 모든 문항이 나뉘어 있어야 한다."""
+    버리지 않은 문항이 모두 자동 검증을 통과했고 모두 나뉘어 있어야 한다(버린 문항은 나누지 않는다)."""
     unselected = [item["id"] for item in items if "review_reason" not in item]
     if unselected:
         raise ValueError(f"휴먼 리뷰 대상 고르기를 하지 않은 문항(분할 뒤 select-review): {', '.join(unselected[:10])}")
@@ -154,14 +156,14 @@ def freeze_text(items: list[dict], version: str, index_backup: str, seed: int, t
                and (item.get("review") or {}).get("status") not in HUMAN_STATUSES]
     if pending:
         raise ValueError(f"아직 판정하지 않았거나 보류인 문항: {', '.join(pending[:10])}")
-    unchecked = [item["id"] for item in items if (item.get("review") or {}).get("status") != "버림"
+    unchecked = [item["id"] for item in items if not schema.dropped(item)
                  and (not item.get("validation") or item["validation"].get("errors"))]
     if unchecked:
         raise ValueError(f"자동 검증을 다시 해야 하는 문항(고친 뒤 검사 전이거나 오류): {', '.join(unchecked[:10])}")
-    unassigned = [item["id"] for item in items if item.get("part") not in schema.PARTS]
+    unassigned = [item["id"] for item in items if not schema.dropped(item) and item.get("part") not in schema.PARTS]
     if unassigned:
         raise ValueError(f"개발셋·테스트셋이 정해지지 않은 문항: {', '.join(unassigned[:10])}")
-    kept = [item for item in items if (item.get("review") or {}).get("status") != "버림"]
+    kept = [item for item in items if not schema.dropped(item)]
     main = [item for item in kept if item["set"] == "본"]
     parts = Counter(item["part"] for item in main)
     shapes = Counter(item["shape"] for item in main)

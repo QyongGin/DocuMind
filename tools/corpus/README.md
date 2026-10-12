@@ -149,7 +149,7 @@ RAG 챗봇의 평가셋(evaluation set)을 만들고 검증하는 명령이다. 
 | `evalset validate [파일] [--index-dir 폴더] [--write]` | 자동 검증: 인용이 색인 텍스트에 그대로 있나, 필수 사실이 인용 안에 있나, 근거 문서가 평가 몫·서비스 색인 문서인가, 같은 질문이 없나, 답 없는 문항에 부재 확인 기록이 있나, 지난해 판에 금지 값이 있나. 오류는 초안으로 돌려보내고 경고는 휴먼 리뷰로 |
 | `evalset double-annotate [파일] [--write]` | 독립 이중 라벨링(double annotation): 분리된 Claude 세션(`claude -p`)이 정답(ground truth) 없이 질문과 원본(HTML 원본·PDF 쪽 이미지와 텍스트·HWP 텍스트)만 받아 답하고, 규칙 기반 채점으로 정답과 비교해 `second_annotation`(일치·불일치·애매)을 채운다. 질문·명령·출력은 평가셋 파일 옆 `double_annotation/<시각>/`에 남는다. `--dry-run`은 작업 단위(packet)만 만들고, `--from-record 폴더`는 남긴 출력으로 다시 채운다 |
 | `evalset isolation-test` | 세션 격리 시험: 이중 라벨링 세션이 작업 단위 밖(가짜 정답 파일)을 못 읽는지 본다. 처음과 Claude Code 버전이 바뀔 때 돌린다 |
-| `evalset split [파일] --seed N [--write]` | 문서 묶음 단위로 개발셋(dev) 60 : 테스트셋(test) 40(주제마다). 문항이 10개를 넘는 묶음은 장(`evidence[0].section`) 단위. 이미 나뉜 문항은 그대로 두고, 새 문항은 같은 묶음(장)의 쪽을 따르거나 새 묶음째 나눈다(ADR-0022) |
+| `evalset split [파일] --seed N [--write]` | 문서 묶음 단위로 개발셋(dev) 60 : 테스트셋(test) 40(주제마다). 문항이 10개를 넘는 묶음은 장 단위(답 있는 문항은 `evidence[0].section`, 답 없는 문항은 `unanswerable.section`). 이미 나뉜 문항은 그대로 두고, 새 문항은 같은 묶음(장)의 쪽을 따르거나 새 묶음째 나눈다(ADR-0022). 버린 문항은 나누지 않는다 |
 | `evalset select-review [파일] --seed N [--write]` | 이중 라벨링 불일치·경고·테스트셋 답 없는 문항·표본 30을 휴먼 리뷰로, 나머지는 자동 승인. 나누기 전에는 불일치·경고만 정하고 나머지는 '분할 대기'로 둔다. 표본은 평가셋 파일 전체에서 30개까지. 표본에서 2개 이상 틀리면 `--more 30` |
 | `evalset review-html [파일] [--index-dir 폴더]` | 휴먼 리뷰 대상만 담은 리뷰 화면 HTML 파일 하나를 만든다(평가셋 파일 옆 `review/`). 브라우저로 열고 서버·인터넷을 쓰지 않는다 |
 | `evalset merge [파일] --records 기록.jsonl [--write]` | 리뷰 화면이 내려받은 리뷰 기록을 병합한다. 고친 문항은 `rev`를 올리고 자동 검증 결과를 비운다(다시 `validate`). 같은 기록을 두 번 병합해도 같다 |
