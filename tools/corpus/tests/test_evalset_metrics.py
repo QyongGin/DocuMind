@@ -86,6 +86,32 @@ def test_human_judgment_is_reused_only_for_same_revision_and_answer(tmp_path):
     assert spaced["judged"]  # 띄어쓰기만 다른 답은 같은 답
 
 
+def test_rule_correct_answer_from_priority_path_goes_to_judgment():
+    """모델을 거치지 않은 우선 경로 답은 규칙이 맞음이어도 판정으로 보낸다(ADR-0028). 판정이 있으면 그 판정을 쓴다."""
+    listed = "표 근거 기준 답변입니다.\n- 면접고사료: 20,000원\n- 전형료: 30,000원"
+    eval_trace = trace(FOUND, FOUND, "전형료 30,000원 면접고사료 20,000원", path="priority_table_fact")
+    row = metrics.score_record(item("ev-0001"), record(listed, eval_trace), {})
+    assert (row["rule_label"], row["label"], row["doubt"]) == ("맞음", "애매", "우선 경로")
+    assert metrics.aggregate([row])["doubted"] == 1
+    key = metrics.judgment_key(item("ev-0001"), listed)
+    judged = metrics.score_record(item("ev-0001"), record(listed, eval_trace), {key: {"key": key, "label": "일부"}})
+    assert (judged["label"], judged["judged"], judged["doubt"]) == ("일부", True, "우선 경로")
+
+
+@pytest.mark.parametrize("answer, shape, expected", [
+    # 값 문항에 정답 값과 단위가 같은 다른 값이 함께 있으면 판정으로(다른 값을 결론으로 내세웠을 수 있다)
+    ("면접학과는 50,000원이지만 질문은 원서비라 30,000원입니다.", "값", ("애매", "다른 값")),
+    # 단위가 다른 숫자(연도)는 보지 않는다
+    ("2027학년도 전형료는 30,000원입니다.", "값", ("맞음", None)),
+    # 값 문항만 본다
+    ("전형료는 30,000원이고 면접학과는 50,000원입니다.", "설명", ("맞음", None)),
+])
+def test_value_item_with_another_value_of_same_unit_goes_to_judgment(answer, shape, expected):
+    context = "전형료 30,000원 면접학과 50,000원 2027학년도"
+    row = metrics.score_record(item("ev-0001", shape=shape), record(answer, trace(FOUND, FOUND, context)), {})
+    assert (row["label"], row["doubt"]) == expected
+
+
 def test_wilson_interval():
     assert metrics.wilson(60, 100) == pytest.approx([0.502, 0.6906], abs=1e-3)
     assert metrics.wilson(0, 30)[0] == 0 and metrics.wilson(0, 0) is None
