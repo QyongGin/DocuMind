@@ -84,3 +84,27 @@ def test_guidance_facts_are_scored_separately():
 
 def test_items_without_guidance_facts():
     assert score(item("ev-0001"), "3만 원이에요")["guidance"] == {"label": "해당 없음", "matched": [], "missing": []}
+
+
+def test_refusal_appended_after_all_core_facts_is_correct():
+    """핵심 사실을 다 말한 뒤 다른 것에 대해 '확인할 수 없다'를 덧붙인 답은 맞음(덧붙인 거절로 따로 셈).
+    먼저 망설이고 값을 대는 답, 명사를 꾸미는 '확인할 수 없는'은 다르게 본다."""
+    key = item("ev-0001")
+    appended = score(key, "전형료는 30,000원입니다. 실기 추가 전형료는 문서에서 확인할 수 없습니다.")
+    assert (appended["label"], appended["appended_refusal"], appended["abstained"]) == ("맞음", True, True)
+    assert score(key, "확인할 수 없지만 30,000원으로 보입니다")["label"] == "애매"
+    assert score(key, "문서에서 확인할 수 없습니다")["appended_refusal"] is False
+    listed = item("ev-0002", shape="목록", forbidden=[],
+                  facts=[{"name": "사진", "values": ["편집"]}, {"name": "날짜", "values": ["신청일자"]}])
+    adnominal = score(listed, "편집한 사진, 확인할 수 없는 서류, 신청일자와 다른 문서는 반려됩니다")
+    assert (adnominal["label"], adnominal["appended_refusal"]) == ("맞음", True)
+    assert score(listed, "편집한 사진은 반려되고 나머지는 확인할 수 없습니다")["label"] == "애매"  # 핵심 하나 빠짐
+
+
+def test_bare_table_number_in_context_is_not_invented():
+    """표 칸에는 단위 없이 '50'만 있어도 답의 '50명'은 지어낸 숫자가 아니다. 다른 수(500)에 붙은 50은 아니다."""
+    key = item("ev-0001", facts=[{"name": "정원", "values": ["50명"]}], forbidden=[])
+    table = "|학과|정원|\n|자유전공학부|50|"
+    assert score(key, "정원은 50명입니다.", table)["invented"] == []
+    assert score(key, "정원은 50명입니다.", table)["label"] == "맞음"
+    assert score(key, "정원은 50명입니다.", "|자유전공학부|500|")["invented"] == ["50명"]

@@ -69,7 +69,7 @@ def score(item: dict, answer: str | None, context: str | None = None) -> dict:
     """
     text = (answer or "").strip()
     result = {"label": "빈 답", "matched": [], "missing": [], "forbidden_hits": [], "invented": [], "abstained": False,
-              "guidance": guidance(item, "")}
+              "appended_refusal": False, "guidance": guidance(item, "")}
     if not text:
         return result
     normalized = normalize(text)
@@ -81,7 +81,7 @@ def score(item: dict, answer: str | None, context: str | None = None) -> dict:
     invented = []
     if context is not None:
         normalized_context = normalize(context)
-        invented = sorted(number for number in numbers if number not in normalized_context)
+        invented = sorted(number for number in numbers if not _number_in_context(number, normalized_context))
 
     if forbidden:
         label = "틀림"
@@ -90,6 +90,11 @@ def score(item: dict, answer: str | None, context: str | None = None) -> dict:
             label = "애매" if numbers else "맞음"  # 거절하며 덧붙인 숫자는 '지난해 값'처럼 밝혔는지 사람이 본다
         else:
             label = "틀림" if numbers else "애매"  # 답이 없는 질문에 구체 숫자를 단정하면 지어낸 답
+    elif abstained and matched and not missing and not invented and _refusal_after_facts(item, normalized):
+        # 핵심 사실을 모두 말한 뒤에 다른 것에 대해 '확인할 수 없다'를 덧붙인 답(예: "인사학적팀입니다. 다른 장학금은 확인할 수
+        # 없습니다"). 2026-10-12까지 이중 라벨링 오탐 4번(125·160·242·277)이 모두 이 경우였다. 수는 appended_refusal로 센다.
+        # "확인할 수 없지만 30,000원으로 보입니다"처럼 먼저 망설이고 값을 대는 답은 그대로 애매다
+        label = "맞음"
     elif abstained:
         label = "애매" if matched else "모름"
     elif not matched:
@@ -101,8 +106,50 @@ def score(item: dict, answer: str | None, context: str | None = None) -> dict:
     if label in ("맞음", "일부") and invented:
         label = "애매"
     result.update(label=label, matched=matched, missing=missing, forbidden_hits=forbidden, invented=invented,
-                  abstained=abstained, guidance=guidance(item, text))
+                  abstained=abstained, appended_refusal=abstained and label == "맞음" and item["shape"] != "답없음",
+                  guidance=guidance(item, text))
     return result
+
+
+def _number_in_context(number_with_unit: str, normalized_context: str) -> bool:
+    """답의 '50명'이 근거에 있나: 단위까지 같은 글이 있거나, 단위 없는 같은 수(표 칸의 '50')가 따로 있으면 있다고 본다.
+    표 근거는 칸에 단위 없이 수만 적는 경우가 많아, 단위까지 맞춰 보면 맞는 답을 '지어낸 숫자'로 잡는다(2026-10-12 실측:
+    정답 글을 그대로 채점해도 346문항 중 32문항이 애매)."""
+    if number_with_unit in normalized_context:
+        return True
+    value = re.match(r"\d+(?:\.\d+)?", number_with_unit).group(0)
+    return re.search(r"(?<![\d.])" + re.escape(value) + r"(?![\d])", normalized_context) is not None
+
+
+def _value_end(normalized_text: str, value: str) -> int | None:
+    """허용 표기가 처음 나오는 곳의 끝 위치(contains와 같은 숫자 경계 규칙). 없으면 None."""
+    target = normalize(value)
+    if not target:
+        return None
+    pattern = re.escape(target)
+    if re.search(r"\d", target):
+        if target[0].isdigit():
+            pattern = r"(?<![\d.])" + pattern
+        if target[-1].isdigit():
+            pattern += r"(?!\d)"
+    match = re.search(pattern, normalized_text)
+    return match.end() if match else None
+
+
+def _refusal_after_facts(item: dict, normalized_text: str) -> bool:
+    """거절 문구가 핵심 사실을 모두 말한 뒤에만 나오나. 명사를 꾸미는 말("확인할 수 없는 서류")은 거절로 보지 않는다."""
+    facts_end = 0
+    for fact in core_facts(item):
+        ends = [end for end in (_value_end(normalized_text, value) for value in fact["values"]) if end is not None]
+        facts_end = max(facts_end, min(ends)) if ends else facts_end
+    for phrase in REFUSAL_PHRASES:
+        target = normalize(phrase)
+        for match in re.finditer(re.escape(target), normalized_text):
+            if normalized_text[match.end():match.end() + 1] in ("는", "은"):
+                continue
+            if match.start() < facts_end:
+                return False
+    return True
 
 
 def guidance(item: dict, answer: str) -> dict:
