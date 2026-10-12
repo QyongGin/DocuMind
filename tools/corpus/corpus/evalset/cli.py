@@ -11,6 +11,8 @@
     report           분포 보고(문항 수·답 유형·주제·태그·문서당 상한·리뷰 현황)
     freeze           버전 고정(버전·SHA-256·문항 수) 기록 쓰기
     score            문항 하나에 답 하나를 규칙 기반으로 채점해 보기
+    run              평가 실행: 질문을 AI 서버 /query(평가용 옵션)에 묻고 실행 폴더에 쌓기(이어서 돌리기)
+    score-run        실행 채점: 정확·안내·실패 위치·출처·답 잘림과 지표(95% 신뢰구간). 테스트셋은 합계만 보인다
 """
 
 import getpass
@@ -26,7 +28,7 @@ import requests
 
 from ..ledger import Ledger
 from ..upload import BackendClient, UploadStop
-from . import double_annotation, index_export, report, review, schema, split, validation
+from . import double_annotation, index_export, metrics, report, review, runner, schema, split, validation
 from .scoring import score
 
 
@@ -273,6 +275,33 @@ def cmd_score(args) -> int:
     return 0
 
 
+def cmd_run(args) -> int:
+    system_prompt = Path(args.system_prompt_file).read_text(encoding="utf-8").strip() if args.system_prompt_file else None
+    try:
+        summary = runner.run(args.file, args.out, args.ai_url, args.index, args.top_k, system_prompt, args.version,
+                             args.ids.split(",") if args.ids else None, args.limit, timeout=args.timeout,
+                             repo=Path(__file__).resolve().parents[4])
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(f"물음 {summary['asked']} · 건너뜀(이미 받음) {summary['skipped']} · 실패 {summary['errors']} → {args.out}")
+    return 0 if not summary["errors"] else 1
+
+
+def cmd_score_run(args) -> int:
+    judgments = args.judgments or str(Path(args.file).with_name("judgments.jsonl"))
+    try:
+        result = metrics.score_run(args.file, args.run_dir, judgments)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    for line in metrics.summary_lines(result):
+        print(line)
+    print(f"결과: {Path(args.run_dir) / metrics.METRICS} · 개발셋 문항별 {metrics.DEV_RESULTS}"
+          f" · 테스트셋 문항별은 봉인 파일 {metrics.TEST_RESULTS}(열어 보지 않는다) · 사람 판정 대기 {metrics.AMBIGUOUS}")
+    return 0
+
+
 def add_parser(commands, default_file: Path) -> None:
     evalset = commands.add_parser("evalset", help="평가셋 자동 검증·이중 라벨링·분할·휴먼 리뷰·버전 고정")
     evalset.add_argument("--today", help="날짜 고정(YYYY-MM-DD, 시험용)")
@@ -348,6 +377,23 @@ def add_parser(commands, default_file: Path) -> None:
     freeze.add_argument("--seed", type=int, required=True, help="나누기에 쓴 씨앗")
     freeze.add_argument("--out", help="버전 고정 기록 파일(기본: 평가셋 파일 옆 frozen_<version>.txt)")
     freeze.set_defaults(func=cmd_freeze)
+
+    asked = with_file("run", "평가 실행(AI 서버에 묻기, 데스크탑 챗봇이 떠 있어야 함)")
+    asked.add_argument("--ai-url", required=True, help="AI 서버 주소(예: http://<데스크탑 주소>:8000). 백엔드를 거치지 않는다")
+    asked.add_argument("--out", required=True, help="실행 폴더(예: Assets/eval/runs/20261013-baseline). 같은 폴더면 이어서 돈다")
+    asked.add_argument("--index", required=True, help="챗봇 색인 이름(실행 기록에 남김, 예: repro-20261010-develop15e776c)")
+    asked.add_argument("--version", help="평가셋 버전(실행 기록에 남김, 예: v2)")
+    asked.add_argument("--top-k", type=int, default=runner.DEFAULT_TOP_K, help=f"검색 개수(기본 {runner.DEFAULT_TOP_K}, 운영값)")
+    asked.add_argument("--system-prompt-file", help="관리자가 바꾼 시스템 프롬프트 파일. 없으면 AI 서버 기본값(백엔드 기본값과 같음)")
+    asked.add_argument("--ids", help="이 문항만(쉼표로 구분, 시험용)")
+    asked.add_argument("--limit", type=int, help="앞에서부터 이만큼만(시험용)")
+    asked.add_argument("--timeout", type=float, default=600.0, help="질문 하나의 제한 시간(초)")
+    asked.set_defaults(func=cmd_run)
+
+    graded = with_file("score-run", "실행 채점과 지표")
+    graded.add_argument("--run-dir", required=True, help="evalset run의 실행 폴더")
+    graded.add_argument("--judgments", help="사람 판정 파일(기본: 평가셋 파일 옆 judgments.jsonl)")
+    graded.set_defaults(func=cmd_score_run)
 
     trial = with_file("score", "답 하나 판정해 보기")
     trial.add_argument("--id", required=True)

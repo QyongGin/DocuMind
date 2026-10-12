@@ -155,6 +155,8 @@ RAG 챗봇의 평가셋(evaluation set)을 만들고 검증하는 명령이다. 
 | `evalset merge [파일] --records 기록.jsonl [--write]` | 리뷰 화면이 내려받은 리뷰 기록을 병합한다. 고친 문항은 `rev`를 올리고 자동 검증 결과를 비운다(다시 `validate`). 같은 기록을 두 번 병합해도 같다 |
 | `evalset report [파일] [--cap 대장ID=수]` | 문항 수·답 유형·주제·태그·문서당 상한·리뷰 현황을 목표와 나란히 |
 | `evalset freeze [파일] --version v1 --index-backup 이름 --seed N` | 버리지 않은 문항이 모두 휴먼 리뷰 대상 고르기를 거쳤고, 휴먼 리뷰 대상이 모두 판정됐고 버리지 않은 문항이 모두 자동 검증을 통과했는지 확인하고 버전 고정 기록(SHA-256)을 쓴다 |
+| `evalset run [파일] --ai-url URL --out 실행폴더 --index 색인이름 [--version v2]` | 평가 실행: 질문을 AI 서버 `/query`(평가용 옵션)에 하나씩 묻고 `answers.jsonl`·`manifest.json`(평가셋 지문, 색인, top_k, 프롬프트 지문, 코드 커밋, 서버 설정)에 쌓는다. 같은 폴더로 다시 돌리면 이어서 돌고, 조건이 다르면 거부 |
+| `evalset score-run [파일] --run-dir 실행폴더 [--judgments 파일]` | 실행 채점: 정확·안내·지어낸 숫자·실패 위치(검색 실패·후보 탈락·문맥 탈락·생성 실패·외운 답 의심)·출처 정확도·답 잘림, 지표마다 95% 신뢰구간. 테스트셋은 합계만 보이고 문항별은 봉인 파일 `results_test.sealed.jsonl`. 애매는 사람 판정 파일(`judgments.jsonl`, 문항 ID+개정 번호+답이 같으면 재사용) |
 | `evalset score [파일] --id ev-0001 --answer "답"` | 규칙 기반 채점을 하나 해 본다. 정확(핵심 사실: 맞음·일부·모름·틀림·애매·빈 답)과 안내(안내 사실: 충족·일부·부족·해당 없음)를 따로 낸다(ADR-0023) |
 
 `validate`는 `--index-dir`의 색인 텍스트(챗봇이 보는 글)를 먼저 쓰고, 없으면 원본 파일을 이 도구의 추출기로 읽는다.
