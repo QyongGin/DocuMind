@@ -206,6 +206,25 @@ def test_freeze_does_not_require_part_for_dropped_items():
     assert "본 1 (개발셋 1 / 테스트셋 0), 쉬운 0, 버림 1" in text
 
 
+def test_select_for_review_skips_dropped_items(ledger):
+    """리뷰 대상을 고르기 전에 버린 문항은 고르지 않는다(분할 대기로 세지 않고, 검증이 없어도 멈추지 않음)."""
+    items = many_items(3, 2)
+    ready(items, {entry["id"]: "test" for entry in items})
+    items[0].update(part=None, validation=None, second_annotation=None, review={"status": "버림"})
+    counts = split.select_for_review(items, seed=1, today=TODAY)
+    assert "review_reason" not in items[0] and items[0]["review"] == {"status": "버림"}
+    assert counts["분할 대기"] == 0
+    assert all("review_reason" in entry for entry in items[1:])
+
+
+def test_freeze_does_not_require_select_review_for_dropped_items():
+    passed = {"errors": [], "warnings": []}
+    items = [item("ev-0001", part="dev", review_reason=None, review={"status": "자동 승인"}, validation=passed),
+             item("ev-0002", question="둘", part=None, review={"status": "버림"})]  # 고르기 전에 버림
+    text = split.freeze_text(items, "v1", "20261004-201713", 7, TODAY)
+    assert "본 1 (개발셋 1 / 테스트셋 0), 쉬운 0, 버림 1" in text
+
+
 def test_unanswerable_items_follow_their_section(ledger):
     """답 없는 문항도 장 이름(unanswerable.section)이 있으면 같은 장의 답 있는 문항과 같은 단위로 나뉜다."""
     answered = [item(f"ev-{number:04d}", question=f"요강 질문 {number}", topic="입시",

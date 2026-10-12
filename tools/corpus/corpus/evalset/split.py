@@ -89,8 +89,9 @@ def select_for_review(items: list[dict], seed: int, today: date, sample_size: in
     분할 전에도 돌릴 수 있다(ADR-0022): 그때는 불일치·경고만 정하고, 이유가 없는 문항은 테스트셋이 될지 몰라
     '분할 대기'로 남긴다(자동 승인도 분할 뒤). 표본은 평가셋 파일 전체에서 `sample_size`개까지만 뽑는다.
     이미 이유를 정한 문항(`review_reason` 칸이 있는 문항)은 건드리지 않아 다시 실행해도 결과가 같다.
+    버린 문항은 고르지 않는다(리뷰 대상을 고르기 전에 버린 문항이 '분할 대기'로 남아 고정을 막지 않게).
     """
-    fresh = [item for item in items if "review_reason" not in item]
+    fresh = [item for item in items if "review_reason" not in item and not schema.dropped(item)]
     blocked = [item["id"] for item in fresh
                if not item.get("validation") or item["validation"].get("errors") or not item.get("second_annotation")]
     if blocked:
@@ -147,9 +148,9 @@ def sample_errors(items: list[dict]) -> tuple[int, int]:
 
 
 def freeze_text(items: list[dict], version: str, index_backup: str, seed: int, today: date) -> str:
-    """버전 고정 기록. 모든 문항이 휴먼 리뷰 대상 고르기를 거쳤고, 사람이 볼 문항이 모두 판정되고(보류 없음),
-    버리지 않은 문항이 모두 자동 검증을 통과했고 모두 나뉘어 있어야 한다(버린 문항은 나누지 않는다)."""
-    unselected = [item["id"] for item in items if "review_reason" not in item]
+    """버전 고정 기록. 버리지 않은 문항이 모두 휴먼 리뷰 대상 고르기를 거쳤고, 사람이 볼 문항이 모두 판정되고(보류 없음),
+    버리지 않은 문항이 모두 자동 검증을 통과했고 모두 나뉘어 있어야 한다(버린 문항은 고르지도 나누지도 않는다)."""
+    unselected = [item["id"] for item in items if "review_reason" not in item and not schema.dropped(item)]
     if unselected:
         raise ValueError(f"휴먼 리뷰 대상 고르기를 하지 않은 문항(분할 뒤 select-review): {', '.join(unselected[:10])}")
     pending = [item["id"] for item in items if item.get("review_reason")

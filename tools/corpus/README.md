@@ -150,11 +150,11 @@ RAG 챗봇의 평가셋(evaluation set)을 만들고 검증하는 명령이다. 
 | `evalset double-annotate [파일] [--write]` | 독립 이중 라벨링(double annotation): 분리된 Claude 세션(`claude -p`)이 정답(ground truth) 없이 질문과 원본(HTML 원본·PDF 쪽 이미지와 텍스트·HWP 텍스트)만 받아 답하고, 규칙 기반 채점으로 정답과 비교해 `second_annotation`(일치·불일치·애매)을 채운다. 질문·명령·출력은 평가셋 파일 옆 `double_annotation/<시각>/`에 남는다. `--dry-run`은 작업 단위(packet)만 만들고, `--from-record 폴더`는 남긴 출력으로 다시 채운다 |
 | `evalset isolation-test` | 세션 격리 시험: 이중 라벨링 세션이 작업 단위 밖(가짜 정답 파일)을 못 읽는지 본다. 처음과 Claude Code 버전이 바뀔 때 돌린다 |
 | `evalset split [파일] --seed N [--write]` | 문서 묶음 단위로 개발셋(dev) 60 : 테스트셋(test) 40(주제마다). 문항이 10개를 넘는 묶음은 장 단위(답 있는 문항은 `evidence[0].section`, 답 없는 문항은 `unanswerable.section`). 이미 나뉜 문항은 그대로 두고, 새 문항은 같은 묶음(장)의 쪽을 따르거나 새 묶음째 나눈다(ADR-0022). 버린 문항은 나누지 않는다 |
-| `evalset select-review [파일] --seed N [--write]` | 이중 라벨링 불일치·경고·테스트셋 답 없는 문항·표본 30을 휴먼 리뷰로, 나머지는 자동 승인. 나누기 전에는 불일치·경고만 정하고 나머지는 '분할 대기'로 둔다. 표본은 평가셋 파일 전체에서 30개까지. 표본에서 2개 이상 틀리면 `--more 30` |
+| `evalset select-review [파일] --seed N [--write]` | 이중 라벨링 불일치·경고·테스트셋 답 없는 문항·표본 30을 휴먼 리뷰로, 나머지는 자동 승인. 나누기 전에는 불일치·경고만 정하고 나머지는 '분할 대기'로 둔다. 표본은 평가셋 파일 전체에서 30개까지. 표본에서 2개 이상 틀리면 `--more 30`. 버린 문항은 고르지 않는다 |
 | `evalset review-html [파일] [--index-dir 폴더]` | 휴먼 리뷰 대상만 담은 리뷰 화면 HTML 파일 하나를 만든다(평가셋 파일 옆 `review/`). 브라우저로 열고 서버·인터넷을 쓰지 않는다 |
 | `evalset merge [파일] --records 기록.jsonl [--write]` | 리뷰 화면이 내려받은 리뷰 기록을 병합한다. 고친 문항은 `rev`를 올리고 자동 검증 결과를 비운다(다시 `validate`). 같은 기록을 두 번 병합해도 같다 |
 | `evalset report [파일] [--cap 대장ID=수]` | 문항 수·답 유형·주제·태그·문서당 상한·리뷰 현황을 목표와 나란히 |
-| `evalset freeze [파일] --version v1 --index-backup 이름 --seed N` | 모든 문항이 휴먼 리뷰 대상 고르기를 거쳤고, 휴먼 리뷰 대상이 모두 판정됐고 버리지 않은 문항이 모두 자동 검증을 통과했는지 확인하고 버전 고정 기록(SHA-256)을 쓴다 |
+| `evalset freeze [파일] --version v1 --index-backup 이름 --seed N` | 버리지 않은 문항이 모두 휴먼 리뷰 대상 고르기를 거쳤고, 휴먼 리뷰 대상이 모두 판정됐고 버리지 않은 문항이 모두 자동 검증을 통과했는지 확인하고 버전 고정 기록(SHA-256)을 쓴다 |
 | `evalset score [파일] --id ev-0001 --answer "답"` | 규칙 기반 채점을 하나 해 본다. 정확(핵심 사실: 맞음·일부·모름·틀림·애매·빈 답)과 안내(안내 사실: 충족·일부·부족·해당 없음)를 따로 낸다(ADR-0023) |
 
 `validate`는 `--index-dir`의 색인 텍스트(챗봇이 보는 글)를 먼저 쓰고, 없으면 원본 파일을 이 도구의 추출기로 읽는다.
