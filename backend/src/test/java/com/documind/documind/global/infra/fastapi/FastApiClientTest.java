@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.util.unit.DataSize;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.io.IOException;
@@ -247,6 +248,38 @@ class FastApiClientTest {
 
     private String readBody(HttpExchange exchange) throws IOException {
         return new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void listDocumentChunksReadsResponseLargerThanDefaultBuffer() {
+        // 이슈 #149: 큰 문서의 청크 목록은 WebClient 기본 버퍼(256KB)를 넘는다. 설정한 한도로 만든 클라이언트는 끝까지 읽는다
+        String content = "가나대학 실습실 안전진단 결과 문장이다. ".repeat(40);
+        StringBuilder body = new StringBuilder("{\"chunks\":[");
+        for (int index = 0; index < 400; index++) {
+            if (index > 0) {
+                body.append(',');
+            }
+            body.append("{\"id\":\"461_").append(index).append("\",\"chunk_index\":").append(index)
+                    .append(",\"content\":\"").append(content).append("\",\"metadata\":{\"document_id\":\"461\"}}");
+        }
+        body.append("]}");
+        assertTrue(body.toString().getBytes(StandardCharsets.UTF_8).length > 256 * 1024);
+        server.createContext("/documents/461/chunks", exchange -> sendJson(exchange, body.toString()));
+        String baseUrl = "http://localhost:" + server.getAddress().getPort();
+        FastApiWebClientConfig config = new FastApiWebClientConfig();
+
+        WebClient configured = config.fastApiBlockingWebClient(
+                baseUrl, Duration.ofSeconds(1), Duration.ofSeconds(5), DataSize.ofMegabytes(16));
+        List<FastApiDocumentChunkResponse> chunks =
+                new FastApiClient(configured, configured, Duration.ofSeconds(5)).listDocumentChunks(461L);
+        assertEquals(400, chunks.size());
+        assertEquals(399, chunks.get(399).getChunkIndex());
+
+        // 한도가 기본값(256KB)이면 같은 응답에서 실패한다(이슈 #149 재현)
+        WebClient small = config.fastApiBlockingWebClient(
+                baseUrl, Duration.ofSeconds(1), Duration.ofSeconds(5), DataSize.ofKilobytes(256));
+        assertThrows(CustomException.class,
+                () -> new FastApiClient(small, small, Duration.ofSeconds(5)).listDocumentChunks(461L));
     }
 
     private void sendJson(HttpExchange exchange, String body) throws IOException {

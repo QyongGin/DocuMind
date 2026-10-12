@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.util.unit.DataSize;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
 
@@ -20,13 +21,19 @@ public class FastApiWebClientConfig {
     public WebClient fastApiBlockingWebClient(
             @Value("${fastapi.url}") String baseUrl,
             @Value("${fastapi.connect-timeout:5s}") Duration connectTimeout,
-            @Value("${fastapi.response-timeout:180s}") Duration responseTimeout
+            @Value("${fastapi.response-timeout:180s}") Duration responseTimeout,
+            @Value("${fastapi.max-in-memory-size:16MB}") DataSize maxInMemorySize
     ) {
         HttpClient httpClient = createBaseHttpClient(connectTimeout)
                 // 문서 업로드와 일반 질의응답은 응답 완료 시간을 제한해 장애를 빠르게 감지
                 .responseTimeout(responseTimeout);
 
-        return createWebClient(baseUrl, httpClient);
+        // 응답 본문을 한 번에 모으는 한도. WebClient.builder() 기본값은 256KB이고, 직접 만든 빌더라
+        // spring.codec.max-in-memory-size가 닿지 않는다. 큰 문서의 청크 목록(/documents/{id}/chunks)이
+        // 이 한도를 넘어 HTTP 500이 났다(이슈 #149: 안전진단 보고서 739청크, 청크 글만 약 1MB).
+        return createWebClient(baseUrl, httpClient).mutate()
+                .codecs(codecs -> codecs.defaultCodecs().maxInMemorySize(Math.toIntExact(maxInMemorySize.toBytes())))
+                .build();
     }
 
     // @Bean: FastAPI SSE 스트리밍 전용 WebClient를 스프링 빈으로 등록
