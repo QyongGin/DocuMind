@@ -1,7 +1,8 @@
 """실행 채점과 지표(M1 11번): 실행 폴더의 답을 평가셋으로 채점하고 지표·실패 위치를 낸다.
 
 문항마다
-    정확·안내   scoring.score — 프롬프트를 근거 글로 줘서 지어낸 숫자도 본다. 규칙이 못 정한 '애매'는 사람 판정 파일에서
+    정확·안내   scoring.score — 프롬프트를 근거 글로 줘서 지어낸 숫자도 본다. 규칙이 '맞음'으로 봤어도 의심할 두 경우
+                (우선 경로 답, 값 문항의 다른 값)는 '애매'로 보낸다(ADR-0028). '애매'는 판정 파일에서
                 같은 (문항, 개정 번호, 답) 판정을 찾아 다시 쓴다
     실패 위치   허용 근거 문서(근거 + 허용 근거)의 후보가 핵심 사실을 모두 담았나를 단계(검색 → 최종 후보 → 문맥)마다 본다
     출처        최종 후보(=화면 출처)에 허용 근거 문서가 있나, 출처 중 몇 %가 허용 근거 문서인가
@@ -15,12 +16,13 @@
 import hashlib
 import json
 import math
+import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
 from . import schema
 from .runner import ANSWERS, MANIFEST, read_answers
-from .scoring import contains, normalize, score
+from .scoring import contains, normalize, numbers_with_units, score
 
 RETRIEVAL_STAGES = ("vector", "bm25", "table_fact", "expanded")
 DEV_RESULTS = "results_dev.jsonl"
@@ -100,6 +102,29 @@ def source_accuracy(item: dict, trace: dict) -> tuple[bool, float]:
     return inside > 0, inside / len(final)
 
 
+def doubt(item: dict, answer: str | None, trace: dict) -> str | None:
+    """규칙이 '맞음'으로 본 답 중 판정으로 보낼 것(ADR-0028). 규칙은 정답 표기가 답 어딘가에 있으면 맞음을 준다.
+
+    - 우선 경로: 모델을 거치지 않고 표 사실·근거 글을 그대로 붙인 답. 값을 나열만 해도 정답 값이 들어 있으면 맞음이 된다
+    - 다른 값: 값 문항에서 정답 값과 단위가 같은 다른 값이 답에 함께 있다(30,000원 문항에 50,000원). 다른 값을 결론으로
+      내세워도 맞음이 된다. 단위가 다른 숫자(연도·날짜 등)는 보지 않는다
+    """
+    if trace.get("answer_path") not in (None, "llm"):
+        return "우선 경로"
+    if item["shape"] == "값":
+        expected = {number for fact in schema.core_facts(item) for value in fact["values"]
+                    for number in numbers_with_units(normalize(value))}
+        units = {_unit(number) for number in expected}
+        others = numbers_with_units(normalize(answer or "")) - expected - numbers_with_units(normalize(item.get("question", "")))
+        if any(_unit(number) in units for number in others):
+            return "다른 값"
+    return None
+
+
+def _unit(number_with_unit: str) -> str:
+    return re.sub(r"^\d+(?:\.\d+)?", "", number_with_unit)
+
+
 def score_record(item: dict, record: dict | None, judgments: dict[str, dict]) -> dict:
     """문항 하나의 결과 행. 답을 아직 못 받았으면 status '미실행'·'실패'."""
     row = {"id": item["id"], "rev": item.get("rev", 1), "set": item["set"], "part": item.get("part"),
@@ -111,6 +136,9 @@ def score_record(item: dict, record: dict | None, judgments: dict[str, dict]) ->
     answer = record.get("answer")
     result = score(item, answer, context=trace.get("prompt") or trace.get("context") or "")
     label, judged = result["label"], None
+    doubted = doubt(item, answer, trace) if label == "맞음" else None
+    if doubted:
+        label = "애매"
     if label == "애매":
         judged = judgments.get(judgment_key(item, answer))
         if judged:
@@ -119,7 +147,7 @@ def score_record(item: dict, record: dict | None, judgments: dict[str, dict]) ->
     source_any, source_share = source_accuracy(item, trace)
     row.update(
         status="채점", question=item["question"], answer=answer, label=label, rule_label=result["label"],
-        judged=bool(judged), guidance=result["guidance"]["label"], appended_refusal=result["appended_refusal"],
+        judged=bool(judged), doubt=doubted, guidance=result["guidance"]["label"], appended_refusal=result["appended_refusal"],
         invented=result["invented"], missing=list(result["missing"]),
         location=failure_location(item, label, hits), stages=hits, source_any=source_any,
         source_share=round(source_share, 3), truncated=(trace.get("generation") or {}).get("done_reason") == "length",
@@ -165,6 +193,7 @@ def aggregate(rows: list[dict]) -> dict:
         "guidance": _rate(sum(1 for row in with_guidance if row["guidance"] == "충족"), len(with_guidance)),
         "ambiguous_open": sum(1 for row in scored if row["label"] == "애매"),
         "judged": sum(1 for row in scored if row["judged"]),
+        "doubted": sum(1 for row in scored if row.get("doubt")),
         "appended_refusal": sum(1 for row in scored if row["appended_refusal"]),
         "invented_numbers": sum(1 for row in scored if row["invented"]),
         "truncated": sum(1 for row in scored if row["truncated"]),
@@ -202,7 +231,7 @@ def score_run(evalset_path: str | Path, run_dir: str | Path, judgments_path: str
     write(DEV_RESULTS, [row for row in rows if row["part"] != "test"])
     write(TEST_RESULTS, [row for row in rows if row["part"] == "test"])
     write(AMBIGUOUS, [{"key": row["key"], "id": row["id"], "part": row["part"], "question": row["question"],
-                       "answer": row["answer"], "rule_label": row["rule_label"]}
+                       "answer": row["answer"], "rule_label": row["rule_label"], "doubt": row.get("doubt")}
                       for row in rows if row.get("status") == "채점" and row["label"] == "애매"])
     metrics = {"manifest": {key: manifest.get(key) for key in ("evalset_version", "evalset_sha256", "index", "top_k",
                                                                "system_prompt_sha256", "git_commit", "runtime")},
@@ -236,7 +265,7 @@ def summary_lines(metrics: dict) -> list[str]:
         lines.append(f"  출처 정확도 {pct(group['source_hit'])} · 출처 중 허용 근거 {group['source_share']}"
                      f" · 안내 충실도 {pct(group['guidance'])}")
         lines.append(f"  애매(사람 판정 대기) {group['ambiguous_open']} · 사람 판정 재사용 {group['judged']}"
-                     f" · 덧붙인 거절 {group['appended_refusal']} · 지어낸 숫자 {group['invented_numbers']}"
+                     f" · 규칙 맞음 중 판정으로 보냄 {group['doubted']} · 덧붙인 거절 {group['appended_refusal']} · 지어낸 숫자 {group['invented_numbers']}"
                      f" · 답 잘림 {group['truncated']}")
         lines.append("  실패 위치 " + " · ".join(f"{key} {value}" for key, value in sorted(group["locations"].items())))
     return lines
