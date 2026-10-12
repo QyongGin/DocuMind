@@ -28,6 +28,7 @@ TEST_RESULTS = "results_test.sealed.jsonl"
 AMBIGUOUS = "ambiguous.jsonl"
 METRICS = "metrics.json"
 LABELS = ("맞음", "일부", "모름", "틀림", "애매", "빈 답")
+JUDGED_LABELS = ("맞음", "일부", "모름", "틀림", "빈 답")
 
 
 def judgment_key(item: dict, answer: str | None) -> str:
@@ -37,15 +38,16 @@ def judgment_key(item: dict, answer: str | None) -> str:
 
 
 def load_judgments(path: str | Path | None) -> dict[str, dict]:
-    """사람 판정 파일(JSONL: key, label, reason, at). 같은 열쇠는 뒤의 줄이 이긴다."""
+    """사람 판정 파일(JSONL: key, label, reason, by, at). 같은 열쇠는 뒤의 줄이 이긴다.
+    판정은 맞음·일부·모름·틀림, 또는 생성이 멈춘 답(한두 글자에서 끝남)이면 빈 답."""
     if not path or not Path(path).exists():
         return {}
     judged = {}
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         if line.strip():
             record = json.loads(line)
-            if record.get("label") not in LABELS[:4]:
-                raise ValueError(f"사람 판정은 맞음·일부·모름·틀림 중 하나: {record}")
+            if record.get("label") not in JUDGED_LABELS:
+                raise ValueError(f"사람 판정은 {'·'.join(JUDGED_LABELS)} 중 하나: {record}")
             judged[record["key"]] = record
     return judged
 

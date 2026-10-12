@@ -138,3 +138,16 @@ def test_score_run_refuses_other_evalset_version(tmp_path):
     write_run(tmp_path / "run", [item("ev-0001", part="test")], [])
     with pytest.raises(ValueError, match="지문"):
         metrics.score_run(path, tmp_path / "run")
+
+
+def test_judgment_can_mark_stalled_generation_as_empty(tmp_path):
+    """한두 글자에서 멈춘 답(문맥이 차서 1토큰 생성)은 사람이 '빈 답'으로 판정할 수 있다. 다른 값은 거부."""
+    key, answer = item("ev-0001"), "인"
+    judgments = tmp_path / "judgments.jsonl"
+    judgments.write_text(json.dumps({"key": metrics.judgment_key(key, answer), "label": "빈 답"}, ensure_ascii=False) + "\n",
+                         encoding="utf-8")
+    row = metrics.score_record(key, record(answer, trace(done="length")), metrics.load_judgments(judgments))
+    assert (row["label"], row["truncated"]) == ("빈 답", True)
+    judgments.write_text(json.dumps({"key": "x", "label": "애매"}, ensure_ascii=False) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        metrics.load_judgments(judgments)
