@@ -165,3 +165,14 @@ def test_isolation_and_export_index_commands(ledger, tmp_path, capsys, monkeypat
     assert (out / "gana__page__fee.txt").read_text(encoding="utf-8") == "전형료 30,000원"
     assert main(["--root", str(tmp_path), "evalset", "export-index", "--base-url", "gana.test",
                  "--index-backup", "b"]) == 2
+
+
+def test_split_command_skips_dropped_items(ledger, tmp_path, capsys):
+    build_corpus(ledger, tmp_path)
+    ledger.close()
+    path = tmp_path / "evalset.jsonl"
+    schema.save(path, [item("ev-0001"), item("ev-0002", question="버린 문항", review={"status": "버림"})])
+    assert main(["--root", str(tmp_path), "evalset", "split", str(path), "--seed", "11", "--write"]) == 0
+    assert "본 문항 1 · " in capsys.readouterr().out
+    saved = {entry["id"]: entry for entry in schema.load(path)}
+    assert saved["ev-0001"]["part"] in ("dev", "test") and saved["ev-0002"]["part"] is None

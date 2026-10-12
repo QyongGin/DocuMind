@@ -36,6 +36,14 @@ def test_schema_rejects_bad_values_and_round_trips(tmp_path):
     assert schema.fingerprint(loaded) == schema.fingerprint([dict(reversed(list(good.items()))), item("ev-0002")])
 
 
+def test_unanswerable_section_must_be_text():
+    near = unanswerable_item("ev-0001")["unanswerable"]
+    assert schema.validate(unanswerable_item("ev-0001", unanswerable={**near, "section": "Ⅱ 전형일정"})) == []
+    for bad in ("", "  ", 3):
+        assert any("unanswerable.section" in error
+                   for error in schema.validate(unanswerable_item("ev-0001", unanswerable={**near, "section": bad})))
+
+
 def test_fact_kinds():
     guided = item("ev-0001", facts=[{"name": "전형료", "values": ["30,000원"]},
                                     {"name": "접수 마감", "values": ["9. 19."], "kind": "안내"}])

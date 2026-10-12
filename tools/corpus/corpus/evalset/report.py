@@ -24,7 +24,7 @@ def _mark(ok: bool) -> str:
 
 def build(items: list[dict], ledger: Ledger, caps: dict[str, int] | None = None) -> list[str]:
     caps = caps or {}
-    live = [item for item in items if (item.get("review") or {}).get("status") != "버림"]
+    live = [item for item in items if not schema.dropped(item)]
     main = [item for item in live if item["set"] == "본"]
     easy = [item for item in live if item["set"] == "쉬운"]
     answerable = [item for item in main if item["shape"] != "답없음"]
@@ -58,8 +58,7 @@ def build(items: list[dict], ledger: Ledger, caps: dict[str, int] | None = None)
     lines.append("문서당 상한 넘음: " + (", ".join(over) if over else "없음"))
     groups = Counter(group_key(item, ledger) for item in live)
     unsplit = sorted(key for key, count in groups.items() if count > SECTION_THRESHOLD and any(
-        not (item["evidence"] and item["evidence"][0].get("section"))
-        for item in live if group_key(item, ledger) == key))
+        not schema.section_of(item) for item in live if group_key(item, ledger) == key))
     lines.append("장(section)이 빠진 큰 묶음: " + (", ".join(unsplit) if unsplit else "없음"))
 
     reasons = Counter(item.get("review_reason") or "-" for item in items)
