@@ -7,6 +7,7 @@
     실패 위치   허용 근거 문서(근거 + 허용 근거)의 후보가 핵심 사실을 모두 담았나를 단계(검색 → 최종 후보 → 문맥)마다 본다
     출처        최종 후보(=화면 출처)에 허용 근거 문서가 있나, 출처 중 몇 %가 허용 근거 문서인가
     답 잘림     Ollama 생성 종료 이유가 length
+    틀림 종류   엉뚱한근거·다른문서사실(문서에 있는 글로 잘못 답함)·지어냄(근거 글에 없는 값) — 판정 태그, 없으면 지어낸 숫자로
 
 지표(설계 결정 ②-7, ADR-0023): 정답률·일부율·과잉 거절률(답 있는 문항), 환각률(전체), 답없음 거절 정확도, 출처 정확도,
 안내 충실도. 비율마다 95% 신뢰구간(Wilson). 본·쉬운 문항, 개발셋·테스트셋을 따로 낸다.
@@ -31,6 +32,9 @@ TEST_RESULTS = "results_test.sealed.jsonl"
 AMBIGUOUS = "ambiguous.jsonl"
 METRICS = "metrics.json"
 LABELS = ("맞음", "일부", "모름", "틀림", "애매", "빈 답")
+# '틀림'의 종류(베이스라인 보고서 §3): 앞의 둘은 문서에 있는 글로 잘못 답한 것, 지어냄은 근거 글에 없는 값을 단정한 것.
+# 판정 파일의 태그 이름을 그대로 쓴다
+WRONG_KINDS = ("엉뚱한근거", "다른문서사실", "지어냄")
 JUDGED_LABELS = ("맞음", "일부", "모름", "틀림", "빈 답")
 
 
@@ -127,6 +131,15 @@ def _unit(number_with_unit: str) -> str:
     return re.sub(r"^\d+(?:\.\d+)?", "", number_with_unit)
 
 
+def wrong_kind(judged: dict | None, invented: list[str]) -> str:
+    """'틀림'의 종류. 판정에 종류 태그가 있으면 그것, 없으면(규칙이 정한 틀림 — 금지 값·답없음 문항에 숫자 단정 — 이나 태그 없는
+    판정) 답의 숫자가 모델이 받은 근거 글에 없으면 지어냄, 다 있으면 문서의 다른 사실로 답한 것으로 본다."""
+    tagged = [tag for tag in (judged or {}).get("tags") or [] if tag in WRONG_KINDS]
+    if tagged:
+        return tagged[0]
+    return "지어냄" if invented else "다른문서사실"
+
+
 def score_record(item: dict, record: dict | None, judgments: dict[str, dict]) -> dict:
     """문항 하나의 결과 행. 답을 아직 못 받았으면 status '미실행'·'실패'."""
     row = {"id": item["id"], "rev": item.get("rev", 1), "set": item["set"], "part": item.get("part"),
@@ -150,6 +163,7 @@ def score_record(item: dict, record: dict | None, judgments: dict[str, dict]) ->
             label = judged["label"]
     hits = stage_hits(item, trace) if item["shape"] != "답없음" else None
     source_any, source_share = source_accuracy(item, trace)
+    row.update(wrong_kind=wrong_kind(judged, result["invented"]) if label == "틀림" else None)
     row.update(
         status="채점", question=item["question"], answer=answer, label=label, rule_label=result["label"],
         judged=bool(judged), doubt=doubted, guidance=result["guidance"]["label"], appended_refusal=result["appended_refusal"],
@@ -202,6 +216,7 @@ def aggregate(rows: list[dict]) -> dict:
         "doubted": sum(1 for row in scored if row.get("doubt")),
         "appended_refusal": sum(1 for row in scored if row["appended_refusal"]),
         "invented_numbers": sum(1 for row in scored if row["invented"]),
+        "wrong_kinds": {kind: sum(1 for row in scored if row.get("wrong_kind") == kind) for kind in WRONG_KINDS},
         "truncated": sum(1 for row in scored if row["truncated"]),
         "locations": dict(Counter(row["location"] for row in scored if row["location"])),
     }
@@ -303,5 +318,6 @@ def summary_lines(metrics: dict) -> list[str]:
         lines.append(f"  애매(사람 판정 대기) {group['ambiguous_open']} · 사람 판정 재사용 {group['judged']}"
                      f" · 규칙 맞음 중 판정으로 보냄 {group['doubted']} · 덧붙인 거절 {group['appended_refusal']} · 지어낸 숫자 {group['invented_numbers']}"
                      f" · 답 잘림 {group['truncated']}")
+        lines.append("  틀림 종류 " + " · ".join(f"{kind} {count}" for kind, count in group.get("wrong_kinds", {}).items()))
         lines.append("  실패 위치 " + " · ".join(f"{key} {value}" for key, value in sorted(group["locations"].items())))
     return lines
