@@ -11,6 +11,7 @@
 지표(설계 결정 ②-7, ADR-0023): 정답률·일부율·과잉 거절률(답 있는 문항), 환각률(전체), 답없음 거절 정확도, 출처 정확도,
 안내 충실도. 비율마다 95% 신뢰구간(Wilson). 본·쉬운 문항, 개발셋·테스트셋을 따로 낸다.
 테스트셋은 합계만 보여 준다: 문항별 결과는 봉인 파일에만 쓰고 화면·보고에 내지 않는다(ADR-0018).
+평가셋 판을 올린 뒤 옛 실행을 새 판으로 다시 채점할 수 있다(rescore, 결과는 따로 둔 폴더에, 질문이 바뀐 문항은 뺀다).
 """
 
 import hashlib
@@ -22,7 +23,7 @@ from pathlib import Path
 
 from . import schema
 from .runner import ANSWERS, MANIFEST, read_answers
-from .scoring import contains, normalize, numbers_with_units, score
+from .scoring import contains, key_text, normalize, numbers_with_units, score
 
 RETRIEVAL_STAGES = ("vector", "bm25", "table_fact", "expanded")
 DEV_RESULTS = "results_dev.jsonl"
@@ -34,8 +35,9 @@ JUDGED_LABELS = ("맞음", "일부", "모름", "틀림", "빈 답")
 
 
 def judgment_key(item: dict, answer: str | None) -> str:
-    """사람 판정 재사용 열쇠: 문항 ID + 개정 번호 + 정규화한 답. 문항을 고치면 개정 번호가 올라 옛 판정이 붙지 않는다."""
-    digest = hashlib.sha256(normalize(answer or "").encode("utf-8")).hexdigest()[:16]
+    """사람 판정 재사용 열쇠: 문항 ID + 개정 번호 + 정규화한 답. 문항을 고치면 개정 번호가 올라 옛 판정이 붙지 않는다.
+    답은 채점 비교용 정규화가 바뀌어도 열쇠가 그대로이도록 열쇠용 글(key_text)로 줄인다."""
+    digest = hashlib.sha256(key_text(answer or "").encode("utf-8")).hexdigest()[:16]
     return f"{item['id']}@{item.get('rev', 1)}#{digest}"
 
 
@@ -132,6 +134,9 @@ def score_record(item: dict, record: dict | None, judgments: dict[str, dict]) ->
     if record is None or "error" in record:
         row["status"] = "미실행" if record is None else "실패"
         return row
+    if record.get("question") not in (None, item["question"]):
+        row["status"] = "질문 바뀜"  # 다른 판으로 다시 채점할 때: 실행 때 물은 질문이 지금 문항과 다르면 이 답으로 채점하지 않는다
+        return row
     trace = record.get("eval_trace") or {}
     answer = record.get("answer")
     result = score(item, answer, context=trace.get("prompt") or trace.get("context") or "")
@@ -182,6 +187,7 @@ def aggregate(rows: list[dict]) -> dict:
         "items": len(rows), "scored": len(scored),
         "not_run": sum(1 for row in rows if row.get("status") == "미실행"),
         "failed": sum(1 for row in rows if row.get("status") == "실패"),
+        "question_changed": sum(1 for row in rows if row.get("status") == "질문 바뀜"),
         "labels": {label: labels.get(label, 0) for label in LABELS},
         "accuracy": _rate(count(answerable, "맞음"), len(answerable)),
         "partial": _rate(count(answerable, "일부"), len(answerable)),
@@ -213,19 +219,32 @@ def breakdown(rows: list[dict], key: str) -> dict:
             for value, members in sorted(groups.items())}
 
 
-def score_run(evalset_path: str | Path, run_dir: str | Path, judgments_path: str | Path | None = None) -> dict:
-    """실행 폴더를 채점해 결과 파일과 지표를 쓴다. 돌려주는 것: 지표(테스트셋은 합계만)."""
+def score_run(evalset_path: str | Path, run_dir: str | Path, judgments_path: str | Path | None = None,
+              out_dir: str | Path | None = None, rescore: bool = False) -> dict:
+    """실행 폴더를 채점해 결과 파일과 지표를 쓴다. 돌려주는 것: 지표(테스트셋은 합계만).
+
+    rescore: 실행 때와 다른 평가셋 판으로 다시 채점한다(실행은 그대로, 문항을 고친 뒤 같은 답을 새 정답으로). 문항 ID로
+    답을 맞추고, 실행 때 물은 질문과 지금 질문이 다르면 '질문 바뀜'으로 뺀다. 결과는 실행 폴더가 아닌 out_dir에 쓴다 —
+    실행 폴더의 결과는 실행 때 판의 채점으로 남긴다."""
     run_dir = Path(run_dir)
-    items = [item for item in schema.load(evalset_path) if not schema.dropped(item)]
+    out_dir = Path(out_dir) if out_dir else run_dir
+    all_items = schema.load(evalset_path)
+    fingerprint = schema.fingerprint(all_items)
+    items = [item for item in all_items if not schema.dropped(item)]
     manifest = json.loads((run_dir / MANIFEST).read_text(encoding="utf-8"))
-    if manifest["evalset_sha256"] != schema.fingerprint(schema.load(evalset_path)):
-        raise ValueError("실행에 쓴 평가셋과 지금 평가셋 파일의 지문이 다르다 — 그 버전의 평가셋 파일로 채점한다")
+    same = manifest["evalset_sha256"] == fingerprint
+    if not same and not rescore:
+        raise ValueError("실행에 쓴 평가셋과 지금 평가셋 파일의 지문이 다르다 — 그 버전의 평가셋 파일로 채점하거나, "
+                         "새 판으로 다시 채점하려면 --rescore와 --out을 쓴다")
+    if not same and out_dir.resolve() == run_dir.resolve():
+        raise ValueError("다른 판으로 다시 채점한 결과는 실행 폴더 밖(--out)에 쓴다 — 실행 때 판의 채점 결과를 덮지 않는다")
+    out_dir.mkdir(parents=True, exist_ok=True)
     answers = read_answers(run_dir)
     judgments = load_judgments(judgments_path)
     rows = [score_record(item, answers.get(item["id"]), judgments) for item in items]
 
     def write(name, chosen):
-        (run_dir / name).write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in chosen),
+        (out_dir / name).write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in chosen),
                                     encoding="utf-8")
 
     write(DEV_RESULTS, [row for row in rows if row["part"] != "test"])
@@ -235,6 +254,8 @@ def score_run(evalset_path: str | Path, run_dir: str | Path, judgments_path: str
                       for row in rows if row.get("status") == "채점" and row["label"] == "애매"])
     metrics = {"manifest": {key: manifest.get(key) for key in ("evalset_version", "evalset_sha256", "index", "top_k",
                                                                "system_prompt_sha256", "git_commit", "runtime")},
+               "scored_with": {"evalset_version": frozen_version(evalset_path, fingerprint),
+                               "evalset_sha256": fingerprint, "same_as_run": same, "run_dir": str(run_dir)},
                "groups": {}}
     for set_name in ("본", "쉬운"):
         for part in ("dev", "test"):
@@ -244,8 +265,17 @@ def score_run(evalset_path: str | Path, run_dir: str | Path, judgments_path: str
             metrics["groups"][f"{set_name}/{part}"] = {
                 **aggregate(chosen), "by_shape": breakdown(chosen, "shape"), "by_topic": breakdown(chosen, "topic"),
                 "by_tag": breakdown(chosen, "tags")}
-    (run_dir / METRICS).write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out_dir / METRICS).write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
     return metrics
+
+
+def frozen_version(evalset_path: str | Path, fingerprint: str) -> str | None:
+    """평가셋 파일 옆 버전 고정 기록(frozen_<판>.txt) 중 지문이 같은 판. 고정하지 않은 파일이면 None."""
+    for path in sorted(Path(evalset_path).parent.glob("frozen_*.txt")):
+        fields = dict(line.split(": ", 1) for line in path.read_text(encoding="utf-8").splitlines() if ": " in line)
+        if fields.get("evalset_sha256") == fingerprint:
+            return fields.get("version")
+    return None
 
 
 def summary_lines(metrics: dict) -> list[str]:
@@ -258,8 +288,14 @@ def summary_lines(metrics: dict) -> list[str]:
         return f"{entry['rate'] * 100:.1f}% ({entry['k']}/{entry['n']}, 95% {low * 100:.0f}~{high * 100:.0f}%)"
 
     lines = []
+    scored_with = metrics.get("scored_with") or {}
+    if scored_with and not scored_with.get("same_as_run"):
+        lines.append(f"다시 채점: 실행 때 평가셋 {metrics['manifest'].get('evalset_version') or '—'}"
+                     f" → 채점한 평가셋 {scored_with.get('evalset_version') or '고정 안 됨'}"
+                     f"({scored_with['evalset_sha256'][:8]}…)")
     for name, group in metrics["groups"].items():
-        lines.append(f"[{name}] 채점 {group['scored']}/{group['items']} · 미실행 {group['not_run']} · 실패 {group['failed']}")
+        lines.append(f"[{name}] 채점 {group['scored']}/{group['items']} · 미실행 {group['not_run']} · 실패 {group['failed']}"
+                     + (f" · 질문 바뀜 {group['question_changed']}" if group.get("question_changed") else ""))
         lines.append(f"  정답률 {pct(group['accuracy'])} · 일부 {pct(group['partial'])} · 과잉 거절 {pct(group['over_refusal'])}")
         lines.append(f"  환각률 {pct(group['hallucination'])} · 답없음 거절 {pct(group['unanswerable_refusal'])}")
         lines.append(f"  출처 정확도 {pct(group['source_hit'])} · 출처 중 허용 근거 {group['source_share']}"

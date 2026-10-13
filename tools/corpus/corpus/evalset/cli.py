@@ -291,13 +291,13 @@ def cmd_run(args) -> int:
 def cmd_score_run(args) -> int:
     judgments = args.judgments or str(Path(args.file).with_name("judgments.jsonl"))
     try:
-        result = metrics.score_run(args.file, args.run_dir, judgments)
+        result = metrics.score_run(args.file, args.run_dir, judgments, out_dir=args.out, rescore=args.rescore)
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 1
     for line in metrics.summary_lines(result):
         print(line)
-    print(f"결과: {Path(args.run_dir) / metrics.METRICS} · 개발셋 문항별 {metrics.DEV_RESULTS}"
+    print(f"결과: {Path(args.out or args.run_dir) / metrics.METRICS} · 개발셋 문항별 {metrics.DEV_RESULTS}"
           f" · 테스트셋 문항별은 봉인 파일 {metrics.TEST_RESULTS}(열어 보지 않는다) · 사람 판정 대기 {metrics.AMBIGUOUS}")
     return 0
 
@@ -393,6 +393,9 @@ def add_parser(commands, default_file: Path) -> None:
     graded = with_file("score-run", "실행 채점과 지표")
     graded.add_argument("--run-dir", required=True, help="evalset run의 실행 폴더")
     graded.add_argument("--judgments", help="사람 판정 파일(기본: 평가셋 파일 옆 judgments.jsonl)")
+    graded.add_argument("--rescore", action="store_true",
+                        help="실행 때와 다른 평가셋 판으로 다시 채점(문항 ID로 맞추고 질문이 바뀐 문항은 뺀다). --out 필요")
+    graded.add_argument("--out", help="결과를 쓸 폴더(기본: 실행 폴더). 다른 판으로 다시 채점할 때는 실행 폴더 밖")
     graded.set_defaults(func=cmd_score_run)
 
     trial = with_file("score", "답 하나 판정해 보기")

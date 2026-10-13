@@ -36,8 +36,20 @@ def _money(match: re.Match) -> str:
 
 
 def normalize(text: str) -> str:
-    """비교용 글: 전각을 반각으로, '3만 원'을 '30000원'으로, '2026. 9. 8.'을 '2026년9월8일'로, 숫자 쉼표와 공백은 뺀다."""
-    text = unicodedata.normalize("NFKC", str(text)).lower()
+    """비교용 글: 전각을 반각으로, '3만 원'을 '30000원'으로, '2026. 9. 8.'을 '2026년9월8일'로, 숫자 쉼표와 공백은 뺀다.
+    굵게 표시 기호(`*`)도 뺀다 — 모델이 '**부**·**모**'처럼 낱말마다 굵게 쓰면 허용 표기 '부·모'와 글자가 어긋난다
+    (2026-10-12 베이스라인 ev-0013)."""
+    return _normalize(str(text).replace("*", ""))
+
+
+def key_text(text: str) -> str:
+    """판정 열쇠용 글. 굵게 기호를 지우기 전의 정규화 그대로라, 그 전에 만든 판정(2026-10-12 베이스라인 55건 중 28건이
+    굵게 쓴 답)의 열쇠가 바뀌지 않는다. 채점 비교에는 normalize를 쓴다."""
+    return _normalize(str(text))
+
+
+def _normalize(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text).lower()
     text = _MONEY.sub(_money, text)
     text = _FULL_DATE.sub(lambda match: f"{match.group(1)}년{int(match.group(2))}월{int(match.group(3))}일", text)
     text = _SHORT_DATE.sub(lambda match: f"{int(match.group(1))}월{int(match.group(2))}일", text)
