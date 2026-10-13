@@ -74,13 +74,15 @@ def fake_prepare(priority_answer: str | None = None):
     source = {"document_id": "11", "source": "모집요강.pdf", "page": None, "chunk_index": 0, "content": "전형료 30,000원"}
     metrics = {"context_chars": 10, "prompt_chars": 20, "prepare_elapsed": 0.0, "priority_table_fact_answer": priority_answer}
 
-    def prepare(question, top_k, system_prompt=None, eval_stages=None):
+    def prepare(question, top_k, system_prompt=None, eval_stages=None, retrieval_mode="rules"):
+        prepare.modes.append(retrieval_mode)
         if eval_stages is not None:
             eval_stages.update(final=[{"chunk_id": "11_0", "document_id": "11", "ledger_id": "gana/page/1",
                                        "chunk_index": 0, "chunk_role": "raw", "text": "전형료 30,000원"}],
                                context="[문서 1] 전형료 30,000원", prompt="PROMPT")
         return "PROMPT", [source], metrics
 
+    prepare.modes = []
     return prepare
 
 
@@ -118,3 +120,52 @@ def test_eval_trace_marks_priority_answer_without_calling_llm(monkeypatch):
     assert body["eval_trace"]["answer_path"] == "priority_table_fact"
     assert body["eval_trace"]["generation"] is None
     assert fake.calls == []
+
+
+# M2 실험용 검색 방식(retrieval_mode): 운영 기본값은 rules 그대로, rrf는 규칙 없이 순위 융합만 쓴다(가나대학 합성 데이터).
+def test_fuse_reciprocal_rank_merges_same_chunk_and_orders_by_score():
+    vector = (["벡터1", "공통"], [{"id": "v1"}, {"id": "c"}], ["v1", "c"])
+    bm25 = (["공통", "키워드1"], [{"id": "c"}, {"id": "b1"}], ["c", "b1"])
+    docs, metas, ids = main._fuse_reciprocal_rank([bm25, vector])
+    # 공통: 1/62 + 1/61, 키워드1(bm25 2위)과 벡터1(vector 1위)은 1/62·1/61
+    assert ids == ["c", "v1", "b1"]
+    assert docs == ["공통", "벡터1", "키워드1"] and metas[0] == {"id": "c"}
+    assert main._fuse_reciprocal_rank([([], [], [])]) == ([], [], [])
+
+
+def test_prepare_query_rrf_mode_skips_rule_stages(fake_retrieval, monkeypatch):
+    called = []
+    for name in ("_prioritize_query_results", "_rerank_by_query_analysis", "_focus_candidates_with_query_evidence",
+                 "_priority_table_fact_evidence_for_prompt", "_priority_query_evidence_for_prompt"):
+        original = getattr(main, name)
+        monkeypatch.setattr(main, name, lambda *args, _name=name, _original=original, **kwargs: (
+            called.append(_name), _original(*args, **kwargs))[1])
+    # 키워드 검색이 기숙사 청크(벡터 2위)를 1위로 찾으면 순위 융합에서 그 청크가 맨 앞에 온다
+    monkeypatch.setattr(main, "_lookup_bm25_raw_chunks",
+                        lambda analysis, limit: ([DOCS[1]], [dict(METAS[1])], [IDS[1]]))
+    stages: dict = {}
+    prompt, sources, metrics = main._prepare_query("가나대학 기숙사 신청 언제예요?", 5, None, stages, "rrf")
+    assert called == []
+    assert [entry["chunk_id"] for entry in stages["final"]] == ["12_3", "11_0"]
+    assert stages["focused"] == stages["expanded"]
+    assert metrics["priority_table_fact_answer"] is None and metrics["priority_query_evidence_answer"] is None
+    assert prompt and sources[0]["document_id"] == "12"
+    called.clear()
+    main._prepare_query("가나대학 기숙사 신청 언제예요?", 5, None, None)
+    assert "_prioritize_query_results" in called  # 기본값(rules)은 운영 경로 그대로
+
+
+def test_prepare_query_rejects_unknown_retrieval_mode(fake_retrieval):
+    with pytest.raises(ValueError):
+        main._prepare_query("가나대학 전형료 얼마예요?", 5, None, None, "dense")
+
+
+def test_query_passes_retrieval_mode_and_defaults_to_rules(monkeypatch):
+    monkeypatch.setattr(main, "llm", FakeLLM())
+    prepare = fake_prepare()
+    monkeypatch.setattr(main, "_prepare_query", prepare)
+    client = TestClient(main.app)
+    client.post("/query", json={"question": "가나대학 전형료 얼마예요?"})
+    client.post("/query", json={"question": "가나대학 전형료 얼마예요?", "retrieval_mode": "rrf", "include_eval_trace": True})
+    assert prepare.modes == ["rules", "rrf"]
+    assert client.post("/query", json={"question": "가나대학 전형료 얼마예요?", "retrieval_mode": "dense"}).status_code == 422

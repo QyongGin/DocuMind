@@ -23,7 +23,8 @@ from . import schema
 MANIFEST = "manifest.json"
 ANSWERS = "answers.jsonl"
 DEFAULT_TOP_K = 5  # 백엔드·프론트·AI 서버 운영 기본값(.env.example)
-FIXED = ("evalset_sha256", "index", "top_k", "system_prompt_sha256")
+FIXED = ("evalset_sha256", "index", "top_k", "system_prompt_sha256", "retrieval_mode")
+DEFAULT_RETRIEVAL_MODE = "rules"  # AI 서버 운영 경로 그대로. "rrf"는 M2 실험(규칙 없이 순위 융합)
 
 
 def sha256(text: str) -> str:
@@ -64,7 +65,8 @@ def read_answers(run_dir: Path) -> dict[str, dict]:
 
 
 def new_manifest(evalset_path: Path, items: list[dict], index: str, top_k: int, system_prompt: str | None,
-                 ai_url: str, version: str | None, repo: Path, started_at: str) -> dict:
+                 ai_url: str, version: str | None, repo: Path, started_at: str,
+                 retrieval_mode: str = DEFAULT_RETRIEVAL_MODE) -> dict:
     return {
         "evalset": str(evalset_path),
         "evalset_version": version,
@@ -73,6 +75,7 @@ def new_manifest(evalset_path: Path, items: list[dict], index: str, top_k: int, 
         "top_k": top_k,
         "system_prompt": system_prompt,  # None이면 AI 서버 기본 프롬프트(백엔드 기본값과 같음)
         "system_prompt_sha256": sha256(system_prompt or ""),
+        "retrieval_mode": retrieval_mode,
         "ai_url": ai_url,
         **git_commit(repo),
         "runtime": None,  # 첫 응답의 eval_trace.runtime(모델·온도·문맥·출력 상한)
@@ -85,17 +88,20 @@ def new_manifest(evalset_path: Path, items: list[dict], index: str, top_k: int, 
 def run(evalset_path: str | Path, run_dir: str | Path, ai_url: str, index: str, top_k: int = DEFAULT_TOP_K,
         system_prompt: str | None = None, version: str | None = None, ids: list[str] | None = None,
         limit: int | None = None, session=None, timeout: float = 600.0, repo: str | Path | None = None,
-        now=lambda: datetime.now().isoformat(timespec="seconds"), clock=time.perf_counter, log=print) -> dict:
+        now=lambda: datetime.now().isoformat(timespec="seconds"), clock=time.perf_counter, log=print,
+        retrieval_mode: str = DEFAULT_RETRIEVAL_MODE) -> dict:
     """질문을 차례로 묻는다(동시에 묻지 않음: GPU 하나, 같은 순서·같은 조건). 돌려주는 것: 물음·건너뜀·실패 수."""
     evalset_path, run_dir = Path(evalset_path), Path(run_dir)
     items = schema.load(evalset_path)
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = run_dir / MANIFEST
     fresh = new_manifest(evalset_path, items, index, top_k, system_prompt, ai_url.rstrip("/"), version,
-                         Path(repo) if repo else evalset_path.parent, now())
+                         Path(repo) if repo else evalset_path.parent, now(), retrieval_mode)
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        different = [key for key in FIXED if manifest.get(key) != fresh[key]]
+        # retrieval_mode가 없는 옛 실행 기록은 운영 경로(rules)로 돈 것이다
+        different = [key for key in FIXED
+                     if manifest.get(key, DEFAULT_RETRIEVAL_MODE if key == "retrieval_mode" else None) != fresh[key]]
         if different:
             raise ValueError(f"실행 기록과 조건이 다르다({', '.join(different)}). 새 실행 폴더를 쓴다")
     else:
@@ -111,9 +117,11 @@ def run(evalset_path: str | Path, run_dir: str | Path, ai_url: str, index: str, 
             started = clock()
             record = {"id": item["id"], "rev": item.get("rev", 1), "question": item["question"]}
             try:
-                response = session.post(f"{manifest['ai_url']}/query", timeout=timeout, json={
-                    "question": item["question"], "top_k": top_k, "system_prompt": system_prompt,
-                    "include_eval_trace": True})
+                request = {"question": item["question"], "top_k": top_k, "system_prompt": system_prompt,
+                           "include_eval_trace": True}
+                if retrieval_mode != DEFAULT_RETRIEVAL_MODE:  # 운영 경로 요청은 그대로 둔다
+                    request["retrieval_mode"] = retrieval_mode
+                response = session.post(f"{manifest['ai_url']}/query", timeout=timeout, json=request)
                 response.raise_for_status()
                 body = response.json()
                 if "eval_trace" not in body:
