@@ -13,6 +13,7 @@
     score            문항 하나에 답 하나를 규칙 기반으로 채점해 보기
     run              평가 실행: 질문을 AI 서버 /query(평가용 옵션)에 묻고 실행 폴더에 쌓기(이어서 돌리기)
     score-run        실행 채점: 정확·안내·실패 위치·출처·답 잘림과 지표(95% 신뢰구간). 테스트셋은 합계만 보인다
+    compare-runs     두 결과의 짝 비교(매크니마 검정): 지표마다 A만·B만 예인 문항 수, p, 판정. 기본은 개발셋만
 """
 
 import getpass
@@ -28,7 +29,7 @@ import requests
 
 from ..ledger import Ledger
 from ..upload import BackendClient, UploadStop
-from . import double_annotation, index_export, metrics, report, review, runner, schema, split, validation
+from . import compare, double_annotation, index_export, metrics, report, review, runner, schema, split, validation
 from .scoring import score
 
 
@@ -302,6 +303,20 @@ def cmd_score_run(args) -> int:
     return 0
 
 
+def cmd_compare_runs(args) -> int:
+    try:
+        result = compare.compare(args.file, args.a, args.b, args.part)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    for line in compare.summary_lines(result):
+        print(line)
+    if args.out:
+        Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"결과: {args.out}(결과가 갈린 문항 ID는 개발셋만)")
+    return 0
+
+
 def add_parser(commands, default_file: Path) -> None:
     evalset = commands.add_parser("evalset", help="평가셋 자동 검증·이중 라벨링·분할·휴먼 리뷰·버전 고정")
     evalset.add_argument("--today", help="날짜 고정(YYYY-MM-DD, 시험용)")
@@ -397,6 +412,14 @@ def add_parser(commands, default_file: Path) -> None:
                         help="실행 때와 다른 평가셋 판으로 다시 채점(문항 ID로 맞추고 질문이 바뀐 문항은 뺀다). --out 필요")
     graded.add_argument("--out", help="결과를 쓸 폴더(기본: 실행 폴더). 다른 판으로 다시 채점할 때는 실행 폴더 밖")
     graded.set_defaults(func=cmd_score_run)
+
+    paired = with_file("compare-runs", "두 결과의 짝 비교(같은 평가셋 판으로 채점한 결과 폴더 둘)")
+    paired.add_argument("--a", required=True, help="기준 결과 폴더(예: 베이스라인)")
+    paired.add_argument("--b", required=True, help="비교할 결과 폴더")
+    paired.add_argument("--part", choices=sorted(compare.PARTS), default="dev",
+                        help="dev(기본, 개선 전후) · all(13번 모델 비교: 개발셋+테스트셋) · test. 테스트셋은 합계만")
+    paired.add_argument("--out", help="비교 결과 JSON(결과가 갈린 개발셋 문항 ID 포함)")
+    paired.set_defaults(func=cmd_compare_runs)
 
     trial = with_file("score", "답 하나 판정해 보기")
     trial.add_argument("--id", required=True)

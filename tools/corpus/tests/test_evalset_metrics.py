@@ -120,6 +120,27 @@ def test_value_item_with_another_value_of_same_unit_goes_to_judgment(answer, sha
     assert (row["label"], row["doubt"]) == expected
 
 
+def test_wrong_answers_are_split_by_kind(tmp_path):
+    """'틀림'의 종류: 판정 태그가 있으면 그것, 규칙이 정한 틀림은 답의 숫자가 근거 글에 있으면 다른문서사실, 없으면 지어냄."""
+    key = item("ev-0001")
+    last_year = metrics.score_record(key, record("전형료는 25,000원입니다.", trace(context="2026학년도 전형료 25,000원")), {})
+    invented = metrics.score_record(key, record("전형료는 25,000원입니다.", trace(context="전형료 30,000원")), {})
+    assert (last_year["label"], last_year["wrong_kind"]) == ("틀림", "다른문서사실")  # 근거 글의 지난해 값을 댐
+    assert (invented["label"], invented["wrong_kind"]) == ("틀림", "지어냄")
+    guessed = metrics.score_record(unanswerable_item("ev-0002"), record("40명입니다.", trace(context="정원 표 없음")), {})
+    assert (guessed["label"], guessed["wrong_kind"]) == ("틀림", "지어냄")
+    answer = "휴학은 포털에서 신청합니다."  # 규칙이 못 정해 판정으로 간 답에 판정 태그가 붙은 경우
+    judged = {metrics.judgment_key(key, answer): {"key": "", "label": "틀림", "tags": ["v3 재채점", "엉뚱한근거"]}}
+    tagged = metrics.score_record(key, record(answer, trace(context="휴학 안내")), judged)
+    assert (tagged["label"], tagged["wrong_kind"]) == ("틀림", "엉뚱한근거")
+    right = metrics.score_record(key, record("전형료는 30,000원입니다.", trace(FOUND, FOUND, "전형료 30,000원")), {})
+    assert right["wrong_kind"] is None
+    result = metrics.aggregate([last_year, invented, guessed, tagged, right])
+    assert result["wrong_kinds"] == {"엉뚱한근거": 1, "다른문서사실": 1, "지어냄": 2}
+    assert "  틀림 종류 엉뚱한근거 1 · 다른문서사실 1 · 지어냄 2" in metrics.summary_lines({"groups": {"본/dev": {
+        **result, "locations": {}}}})
+
+
 def test_wilson_interval():
     assert metrics.wilson(60, 100) == pytest.approx([0.502, 0.6906], abs=1e-3)
     assert metrics.wilson(0, 30)[0] == 0 and metrics.wilson(0, 0) is None
