@@ -14,6 +14,7 @@
     run              평가 실행: 질문을 AI 서버 /query(평가용 옵션)에 묻고 실행 폴더에 쌓기(이어서 돌리기)
     score-run        실행 채점: 정확·안내·실패 위치·출처·답 잘림과 지표(95% 신뢰구간). 테스트셋은 합계만 보인다
     compare-runs     두 결과의 짝 비교(매크니마 검정): 지표마다 A만·B만 예인 문항 수, p, 판정. 기본은 개발셋만
+    regenerate       생성만 다시 돌리기(2단계 평가): 기준 실행의 프롬프트를 다른 생성 모델에 그대로 넣어 결과 폴더에 쌓기
 """
 
 import getpass
@@ -29,7 +30,7 @@ import requests
 
 from ..ledger import Ledger
 from ..upload import BackendClient, UploadStop
-from . import compare, double_annotation, index_export, metrics, report, review, runner, schema, split, validation
+from . import compare, double_annotation, index_export, metrics, regenerate, report, review, runner, schema, split, validation
 from .scoring import score
 
 
@@ -317,6 +318,18 @@ def cmd_compare_runs(args) -> int:
     return 0
 
 
+def cmd_regenerate(args) -> int:
+    try:
+        counts = regenerate.regenerate(args.from_run, args.out, args.ollama_url, args.model, args.num_ctx, args.num_predict,
+                                       args.ids.split(",") if args.ids else None, args.limit, timeout=args.timeout)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(f"생성 {counts['generated']} · 우선 경로 답 옮김 {counts['copied']} · 건너뜀(이미 받음) {counts['skipped']}"
+          f" · 실패 {counts['errors']} · 프롬프트 잘림 {counts['truncated']} → {args.out}")
+    return 0 if not counts["errors"] else 1
+
+
 def add_parser(commands, default_file: Path) -> None:
     evalset = commands.add_parser("evalset", help="평가셋 자동 검증·이중 라벨링·분할·휴먼 리뷰·버전 고정")
     evalset.add_argument("--today", help="날짜 고정(YYYY-MM-DD, 시험용)")
@@ -420,6 +433,18 @@ def add_parser(commands, default_file: Path) -> None:
                         help="dev(기본, 개선 전후) · all(13번 모델 비교: 개발셋+테스트셋) · test. 테스트셋은 합계만")
     paired.add_argument("--out", help="비교 결과 JSON(결과가 갈린 개발셋 문항 ID 포함)")
     paired.set_defaults(func=cmd_compare_runs)
+
+    again = sub.add_parser("regenerate", help="생성만 다시 돌리기(기준 실행의 프롬프트를 다른 생성 모델로)")
+    again.add_argument("--from-run", required=True, help="프롬프트를 가져올 기준 실행 폴더(예: 베이스라인)")
+    again.add_argument("--out", required=True, help="결과 폴더(같은 폴더로 다시 실행하면 이어서 돈다)")
+    again.add_argument("--ollama-url", required=True, help="Ollama 주소(예: SSH 터널 http://localhost:11435)")
+    again.add_argument("--model", required=True, help="생성 모델 Ollama 태그(예: qwen3:8b)")
+    again.add_argument("--num-ctx", type=int, required=True, help="생성 문맥 길이. 모델 비교는 프롬프트가 잘리지 않는 큰 값")
+    again.add_argument("--num-predict", type=int, help="출력 상한(기본: 기준 실행과 같게)")
+    again.add_argument("--ids", help="이 문항만(쉼표로 구분, 시험용 — 개발셋 문항으로)")
+    again.add_argument("--limit", type=int, help="앞에서부터 이만큼만(시험용)")
+    again.add_argument("--timeout", type=float, default=600.0, help="문항 하나의 제한 시간(초)")
+    again.set_defaults(func=cmd_regenerate)
 
     trial = with_file("score", "답 하나 판정해 보기")
     trial.add_argument("--id", required=True)
