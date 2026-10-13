@@ -13,6 +13,15 @@ def test_normalize_money_dates_and_commas():
     assert normalize("9. 19.(금)") == "9월19일(금)"
     assert normalize("9월 8일") == "9월8일"
     assert normalize("평균 4.6등급") == "평균4.6등급"  # 소수는 날짜로 바꾸지 않는다
+    assert normalize("**3**만 원") == "30000원"  # 굵게 기호를 먼저 지워야 금액도 맞춰진다
+
+
+def test_bold_marks_inside_value_still_match():
+    """모델마다 굵게 쓰는 자리가 달라도 같은 답은 같게 채점한다(값만 굵게, 낱말마다 굵게)."""
+    key = item("ev-0001")
+    assert score(key, "전형료는 **30,000**원입니다.")["label"] == "맞음"
+    listed = item("ev-0002", shape="목록", facts=[{"name": "보호자", "values": ["부·모"]}])
+    assert score(listed, "학생의 **부**·**모** 모두 동의해야 합니다.")["label"] == "맞음"
 
 
 def test_contains_respects_number_boundaries():

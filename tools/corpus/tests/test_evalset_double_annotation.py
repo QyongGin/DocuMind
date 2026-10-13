@@ -212,3 +212,11 @@ def test_terse_answer_agrees_when_only_guidance_is_missing():
     double_annotation.apply_answers([key], packet, [{"id": "ev-0001", "answer": "30,000원입니다"}], "m", "r", TODAY)
     second = key["second_annotation"]
     assert (second["verdict"], second["label"], second["guidance"]) == ("일치", "맞음", "부족")
+
+
+def test_double_annotation_scoring_ignores_bold_marks():
+    """이중 라벨링 채점도 실행 채점과 같은 정규화를 쓴다: 굵게 쓴 값은 정답과 일치."""
+    key = checked(item("ev-0001"))
+    packet = double_annotation.Packet("p001", ("gana/page/fee",), [{"id": "ev-0001", "question": "q"}])
+    double_annotation.apply_answers([key], packet, [{"id": "ev-0001", "answer": "전형료는 **30,000**원"}], "m", "r", TODAY)
+    assert key["second_annotation"]["verdict"] == "일치"

@@ -1,5 +1,6 @@
 """실행 채점과 지표(M1 11번): 실패 위치, 출처 정확도, 답 잘림, 사람 판정 재사용, 신뢰구간, 테스트셋 봉인."""
 
+import hashlib
 import json
 
 import pytest
@@ -86,6 +87,13 @@ def test_human_judgment_is_reused_only_for_same_revision_and_answer(tmp_path):
     assert spaced["judged"]  # 띄어쓰기만 다른 답은 같은 답
 
 
+def test_judgment_key_keeps_bold_marks():
+    """판정 열쇠는 채점 정규화가 굵게 기호를 지우게 된 뒤에도 그 전과 같다(옛 판정이 그대로 붙는다)."""
+    key = item("ev-0001")
+    assert metrics.judgment_key(key, "**30,000원**") == "ev-0001@1#" + hashlib.sha256("**30000원**".encode()).hexdigest()[:16]
+    assert metrics.judgment_key(key, "**30,000원**") != metrics.judgment_key(key, "30,000원")
+
+
 def test_rule_correct_answer_from_priority_path_goes_to_judgment():
     """모델을 거치지 않은 우선 경로 답은 규칙이 맞음이어도 판정으로 보낸다(ADR-0028). 판정이 있으면 그 판정을 쓴다."""
     listed = "표 근거 기준 답변입니다.\n- 면접고사료: 20,000원\n- 전형료: 30,000원"
@@ -164,6 +172,44 @@ def test_score_run_refuses_other_evalset_version(tmp_path):
     write_run(tmp_path / "run", [item("ev-0001", part="test")], [])
     with pytest.raises(ValueError, match="지문"):
         metrics.score_run(path, tmp_path / "run")
+
+
+def test_rescore_with_new_version_matches_by_id_and_skips_changed_questions(tmp_path):
+    """평가셋 판을 올린 뒤 옛 실행을 새 판으로 다시 채점: 고친 정답으로 채점하고, 질문이 바뀐 문항은 빼고,
+    결과는 따로 둔 폴더에 쓰고, 어느 판으로 채점했는지 남긴다."""
+    old_items = [item("ev-0001", part="dev"), item("ev-0002", question="가나대 원서 접수비 얼마예요?", part="dev")]
+    answers = [{**record("전형료는 삼만 원입니다.", trace(FOUND, FOUND, "전형료 30,000원")), "id": entry["id"],
+                "question": entry["question"]} for entry in old_items]
+    write_run(tmp_path / "run", old_items, answers)
+    new_items = [item("ev-0001", rev=2, part="dev", facts=[{"name": "전형료", "values": ["30,000원", "3만 원", "삼만 원"]}]),
+                 item("ev-0002", question="가나대 원서 낼 때 내는 돈 얼마예요?", part="dev")]
+    path = tmp_path / "evalset.jsonl"
+    schema.save(path, new_items)
+    (tmp_path / "frozen_v3.txt").write_text(f"version: v3\nevalset_sha256: {schema.fingerprint(new_items)}\n",
+                                            encoding="utf-8")
+    with pytest.raises(ValueError, match="지문"):
+        metrics.score_run(path, tmp_path / "run")
+    with pytest.raises(ValueError, match="--out"):
+        metrics.score_run(path, tmp_path / "run", rescore=True)
+
+    result = metrics.score_run(path, tmp_path / "run", out_dir=tmp_path / "v3", rescore=True)
+    rows = {row["id"]: row for row in map(json.loads, (tmp_path / "v3" / metrics.DEV_RESULTS).read_text().splitlines())}
+    assert (rows["ev-0001"]["label"], rows["ev-0001"]["rev"]) == ("맞음", 2)  # 고친 정답(허용 표기 '삼만 원')으로 채점
+    assert rows["ev-0002"]["status"] == "질문 바뀜" and "label" not in rows["ev-0002"]
+    group = result["groups"]["본/dev"]
+    assert (group["scored"], group["question_changed"], group["accuracy"]["n"]) == (1, 1, 1)
+    assert result["scored_with"] == {"evalset_version": "v3", "evalset_sha256": schema.fingerprint(new_items),
+                                     "same_as_run": False, "run_dir": str(tmp_path / "run")}
+    assert result["manifest"]["evalset_version"] == "v2"  # 실행 때 판은 그대로 남긴다
+    assert not (tmp_path / "run" / metrics.METRICS).exists()  # 실행 폴더는 건드리지 않는다
+    assert "질문 바뀜 1" in "\n".join(metrics.summary_lines(result))
+
+
+def test_frozen_version_is_none_for_unfrozen_file(tmp_path):
+    path = tmp_path / "evalset.jsonl"
+    schema.save(path, [item("ev-0001")])
+    (tmp_path / "frozen_v2.txt").write_text("version: v2\nevalset_sha256: 다른지문\n", encoding="utf-8")
+    assert metrics.frozen_version(path, schema.fingerprint([item("ev-0001")])) is None
 
 
 def test_judgment_can_mark_stalled_generation_as_empty(tmp_path):
