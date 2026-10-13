@@ -22,7 +22,7 @@ PARTS = {"dev": ("dev",), "test": ("test",), "all": ("dev", "test")}
 # (이름, 문항 묶음, 문항별 '예', 낮을수록 좋은가)
 METRIC_RULES = (
     ("정답률", lambda row: row["shape"] != "답없음", lambda row: row["label"] == "맞음", False),
-    ("환각률", lambda row: True, lambda row: row["label"] == "틀림", True),
+    ("오답률", lambda row: True, lambda row: row["label"] == "틀림", True),
     ("과잉 거절률", lambda row: row["shape"] != "답없음", lambda row: row["label"] == "모름", True),
     ("출처 정확도", lambda row: row["shape"] != "답없음", lambda row: bool(row.get("source_any")), False),
     ("답없음 거절", lambda row: row["shape"] == "답없음", lambda row: row["label"] == "맞음", False),

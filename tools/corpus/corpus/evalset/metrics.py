@@ -9,7 +9,7 @@
     답 잘림     Ollama 생성 종료 이유가 length
     틀림 종류   엉뚱한근거·다른문서사실(문서에 있는 글로 잘못 답함)·지어냄(근거 글에 없는 값) — 판정 태그, 없으면 지어낸 숫자로
 
-지표(설계 결정 ②-7, ADR-0023): 정답률·일부율·과잉 거절률(답 있는 문항), 환각률(전체), 답없음 거절 정확도, 출처 정확도,
+지표(설계 결정 ②-7, ADR-0023): 정답률·일부율·과잉 거절률(답 있는 문항), 오답률(전체, 칸 이름 hallucination), 답없음 거절 정확도, 출처 정확도,
 안내 충실도. 비율마다 95% 신뢰구간(Wilson). 본·쉬운 문항, 개발셋·테스트셋을 따로 낸다.
 테스트셋은 합계만 보여 준다: 문항별 결과는 봉인 파일에만 쓰고 화면·보고에 내지 않는다(ADR-0018).
 평가셋 판을 올린 뒤 옛 실행을 새 판으로 다시 채점할 수 있다(rescore, 결과는 따로 둔 폴더에, 질문이 바뀐 문항은 뺀다).
@@ -312,7 +312,7 @@ def summary_lines(metrics: dict) -> list[str]:
         lines.append(f"[{name}] 채점 {group['scored']}/{group['items']} · 미실행 {group['not_run']} · 실패 {group['failed']}"
                      + (f" · 질문 바뀜 {group['question_changed']}" if group.get("question_changed") else ""))
         lines.append(f"  정답률 {pct(group['accuracy'])} · 일부 {pct(group['partial'])} · 과잉 거절 {pct(group['over_refusal'])}")
-        lines.append(f"  환각률 {pct(group['hallucination'])} · 답없음 거절 {pct(group['unanswerable_refusal'])}")
+        lines.append(f"  오답률 {pct(group['hallucination'])} · 답없음 거절 {pct(group['unanswerable_refusal'])}")
         lines.append(f"  출처 정확도 {pct(group['source_hit'])} · 출처 중 허용 근거 {group['source_share']}"
                      f" · 안내 충실도 {pct(group['guidance'])}")
         lines.append(f"  애매(사람 판정 대기) {group['ambiguous_open']} · 사람 판정 재사용 {group['judged']}"

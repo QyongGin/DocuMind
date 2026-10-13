@@ -74,9 +74,9 @@ def test_hallucination_lower_is_better(tmp_path, evalset_path):
     worse = answers | {f"ev-00{number:02d}": WRONG for number in range(1, 7)}
     result = compare.compare(evalset_path, scored_run(tmp_path, "a", evalset_path, answers),
                              scored_run(tmp_path, "b", evalset_path, worse))
-    hallucination = result["sets"]["본"]["환각률"]
+    hallucination = result["sets"]["본"]["오답률"]
     assert (hallucination["only_b"], hallucination["lower_better"]) == (6, True)
-    assert "환각률(낮을수록 좋음): A 0.0% (0/9) · B 66.7% (6/9) · A만 0 · B만 6 · p 0.0312 · 의미 있는 차이 → A가 나음" \
+    assert "오답률(낮을수록 좋음): A 0.0% (0/9) · B 66.7% (6/9) · A만 0 · B만 6 · p 0.0312 · 의미 있는 차이 → A가 나음" \
         in "\n".join(compare.summary_lines(result))
 
 
