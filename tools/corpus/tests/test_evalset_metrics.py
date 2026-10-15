@@ -157,6 +157,8 @@ def test_aggregate_rates():
     assert (result["accuracy"]["k"], result["accuracy"]["n"]) == (1, 3)
     assert (result["over_refusal"]["k"], result["hallucination"]["k"], result["hallucination"]["n"]) == (1, 1, 4)
     assert result["unanswerable_refusal"]["k"] == 1 and result["locations"]["검색 실패"] == 2
+    shown = metrics.summary_lines({"groups": {"본/dev": result}})
+    assert any(line.startswith("  오답률 25.0% (1/4,") for line in shown)  # 틀린 답 전체(예전 이름 환각률)
 
 
 def write_run(run_dir, evalset_items, answers):

@@ -3,7 +3,11 @@
 # 맥북 실행기(evalset run)는 SSH 터널로 부른다. 절차: docs/development/local-gpu/평가-실행-절차.md
 # 사용: docker compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.eval.yml --env-file .env up -d --build
 # 평가가 끝나면 이 파일 없이 다시 up 해 포트를 닫는다.
+# 13번 모델 비교의 '생성만 다시 돌리기'(evalset regenerate)는 Ollama를 직접 부르므로 Ollama도 같은 방식으로 연다.
 services:
   ai-server:
     ports:
       - "127.0.0.1:${EVAL_AI_PORT:-18000}:8000"
+  ollama:
+    ports:
+      - "127.0.0.1:${EVAL_OLLAMA_PORT:-11435}:11434"
