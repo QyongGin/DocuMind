@@ -18,6 +18,7 @@ import math
 import time
 from dataclasses import dataclass, replace
 from threading import Lock
+from typing import Literal
 
 from rag_contract_builders import (
     build_parsed_block,
@@ -2665,6 +2666,8 @@ class QueryRequest(BaseModel):
     # 평가용(M1 11번 채점기): 이 답을 만든 바로 그 실행의 단계별 후보(글 전체)·프롬프트·생성 종료 이유를 함께 돌려준다.
     # 운영 경로(Spring Boot)는 보내지 않으므로 응답이 바뀌지 않는다. /query에만 있다.
     include_eval_trace: bool = False
+    # 평가 실험용(M2): 검색 순서 정하기 방식. 운영 경로는 보내지 않으므로 기본값 rules(지금 운영 그대로)다.
+    retrieval_mode: Literal["rules", "rrf"] = "rules"
 
 
 class RagTraceRequest(BaseModel):
@@ -6561,6 +6564,38 @@ def _trace_query_retrieval(
     }
 
 
+RETRIEVAL_MODES = ("rules", "rrf")
+RRF_K = 60  # Cormack 외(2009) 순위 융합 상수
+
+
+def _fuse_reciprocal_rank(
+    result_lists: list[tuple[list[str], list[dict], list[str]]],
+    k: int = RRF_K,
+) -> tuple[list[str], list[dict], list[str]]:
+    """여러 검색 결과를 순위 융합(Reciprocal Rank Fusion)으로 한 줄로 세운다. 같은 청크 id는 점수를 더한다.
+
+    점수 = Σ 1 / (k + 순위). 점수가 같으면 먼저 넣은 결과 목록·순위가 앞선다.
+    """
+    scores: dict[str, float] = {}
+    first_seen: dict[str, tuple[int, str, dict]] = {}
+    for docs, metadatas, ids in result_lists:
+        seen_in_list: set[str] = set()
+        for rank, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids)):
+            key = str(chunk_id)
+            if key in seen_in_list:
+                continue
+            seen_in_list.add(key)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank + 1)
+            if key not in first_seen:
+                first_seen[key] = (len(first_seen), doc, meta)
+    order = sorted(scores, key=lambda key: (-scores[key], first_seen[key][0]))
+    return (
+        [first_seen[key][1] for key in order],
+        [first_seen[key][2] for key in order],
+        order,
+    )
+
+
 def _record_eval_stage(stages: dict | None, name: str, docs: list, metadatas: list, ids: list) -> None:
     """평가용 기록: 한 단계의 후보를 글 전체와 함께 남긴다. stages가 None(운영 경로)이면 아무것도 하지 않는다."""
     if stages is None:
@@ -6583,12 +6618,18 @@ def _prepare_query(
     top_k: int,
     system_prompt: str | None = None,
     eval_stages: dict | None = None,
+    retrieval_mode: str = "rules",
 ) -> tuple[str | None, list, dict]:
     """
     질문 임베딩 → ChromaDB 검색 → 프롬프트 + 출처 조합.
     문서가 없으면 prompt를 None으로 반환한다. 호출자가 빈 응답 처리를 담당한다.
     eval_stages(평가용 dict)를 주면 단계별 후보·문맥·프롬프트를 그 안에 기록한다. 검색·답은 주지 않을 때와 같다.
+    retrieval_mode(평가 실험용, M2): "rules"는 운영 경로 그대로. "rrf"는 표 사실·BM25·벡터 결과를 순위 융합만 해서
+    상위 top_k를 쓰고, 사람이 만든 우선순위·재정렬·근거 좁히기와 우선 경로 답(모델을 거치지 않는 답)을 쓰지 않는다.
     """
+    if retrieval_mode not in RETRIEVAL_MODES:
+        raise ValueError(f"retrieval_mode must be one of {RETRIEVAL_MODES}")
+    rules = retrieval_mode == "rules"
     prepare_start = time.perf_counter()
     analysis = _analyze_query(question)
     embedding_start = time.perf_counter()
@@ -6616,22 +6657,32 @@ def _prepare_query(
     _record_eval_stage(eval_stages, "vector", docs, metadatas, ids)
     _record_eval_stage(eval_stages, "bm25", bm25_docs, bm25_metadatas, bm25_ids)
     _record_eval_stage(eval_stages, "table_fact", lexical_docs, lexical_metadatas, lexical_ids)
-    if bm25_docs:
-        docs = bm25_docs + docs
-        metadatas = bm25_metadatas + metadatas
-        ids = bm25_ids + ids
-    if lexical_docs:
-        docs = lexical_docs + docs
-        metadatas = lexical_metadatas + metadatas
-        ids = lexical_ids + ids
+    if rules:
+        if bm25_docs:
+            docs = bm25_docs + docs
+            metadatas = bm25_metadatas + metadatas
+            ids = bm25_ids + ids
+        if lexical_docs:
+            docs = lexical_docs + docs
+            metadatas = lexical_metadatas + metadatas
+            ids = lexical_ids + ids
+    else:
+        docs, metadatas, ids = _fuse_reciprocal_rank([
+            (lexical_docs, lexical_metadatas, lexical_ids),
+            (bm25_docs, bm25_metadatas, bm25_ids),
+            (docs, metadatas, ids),
+        ])
     docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
     metadatas = _attach_runtime_table_facts(question, docs, metadatas, analysis)
     _record_eval_stage(eval_stages, "expanded", docs, metadatas, ids)
-    docs, metadatas, ids = _prioritize_query_results(docs, metadatas, ids, question)
+    if rules:
+        docs, metadatas, ids = _prioritize_query_results(docs, metadatas, ids, question)
     _record_eval_stage(eval_stages, "prioritized", docs, metadatas, ids)
-    docs, metadatas, ids = _rerank_by_query_analysis(docs, metadatas, ids, question, analysis)
+    if rules:
+        docs, metadatas, ids = _rerank_by_query_analysis(docs, metadatas, ids, question, analysis)
     _record_eval_stage(eval_stages, "reranked", docs, metadatas, ids)
-    docs, metadatas, ids = _focus_candidates_with_query_evidence(docs, metadatas, ids, analysis)
+    if rules:
+        docs, metadatas, ids = _focus_candidates_with_query_evidence(docs, metadatas, ids, analysis)
     _record_eval_stage(eval_stages, "focused", docs, metadatas, ids)
     docs = docs[:top_k]
     metadatas = metadatas[:top_k]
@@ -6680,13 +6731,13 @@ def _prepare_query(
         docs,
         metadatas,
         ids,
-    )
+    ) if rules else None
     priority_query_evidence = _priority_query_evidence_for_prompt(
         docs,
         metadatas,
         ids,
         analysis,
-    )
+    ) if rules else None
     context = _build_context(docs, metadatas, ids, analysis)
     # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
     prompt = _build_rag_prompt(
@@ -6991,6 +7042,7 @@ async def query_document(request: QueryRequest):
         request.top_k,
         request.system_prompt,
         eval_stages,
+        request.retrieval_mode,
     )
 
     if prompt is None:

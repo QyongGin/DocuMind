@@ -282,7 +282,7 @@ def cmd_run(args) -> int:
     try:
         summary = runner.run(args.file, args.out, args.ai_url, args.index, args.top_k, system_prompt, args.version,
                              args.ids.split(",") if args.ids else None, args.limit, timeout=args.timeout,
-                             repo=Path(__file__).resolve().parents[4])
+                             repo=Path(__file__).resolve().parents[4], retrieval_mode=args.retrieval_mode)
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 1
@@ -416,6 +416,8 @@ def add_parser(commands, default_file: Path) -> None:
     asked.add_argument("--ids", help="이 문항만(쉼표로 구분, 시험용)")
     asked.add_argument("--limit", type=int, help="앞에서부터 이만큼만(시험용)")
     asked.add_argument("--timeout", type=float, default=600.0, help="질문 하나의 제한 시간(초)")
+    asked.add_argument("--retrieval-mode", choices=("rules", "rrf"), default=runner.DEFAULT_RETRIEVAL_MODE,
+                       help="검색 순서 정하기(기본 rules = 운영 그대로, rrf = M2 실험: 규칙 없이 순위 융합)")
     asked.set_defaults(func=cmd_run)
 
     graded = with_file("score-run", "실행 채점과 지표")
