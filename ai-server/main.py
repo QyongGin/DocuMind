@@ -2830,7 +2830,7 @@ MONEY_VALUE_PATTERN = re.compile(r"\d[\d,]*(?:\.\d+)?\s*(?:(?:천|만|억|조)\s
 
 @dataclass(frozen=True)
 class QueryAnalysis:
-    """검색 재정렬에 사용할 질문 분석 결과다."""
+    """BM25 검색어·표 사실 고르기·근거 발췌에 쓰는 질문 분석 결과다."""
     tokens: list[str]
     subject_terms: set[str]
     intent: str | None
@@ -3313,7 +3313,7 @@ def _is_non_subject_query_token(token: str, intent_terms: set[str]) -> bool:
 
 
 def _analyze_query(question: str) -> QueryAnalysis:
-    """검색 후보 재정렬에 사용할 subject와 intent를 분석한다."""
+    """BM25 검색어·표 사실 고르기·근거 발췌에 쓸 subject와 intent를 분석한다."""
     tokens = _tokenize_sparse_search(question)
     intent = _detect_query_intent(question, tokens)
     intent_terms = set().union(*INTENT_QUERY_TERMS.values())
@@ -6168,7 +6168,7 @@ async def list_document_chunks(document_id: int):
 async def debug_rag_trace(request: RagTraceRequest):
     """
     답변 생성 없이 RAG 검색 파이프라인을 단계별로 추적한다.
-    vector, BM25, table_fact, rerank 후보를 JSON으로 반환해 검색 품질 디버깅에 사용한다.
+    벡터·BM25·표 사실 후보와 순위 융합 뒤 후보를 JSON으로 반환해 검색 품질 디버깅에 사용한다.
     """
     return await asyncio.to_thread(
         _trace_query_retrieval,
