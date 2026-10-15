@@ -24,8 +24,10 @@ MANIFEST = "manifest.json"
 ANSWERS = "answers.jsonl"
 DEFAULT_TOP_K = 8  # 백엔드·프론트·AI 서버 운영 기본값(.env.example, M2 2단계 2026-10-15)
 FIXED = ("evalset_sha256", "index", "top_k", "system_prompt_sha256", "retrieval_mode")
-DEFAULT_RETRIEVAL_MODE = "rrf"  # AI 서버 운영 기본값(ADR-0032: 규칙 없이 순위 융합). "rules"는 되돌리기용 규칙 경로
-LEGACY_RETRIEVAL_MODE = "rules"  # retrieval_mode 칸이 없는 옛 실행 기록(#168 전)은 규칙 경로로 돌았다
+# AI 서버의 검색 순서는 순위 융합 하나다(ADR-0032, 규칙 경로는 #169에서 지움). 실행 기록에는 계속 남겨,
+# 규칙 경로로 돈 옛 실행 폴더(값이 rules이거나 칸이 없는 #168 전 기록)에 지금 답을 이어 붙이지 않게 한다.
+RETRIEVAL_MODE = "rrf"
+LEGACY_RETRIEVAL_MODE = "rules"
 
 
 def sha256(text: str) -> str:
@@ -66,8 +68,7 @@ def read_answers(run_dir: Path) -> dict[str, dict]:
 
 
 def new_manifest(evalset_path: Path, items: list[dict], index: str, top_k: int, system_prompt: str | None,
-                 ai_url: str, version: str | None, repo: Path, started_at: str,
-                 retrieval_mode: str = DEFAULT_RETRIEVAL_MODE) -> dict:
+                 ai_url: str, version: str | None, repo: Path, started_at: str) -> dict:
     return {
         "evalset": str(evalset_path),
         "evalset_version": version,
@@ -76,7 +77,7 @@ def new_manifest(evalset_path: Path, items: list[dict], index: str, top_k: int, 
         "top_k": top_k,
         "system_prompt": system_prompt,  # None이면 AI 서버 기본 프롬프트(백엔드 기본값과 같음)
         "system_prompt_sha256": sha256(system_prompt or ""),
-        "retrieval_mode": retrieval_mode,
+        "retrieval_mode": RETRIEVAL_MODE,
         "ai_url": ai_url,
         **git_commit(repo),
         "runtime": None,  # 첫 응답의 eval_trace.runtime(모델·온도·문맥·출력 상한)
@@ -89,15 +90,14 @@ def new_manifest(evalset_path: Path, items: list[dict], index: str, top_k: int, 
 def run(evalset_path: str | Path, run_dir: str | Path, ai_url: str, index: str, top_k: int = DEFAULT_TOP_K,
         system_prompt: str | None = None, version: str | None = None, ids: list[str] | None = None,
         limit: int | None = None, session=None, timeout: float = 600.0, repo: str | Path | None = None,
-        now=lambda: datetime.now().isoformat(timespec="seconds"), clock=time.perf_counter, log=print,
-        retrieval_mode: str = DEFAULT_RETRIEVAL_MODE) -> dict:
+        now=lambda: datetime.now().isoformat(timespec="seconds"), clock=time.perf_counter, log=print) -> dict:
     """질문을 차례로 묻는다(동시에 묻지 않음: GPU 하나, 같은 순서·같은 조건). 돌려주는 것: 물음·건너뜀·실패 수."""
     evalset_path, run_dir = Path(evalset_path), Path(run_dir)
     items = schema.load(evalset_path)
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = run_dir / MANIFEST
     fresh = new_manifest(evalset_path, items, index, top_k, system_prompt, ai_url.rstrip("/"), version,
-                         Path(repo) if repo else evalset_path.parent, now(), retrieval_mode)
+                         Path(repo) if repo else evalset_path.parent, now())
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         # retrieval_mode가 없는 옛 실행 기록은 규칙 경로(rules)로 돈 것이다
@@ -118,9 +118,8 @@ def run(evalset_path: str | Path, run_dir: str | Path, ai_url: str, index: str, 
             started = clock()
             record = {"id": item["id"], "rev": item.get("rev", 1), "question": item["question"]}
             try:
-                # 검색 방식은 늘 적어 보낸다. 서버 기본값이 바뀌어도 실행 기록과 실제 검색 방식이 어긋나지 않게
                 request = {"question": item["question"], "top_k": top_k, "system_prompt": system_prompt,
-                           "include_eval_trace": True, "retrieval_mode": retrieval_mode}
+                           "include_eval_trace": True}
                 response = session.post(f"{manifest['ai_url']}/query", timeout=timeout, json=request)
                 response.raise_for_status()
                 body = response.json()

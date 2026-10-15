@@ -21,12 +21,15 @@ METAS = [
     {"document_id": "12", "ledger_id": "gana/page/2", "source": "생활관.html", "chunk_index": 3},
 ]
 IDS = ["11_0", "12_3"]
-STAGES = ("vector", "bm25", "table_fact", "expanded", "prioritized", "reranked", "focused", "final")
+STAGES = ("vector", "bm25", "table_fact", "expanded", "final")
+# 픽스처가 바꾸기 전의 실제 함수(검색기 후보 → 목록). 디버그 추적과 운영 질의가 같은 후보를 받는지 볼 때 쓴다.
+LOOKUP_BM25 = main._lookup_bm25_raw_chunks
+LOOKUP_TABLE_FACTS = main._lookup_lexical_table_facts
 
 
 @pytest.fixture
 def fake_retrieval(monkeypatch):
-    """임베딩·Chroma·BM25·표 사실 조회만 가짜로 바꾸고, 그 뒤 단계(펼치기·우선순위·재정렬·근거 집중·문맥)는 실제 코드를 탄다."""
+    """임베딩·Chroma·BM25·표 사실 조회만 가짜로 바꾸고, 그 뒤 단계(순위 융합·펼치기·문맥)는 실제 코드를 탄다."""
     monkeypatch.setattr(main, "_embed_texts", lambda texts: ([[0.1, 0.2]], {}))
     monkeypatch.setattr(
         main,
@@ -70,19 +73,17 @@ class FakeLLM:
         return SimpleNamespace(generations=[[SimpleNamespace(text=self.text, generation_info=info)]])
 
 
-def fake_prepare(priority_answer: str | None = None):
+def fake_prepare():
     source = {"document_id": "11", "source": "모집요강.pdf", "page": None, "chunk_index": 0, "content": "전형료 30,000원"}
-    metrics = {"context_chars": 10, "prompt_chars": 20, "prepare_elapsed": 0.0, "priority_table_fact_answer": priority_answer}
+    metrics = {"context_chars": 10, "prompt_chars": 20, "prepare_elapsed": 0.0}
 
-    def prepare(question, top_k, system_prompt=None, eval_stages=None, retrieval_mode="rrf"):
-        prepare.modes.append(retrieval_mode)
+    def prepare(question, top_k, system_prompt=None, eval_stages=None):
         if eval_stages is not None:
             eval_stages.update(final=[{"chunk_id": "11_0", "document_id": "11", "ledger_id": "gana/page/1",
                                        "chunk_index": 0, "chunk_role": "raw", "text": "전형료 30,000원"}],
                                context="[문서 1] 전형료 30,000원", prompt="PROMPT")
         return "PROMPT", [source], metrics
 
-    prepare.modes = []
     return prepare
 
 
@@ -111,19 +112,7 @@ def test_query_returns_eval_trace_with_generation_info(monkeypatch):
     assert fake.calls == ["agenerate"]
 
 
-def test_eval_trace_marks_priority_answer_without_calling_llm(monkeypatch):
-    fake = FakeLLM()
-    monkeypatch.setattr(main, "llm", fake)
-    monkeypatch.setattr(main, "_prepare_query", fake_prepare(priority_answer="전형료는 30,000원입니다."))
-    body = TestClient(main.app).post("/query", json={"question": "가나대학 전형료 얼마예요?",
-                                                       "include_eval_trace": True}).json()
-    assert body["eval_trace"]["answer_path"] == "priority_table_fact"
-    assert body["eval_trace"]["generation"] is None
-    assert fake.calls == []
-
-
-# 검색 방식(retrieval_mode, ADR-0032): 기본값은 서버 설정 AI_RETRIEVAL_MODE(기본 rrf = 규칙 없이 순위 융합),
-# rules는 되돌리기용 규칙 경로다(가나대학 합성 데이터).
+# 검색 순서(ADR-0032): 표 사실·BM25·벡터 결과를 순위 융합만 해서 세운다. 사람이 만든 규칙 경로는 #169에서 지웠다(가나대학 합성 데이터).
 def test_fuse_reciprocal_rank_merges_same_chunk_and_orders_by_score():
     vector = (["벡터1", "공통"], [{"id": "v1"}, {"id": "c"}], ["v1", "c"])
     bm25 = (["공통", "키워드1"], [{"id": "c"}, {"id": "b1"}], ["c", "b1"])
@@ -134,53 +123,45 @@ def test_fuse_reciprocal_rank_merges_same_chunk_and_orders_by_score():
     assert main._fuse_reciprocal_rank([([], [], [])]) == ([], [], [])
 
 
-def test_prepare_query_rrf_mode_skips_rule_stages(fake_retrieval, monkeypatch):
-    called = []
-    for name in ("_prioritize_query_results", "_rerank_by_query_analysis", "_focus_candidates_with_query_evidence",
-                 "_priority_table_fact_evidence_for_prompt", "_priority_query_evidence_for_prompt"):
-        original = getattr(main, name)
-        monkeypatch.setattr(main, name, lambda *args, _name=name, _original=original, **kwargs: (
-            called.append(_name), _original(*args, **kwargs))[1])
+def test_prepare_query_orders_candidates_by_rank_fusion(fake_retrieval, monkeypatch):
     # 키워드 검색이 기숙사 청크(벡터 2위)를 1위로 찾으면 순위 융합에서 그 청크가 맨 앞에 온다
     monkeypatch.setattr(main, "_lookup_bm25_raw_chunks",
                         lambda analysis, limit: ([DOCS[1]], [dict(METAS[1])], [IDS[1]]))
     stages: dict = {}
-    prompt, sources, metrics = main._prepare_query("가나대학 기숙사 신청 언제예요?", 5, None, stages, "rrf")
-    assert called == []
+    prompt, sources, _ = main._prepare_query("가나대학 기숙사 신청 언제예요?", 5, None, stages)
     assert [entry["chunk_id"] for entry in stages["final"]] == ["12_3", "11_0"]
-    assert stages["focused"] == stages["expanded"]
-    assert metrics["priority_table_fact_answer"] is None and metrics["priority_query_evidence_answer"] is None
+    assert set(stages) == set(STAGES) | {"context", "prompt"}
     assert prompt and sources[0]["document_id"] == "12"
-    called.clear()
-    main._prepare_query("가나대학 기숙사 신청 언제예요?", 5, None, None)
-    assert called == []  # 기본값(rrf)도 규칙을 거치지 않는다
-    main._prepare_query("가나대학 기숙사 신청 언제예요?", 5, None, None, "rules")
-    assert "_prioritize_query_results" in called  # 되돌리기용 규칙 경로
+    assert "[우선 표 근거 사용 규칙]" not in prompt and "[우선 질의 근거 사용 규칙]" not in prompt
 
 
-def test_prepare_query_rejects_unknown_retrieval_mode(fake_retrieval):
-    with pytest.raises(ValueError):
-        main._prepare_query("가나대학 전형료 얼마예요?", 5, None, None, "dense")
+def test_rag_trace_follows_the_same_order_and_prompt_as_query(fake_retrieval, monkeypatch):
+    # 디버그 추적(/debug/rag-trace)은 운영 질의와 같은 후보·순서·프롬프트를 보여 줘야 원인을 추적할 수 있다
+    monkeypatch.setattr(main, "_lookup_bm25_raw_chunks", LOOKUP_BM25)
+    monkeypatch.setattr(main, "_lookup_lexical_table_facts", LOOKUP_TABLE_FACTS)
+    monkeypatch.setattr(main, "_lookup_bm25_raw_chunk_candidates", lambda analysis, limit=5: [
+        {"rank": 1, "bm25_score": 3.2, "chunk_id": IDS[1], "document": DOCS[1], "metadata": dict(METAS[1])}])
+    monkeypatch.setattr(main, "_lookup_lexical_table_fact_candidates", lambda question, limit=5: [])
+    question = "가나대학 기숙사 신청 언제예요?"
+    stages: dict = {}
+    prompt, _, _ = main._prepare_query(question, 1, None, stages)
+    trace = main._trace_query_retrieval(question, 1, None, False, 0)
+
+    final = trace["stages"]["final_candidates"]
+    assert [entry["chunk_id"] for entry in final] == [entry["chunk_id"] for entry in stages["expanded"]]
+    assert [entry["chunk_id"] for entry in final if entry["selected_for_prompt"]] == ["12_3"]
+    assert final[0]["retrieval"]["retrieval_methods"] == ["vector", "bm25"]
+    assert trace["final_context"] == stages["context"]
+    assert trace["final_prompt_preview"] == main._preview_text(prompt, 3000)
+    assert set(trace["stages"]) == {"vector_candidates", "bm25_candidates", "table_fact_candidates",
+                                    "expanded_candidates", "final_candidates"}
 
 
-def test_query_and_stream_pass_retrieval_mode_and_default_to_rrf(monkeypatch):
+def test_query_request_has_no_retrieval_mode_switch(monkeypatch):
+    # 규칙 경로를 지웠으므로 검색 방식을 고르는 요청 칸이 없다. 옛 클라이언트가 보내도 순위 융합으로 답한다.
     monkeypatch.setattr(main, "llm", FakeLLM())
-    prepare = fake_prepare(priority_answer="전형료는 30,000원입니다.")  # 스트리밍이 생성 모델을 부르지 않게
-    monkeypatch.setattr(main, "_prepare_query", prepare)
-    client = TestClient(main.app)
-    client.post("/query", json={"question": "가나대학 전형료 얼마예요?"})
-    client.post("/query", json={"question": "가나대학 전형료 얼마예요?", "retrieval_mode": "rules", "include_eval_trace": True})
-    client.post("/query/stream", json={"question": "가나대학 전형료 얼마예요?"})  # 백엔드가 쓰는 경로
-    client.post("/query/stream", json={"question": "가나대학 전형료 얼마예요?", "retrieval_mode": "rules"})
-    assert main.DEFAULT_RETRIEVAL_MODE == "rrf"
-    assert prepare.modes == ["rrf", "rules", "rrf", "rules"]
-    assert client.post("/query", json={"question": "가나대학 전형료 얼마예요?", "retrieval_mode": "dense"}).status_code == 422
-
-
-def test_env_choice_reads_retrieval_mode_and_falls_back_on_unknown(monkeypatch):
-    monkeypatch.setenv("AI_RETRIEVAL_MODE", " RULES ")
-    assert main._env_choice("AI_RETRIEVAL_MODE", main.RETRIEVAL_MODES, "rrf") == "rules"
-    monkeypatch.setenv("AI_RETRIEVAL_MODE", "dense")
-    assert main._env_choice("AI_RETRIEVAL_MODE", main.RETRIEVAL_MODES, "rrf") == "rrf"
-    monkeypatch.delenv("AI_RETRIEVAL_MODE")
-    assert main._env_choice("AI_RETRIEVAL_MODE", main.RETRIEVAL_MODES, "rrf") == "rrf"
+    monkeypatch.setattr(main, "_prepare_query", fake_prepare())
+    assert "retrieval_mode" not in main.QueryRequest.model_fields
+    body = TestClient(main.app).post("/query", json={"question": "가나대학 전형료 얼마예요?", "retrieval_mode": "rules",
+                                                       "include_eval_trace": True}).json()
+    assert body["eval_trace"]["answer_path"] == "llm"

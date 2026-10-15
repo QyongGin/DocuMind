@@ -18,7 +18,6 @@ import math
 import time
 from dataclasses import dataclass, replace
 from threading import Lock
-from typing import Literal
 
 from rag_contract_builders import (
     build_parsed_block,
@@ -86,18 +85,6 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _env_choice(name: str, choices: tuple[str, ...], default: str) -> str:
-    """정해진 값 중 하나인 환경변수를 읽는다. 목록에 없는 값이면 기본값을 쓴다."""
-    raw_value = os.getenv(name)
-    if raw_value is None:
-        return default
-    value = raw_value.strip().lower()
-    if value not in choices:
-        logger.warning("%s=%s 값이 %s 중 하나가 아니어서 기본값 %s를 사용합니다.", name, raw_value, "·".join(choices), default)
-        return default
-    return value
-
-
 def _env_float(name: str, default: float = 0.0, minimum: float = 0.0) -> float:
     """float 환경변수를 읽는다. 파싱 실패나 최소값 미만이면 기본값을 쓴다."""
     raw_value = os.getenv(name)
@@ -145,10 +132,6 @@ EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 64)
 UPLOAD_READ_CHUNK_BYTES = _env_int("UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)
 # 생성 모델에 넣는 근거 청크 수(M2 2단계, 2026-10-15: 5·8·10 중 채택 기준을 넘은 가장 작은 값). 백엔드·프론트 기본값과 같게 둔다.
 DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 8)
-# 검색 순서 정하기(ADR-0032). rrf: 표 사실·BM25·벡터 결과를 순위 융합만 해서 상위 top_k를 쓴다(기본).
-# rules: 사람이 만든 규칙 세 개와 우선 경로 답(되돌리기용, M2 2단계 뒤 코드와 함께 지운다).
-RETRIEVAL_MODES = ("rules", "rrf")
-DEFAULT_RETRIEVAL_MODE = _env_choice("AI_RETRIEVAL_MODE", RETRIEVAL_MODES, "rrf")
 BM25_INDEX_MAX_ENTRIES = _env_int("BM25_INDEX_MAX_ENTRIES", 50000)
 # Chroma에서 많은 항목을 가져올 때 한 번에 받을 수. Chroma 내부 SQLite는 한 질의의 변수 수에 한도가 있어,
 # 표 사실 45,878개를 한 번에 가져오다 "too many SQL variables"로 실패했다(2026-10-04 서비스 전체 색인).
@@ -2685,9 +2668,6 @@ class QueryRequest(BaseModel):
     # 평가용(M1 11번 채점기): 이 답을 만든 바로 그 실행의 단계별 후보(글 전체)·프롬프트·생성 종료 이유를 함께 돌려준다.
     # 운영 경로(Spring Boot)는 보내지 않으므로 응답이 바뀌지 않는다. /query에만 있다.
     include_eval_trace: bool = False
-    # 검색 순서 정하기 방식. 운영 경로(Spring Boot)는 보내지 않으므로 서버 설정 AI_RETRIEVAL_MODE(기본 rrf)를 따른다.
-    # 평가 실행기는 늘 적어 보내 실행 기록과 실제 검색 방식이 어긋나지 않게 한다.
-    retrieval_mode: Literal["rules", "rrf"] = DEFAULT_RETRIEVAL_MODE
 
 
 class RagTraceRequest(BaseModel):
@@ -2699,44 +2679,9 @@ class RagTraceRequest(BaseModel):
     vector_preview_size: int = Field(default=8, ge=0, le=32)
 
 
-@dataclass(frozen=True)
-class PriorityTableFactEvidence:
-    """Prompt에 우선 배치할 수 있는 검증된 표 근거."""
-
-    evidence_text: str
-    chunk_id: str
-    source_index: int
-    reasons: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class PriorityQueryEvidence:
-    """Prompt에 우선 배치할 수 있는 질문 맞춤 근거."""
-
-    evidence_text: str
-    chunk_id: str
-    source_index: int
-    facts: tuple[str, ...] = ()
-    intent: str | None = None
-    reasons: tuple[str, ...] = ()
-
-
 DEFAULT_SYSTEM_PROMPT = (
     "너는 인하공업전문대학 문서를 근거로 답변하는 안내 챗봇이다."
 )
-
-
-def _normalize_system_prompt_for_comparison(system_prompt: str | None) -> str:
-    """기본 prompt와 사용자 prompt를 비교하기 위해 공백 차이를 정규화한다."""
-    return " ".join(str(system_prompt or "").strip().split())
-
-
-def _has_custom_system_prompt(system_prompt: str | None) -> bool:
-    """Spring이 보내는 기본 prompt와 관리자가 바꾼 custom prompt를 구분한다."""
-    normalized_prompt = _normalize_system_prompt_for_comparison(system_prompt)
-    if not normalized_prompt:
-        return False
-    return normalized_prompt != _normalize_system_prompt_for_comparison(DEFAULT_SYSTEM_PROMPT)
 
 
 MANDATORY_RAG_PROMPT = (
@@ -2793,11 +2738,6 @@ QUERY_COLLECTION_WHERE_TERMS = {"학과", "과목", "서류", "항목", "종류"
 QUERY_PHYSICAL_LOCATION_TERMS = {"위치", "장소", "주소", "소재지", "몇층", "층", "호관"}
 
 TABLE_STATISTIC_TERMS = {"결과", "평균", "최저", "최고", "경쟁", "경쟁률", "예비", "순위", "등급"}
-PRIORITY_QUERY_ANSWER_INTENTS = {"method", "schedule"}
-PRIORITY_QUERY_PROCEDURE_TERMS = {
-    "방법", "절차", "신청", "예약", "접수", "제출", "처리", "승인", "선착순",
-    "배정", "변경", "공지", "확인", "준비", "지참", "응시", "등록", "홈페이지",
-}
 BM25_K1 = 1.5
 BM25_B = 0.75
 KIWI_SEARCH_TAG_PREFIXES = ("NN", "SL", "SN", "XR")
@@ -2866,17 +2806,6 @@ QUERY_NON_SUBJECT_PATTERNS = (
     r"^(있어|있나요|있습니까|돼|되나요|될까|인가요)$",
 )
 STRICT_LOCAL_EVIDENCE_INTENTS = {"location", "time", "cost", "count", "attire"}
-# [#110 실험2] 답이 typed value(금액·인원·시간·위치·복장)인 intent.
-# 이 intent들에서는 우선 질의 근거가 그 값 모양을 실제로 담아야 한다.
-# (값 없는 안내/부정형 근거가 우선 블록에 올라가 실제 표 값을 가리는 오도 방지)
-# 실험4 이후 이 intent들의 우선 질의 근거는 프롬프트로 승격되지 않고 고정 답변에도 쓰이지 않는다
-# (PRIORITY_QUERY_ANSWER_INTENTS 밖). 지금은 trace·로그에 남는 근거만 거르며,
-# 나중에 값 intent를 우선 근거로 승격하게 될 때의 안전장치로 유지한다.
-VALUE_TYPED_PRIORITY_INTENTS = STRICT_LOCAL_EVIDENCE_INTENTS & set(INTENT_EVIDENCE_PATTERNS)
-EVIDENCE_FOCUSED_INTENTS = {
-    "location", "time", "cost", "count", "list", "attire",
-    "documents", "eligibility", "method", "schedule", "formula",
-}
 TABLE_BRIDGE_EVIDENCE_INTENTS = {
     "attire", "documents", "eligibility", "count", "method", "schedule", "time", "cost", "location", "formula", "list",
 }
@@ -2901,7 +2830,7 @@ MONEY_VALUE_PATTERN = re.compile(r"\d[\d,]*(?:\.\d+)?\s*(?:(?:천|만|억|조)\s
 
 @dataclass(frozen=True)
 class QueryAnalysis:
-    """검색 재정렬에 사용할 질문 분석 결과다."""
+    """BM25 검색어·표 사실 고르기·근거 발췌에 쓰는 질문 분석 결과다."""
     tokens: list[str]
     subject_terms: set[str]
     intent: str | None
@@ -3384,7 +3313,7 @@ def _is_non_subject_query_token(token: str, intent_terms: set[str]) -> bool:
 
 
 def _analyze_query(question: str) -> QueryAnalysis:
-    """검색 후보 재정렬에 사용할 subject와 intent를 분석한다."""
+    """BM25 검색어·표 사실 고르기·근거 발췌에 쓸 subject와 intent를 분석한다."""
     tokens = _tokenize_sparse_search(question)
     intent = _detect_query_intent(question, tokens)
     intent_terms = set().union(*INTENT_QUERY_TERMS.values())
@@ -4014,12 +3943,6 @@ def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[
     return updated_metadatas
 
 
-def _best_runtime_table_fact_score(meta: dict, question: str) -> int:
-    """runtime metadata에 붙은 table_fact 중 질문과 가장 관련 높은 점수를 반환한다."""
-    facts = _get_matched_table_facts(meta)
-    return max((_score_table_fact_for_question(fact, question) for fact in facts), default=0)
-
-
 def _allow_cost_table_subject_fallback(doc: str, meta: dict, analysis: QueryAnalysis) -> bool:
     """비용 표 fallback은 parent raw chunk가 질문 subject를 담고 있을 때만 허용한다."""
     if analysis.intent != "cost":
@@ -4027,194 +3950,6 @@ def _allow_cost_table_subject_fallback(doc: str, meta: dict, analysis: QueryAnal
     if not analysis.subject_terms and not analysis.primary_terms:
         return True
     return _subject_matches_text(_build_sparse_search_text(doc, meta or {}), analysis)
-
-
-def _score_subject_match(text: str, analysis: QueryAnalysis) -> int:
-    """후보 청크가 질문 subject와 얼마나 직접적으로 맞는지 계산한다."""
-    if not analysis.subject_terms and not analysis.primary_terms:
-        return 0
-
-    score = 0
-    for term in analysis.primary_terms:
-        count = text.lower().count(term.lower())
-        if count <= 0 and _term_in_text(term, text):
-            count = 1
-        if count > 0:
-            weight = 4 if term in QUERY_WEAK_SUBJECT_TERMS else 24
-            score += min(count, 4) * weight
-
-    matched = 0
-    for term in analysis.subject_terms:
-        count = text.lower().count(term.lower())
-        if count <= 0 and _term_in_text(term, text):
-            count = 1
-        if count <= 0:
-            continue
-        matched += 1
-        weight = 3 if term in QUERY_WEAK_SUBJECT_TERMS else 12
-        score += min(count, 5) * weight
-
-    strong_subject_count = len(analysis.subject_terms - QUERY_WEAK_SUBJECT_TERMS)
-    if matched == len(analysis.subject_terms) and strong_subject_count > 0:
-        score += 20
-    return score
-
-
-def _count_item_like_lines(text: str) -> int:
-    """목록형 답변에 도움이 되는 항목 line 개수를 계산한다."""
-    count = 0
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if re.match(r"^[-*]\s+", stripped) or re.search(r"\S+\s*:\s*\S+", stripped):
-            count += 1
-    return count
-
-
-def _score_intent_evidence(text: str, analysis: QueryAnalysis) -> int:
-    """후보 청크가 질문 intent에 답할 증거 패턴을 포함하는지 계산한다."""
-    if not analysis.intent:
-        return 0
-
-    normalized_text = text.lower()
-    evidence_terms = INTENT_EVIDENCE_TERMS.get(analysis.intent, set())
-    score = sum(6 for term in evidence_terms if term in normalized_text)
-
-    for pattern in INTENT_EVIDENCE_PATTERNS.get(analysis.intent, []):
-        score += min(len(re.findall(pattern, normalized_text, flags=re.MULTILINE)), 5) * 8
-
-    if analysis.intent == "list":
-        score += min(_count_item_like_lines(text), 8) * 8
-    return score
-
-
-def _score_heading_match(text: str, analysis: QueryAnalysis) -> int:
-    """Markdown heading이 질문 subject 또는 intent와 직접 맞는지 계산한다."""
-    if not analysis.context_terms:
-        return 0
-
-    score = 0
-    for line in text.splitlines():
-        if _markdown_heading_level(line) is None:
-            continue
-        normalized_line = line.lower()
-        if any(term in normalized_line for term in analysis.primary_terms - QUERY_WEAK_SUBJECT_TERMS):
-            score += 40
-        if any(term in normalized_line for term in analysis.subject_terms):
-            score += 30
-        if analysis.intent and any(term in normalized_line for term in INTENT_EVIDENCE_TERMS.get(analysis.intent, set())):
-            score += 10
-    return score
-
-
-def _score_candidate_for_query(doc: str, meta: dict, question: str, analysis: QueryAnalysis) -> int:
-    """subject와 intent를 함께 고려해 검색 후보를 재정렬할 점수를 만든다."""
-    search_text = _build_sparse_search_text(doc, meta)
-    score = 0
-    score += _score_subject_match(search_text, analysis)
-    score += _score_intent_evidence(search_text, analysis)
-    score += _score_heading_match(search_text, analysis)
-    score += _score_query_evidence_facts(doc, analysis, meta)
-    score += _best_runtime_table_fact_score(meta or {}, question)
-    return score
-
-
-def _rerank_by_query_analysis(
-    docs: list[str],
-    metadatas: list[dict],
-    ids: list[str],
-    question: str,
-    analysis: QueryAnalysis,
-) -> tuple[list[str], list[dict], list[str]]:
-    """질문 subject와 intent가 모두 맞는 후보를 앞쪽으로 재정렬한다."""
-    if not docs or (not analysis.subject_terms and not analysis.intent):
-        return docs, metadatas, ids
-
-    ranked: list[tuple[int, int, str, dict, str]] = []
-    for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids)):
-        meta = meta or {}
-        score = _score_candidate_for_query(doc, meta, question, analysis)
-        ranked.append((-score, index, doc, meta, chunk_id))
-
-    ranked.sort(key=lambda item: (item[0], item[1]))
-    best_score = -ranked[0][0] if ranked else 0
-    logger.info(
-        "[query_rerank] intent=%s subject_terms=%s best_score=%s candidates=%s",
-        analysis.intent or "none",
-        ",".join(sorted(analysis.subject_terms)) or "none",
-        best_score,
-        len(ranked),
-    )
-    return (
-        [doc for _, _, doc, _, _ in ranked],
-        [meta for _, _, _, meta, _ in ranked],
-        [chunk_id for _, _, _, _, chunk_id in ranked],
-    )
-
-
-def _focus_candidates_with_query_evidence(
-    docs: list[str],
-    metadatas: list[dict],
-    ids: list[str],
-    analysis: QueryAnalysis,
-) -> tuple[list[str], list[dict], list[str]]:
-    """구조화 근거가 확인된 후보가 있으면 최종 context를 그 후보들로 좁힌다."""
-    if not docs or analysis.intent not in EVIDENCE_FOCUSED_INTENTS:
-        return docs, metadatas, ids
-
-    evidence_items: list[tuple[str, dict, str]] = []
-    fallback_items: list[tuple[str, dict, str]] = []
-    for doc, meta, chunk_id in zip(docs, metadatas, ids):
-        if _extract_query_evidence_fact_lines(doc, analysis, max_facts=1, meta=meta or {}):
-            evidence_items.append((doc, meta or {}, chunk_id))
-        else:
-            fallback_items.append((doc, meta or {}, chunk_id))
-
-    if not evidence_items:
-        return docs, metadatas, ids
-
-    logger.info(
-        "[query_evidence_focus] intent=%s evidence_candidates=%s fallback_candidates=%s",
-        analysis.intent,
-        len(evidence_items),
-        len(fallback_items),
-    )
-    focused_items = evidence_items
-    return (
-        [doc for doc, _, _ in focused_items],
-        [meta for _, meta, _ in focused_items],
-        [chunk_id for _, _, chunk_id in focused_items],
-    )
-
-
-def _prioritize_query_results(docs: list[str], metadatas: list[dict], ids: list[str], question: str) -> tuple[list[str], list[dict], list[str]]:
-    """표 값 질문에서는 질문과 가장 잘 맞는 table_fact context를 앞세운다."""
-    if not _is_table_value_question(question):
-        return docs, metadatas, ids
-
-    scores = [_best_runtime_table_fact_score(meta or {}, question) for meta in metadatas]
-    best_score = max(scores, default=0)
-    if best_score <= 0:
-        return docs, metadatas, ids
-
-    ranked: list[tuple[int, int, str, dict, str]] = []
-    for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids)):
-        meta = meta or {}
-        score = scores[index]
-        if best_score >= 40 and score < best_score - 15:
-            continue
-        if score == 0 and best_score >= 20:
-            continue
-        priority = -score
-        ranked.append((priority, index, doc, meta, chunk_id))
-
-    ranked.sort(key=lambda item: (item[0], item[1]))
-    return (
-        [doc for _, _, doc, _, _ in ranked],
-        [meta for _, _, _, meta, _ in ranked],
-        [chunk_id for _, _, _, _, chunk_id in ranked],
-    )
 
 
 def _markdown_heading_level(line: str) -> int | None:
@@ -4524,169 +4259,6 @@ def _extract_query_evidence_fact_lines(text: str, analysis: QueryAnalysis, max_f
 def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts: int = 5, meta: dict | None = None) -> str:
     """검색된 chunk에서 질문 subject와 intent가 직접 만나는 항목 근거를 추출한다."""
     return "\n".join(_extract_query_evidence_fact_lines(text, analysis, max_facts, meta))
-
-
-def _query_evidence_fact_body(fact: str) -> str:
-    """query evidence fact에서 label 뒤 실제 근거 본문을 꺼낸다."""
-    stripped = fact.strip()
-    if stripped.startswith("-"):
-        stripped = stripped[1:].strip()
-    if ":" in stripped:
-        return stripped.split(":", 1)[1].strip()
-    if "：" in stripped:
-        return stripped.split("：", 1)[1].strip()
-    return stripped
-
-
-def _query_evidence_fact_label(fact: str) -> str:
-    """query evidence fact의 표시 label을 반환한다."""
-    stripped = fact.strip()
-    if stripped.startswith("-"):
-        stripped = stripped[1:].strip()
-    if ":" in stripped:
-        return stripped.split(":", 1)[0].strip()
-    if "：" in stripped:
-        return stripped.split("：", 1)[0].strip()
-    return ""
-
-
-def _looks_like_numeric_table_dump(text: str) -> bool:
-    """입시결과/모집인원 표가 한 줄로 붙은 숫자 덤프인지 보수적으로 판단한다."""
-    stripped = text.strip()
-    if stripped.count("|") >= 4:
-        cells = [cell.strip() for cell in stripped.split("|") if cell.strip()]
-        if len(cells) >= 5:
-            numeric_cells = sum(
-                1
-                for cell in cells
-                if re.fullmatch(r"[-–—]|\d[\d,]*(?:\.\d+)?%?", cell)
-            )
-            if numeric_cells >= 3 and numeric_cells / len(cells) >= 0.35:
-                return True
-
-    digit_count = sum(char.isdigit() for char in stripped)
-    korean_count = len(re.findall(r"[가-힣]", stripped))
-    has_statistic_hint = any(term in stripped for term in TABLE_STATISTIC_TERMS | {"모집인원", "모집정원"})
-    return digit_count >= 10 and digit_count > korean_count and has_statistic_hint
-
-
-def _query_evidence_has_intent_terms(fact: str, analysis: QueryAnalysis) -> bool:
-    """질문 intent에 직접 답하는 용어가 근거 안에 있는지 확인한다."""
-    normalized_fact = fact.lower()
-    intent_terms = set(INTENT_EVIDENCE_TERMS.get(analysis.intent or "", set()))
-    if analysis.intent in PRIORITY_QUERY_ANSWER_INTENTS:
-        intent_terms.update(PRIORITY_QUERY_PROCEDURE_TERMS)
-    return any(term.lower() in normalized_fact for term in intent_terms)
-
-
-def _fact_has_intent_value(fact: str, intent: str | None) -> bool:
-    """값을 찾는 intent의 기대 값 모양(금액·인원·시간·위치·복장)이 근거 안에 실제로 있는지 본다.
-
-    intent 용어(예: '비용')가 아니라 값 모양(예: '30,000원')을 요구한다. '전형료는 반환하지
-    않음'처럼 주제어는 맞지만 값이 없는 안내/부정형 근거를 우선 블록에서 가려낸다.
-    """
-    if not intent:
-        return False
-    normalized = fact.lower()
-    if intent == "attire":
-        return _looks_like_attire_value(normalized)
-    for pattern in INTENT_EVIDENCE_PATTERNS.get(intent, []):
-        if re.search(pattern, normalized, flags=re.MULTILINE):
-            return True
-    return False
-
-
-def _priority_query_evidence_safety_reason(fact: str, analysis: QueryAnalysis) -> str | None:
-    """우선 질의 근거로 올릴 수 없으면 사유 code를 반환한다."""
-    stripped = fact.strip()
-    if not stripped:
-        return "empty_fact"
-
-    if _looks_like_numeric_table_dump(stripped):
-        return "numeric_table_dump"
-
-    if analysis.subject_terms and not _subject_matches_text(stripped, analysis):
-        return "subject_mismatch"
-
-    # [#110 실험2] 값을 찾는 intent(cost/count/time/location/attire)에서는 우선 질의 근거가
-    # 그 intent의 값 모양(cost→금액, count→인원 등)을 담아야 한다. 값이 없는 안내/부정형 근거가
-    # 우선 블록에 올라가 [검색 근거]의 실제 표 값을 가리는 오도(예: '전형료는 반환하지 않음')를 막는다.
-    if analysis.intent in VALUE_TYPED_PRIORITY_INTENTS and not _fact_has_intent_value(stripped, analysis.intent):
-        return "missing_intent_value"
-
-    if analysis.intent in PRIORITY_QUERY_ANSWER_INTENTS and not _query_evidence_has_intent_terms(stripped, analysis):
-        return "missing_intent_evidence"
-
-    label = _query_evidence_fact_label(stripped)
-    if label == "관련 근거" and analysis.intent in PRIORITY_QUERY_ANSWER_INTENTS:
-        body = _query_evidence_fact_body(stripped)
-        if _looks_like_numeric_table_dump(body):
-            return "numeric_table_dump"
-        if not _query_evidence_has_intent_terms(body, analysis):
-            return "generic_fact_without_procedure_signal"
-
-    return None
-
-
-def _priority_query_evidence_for_prompt(
-    docs: list[str],
-    metadatas: list[dict],
-    ids: list[str],
-    analysis: QueryAnalysis,
-) -> PriorityQueryEvidence | None:
-    """최종 검색 후보에서 prompt에 올릴 수 있는 질문 맞춤 근거를 고른다."""
-    if not analysis.intent:
-        return None
-
-    for source_index, (doc, meta, chunk_id) in enumerate(
-        zip(docs, metadatas, ids),
-        start=1,
-    ):
-        fact_lines = _extract_query_evidence_fact_lines(
-            doc,
-            analysis,
-            max_facts=5,
-            meta=meta or {},
-        )
-        selected_facts: list[str] = []
-        rejected_reasons: list[str] = []
-        for fact in fact_lines:
-            rejected_reason = _priority_query_evidence_safety_reason(fact, analysis)
-            if rejected_reason:
-                rejected_reasons.append(rejected_reason)
-                continue
-            selected_facts.append(fact)
-            if len(selected_facts) >= 3:
-                break
-
-        if not selected_facts:
-            continue
-
-        reasons = ["query_evidence_facts", f"intent={analysis.intent}"]
-        if rejected_reasons:
-            reasons.append("filtered=" + ",".join(sorted(set(rejected_reasons))))
-        return PriorityQueryEvidence(
-            evidence_text="\n".join(selected_facts),
-            chunk_id=str(chunk_id),
-            source_index=source_index,
-            facts=tuple(selected_facts),
-            intent=analysis.intent,
-            reasons=tuple(reasons),
-        )
-    return None
-
-
-def _score_query_evidence_facts(text: str, analysis: QueryAnalysis, meta: dict | None = None) -> int:
-    """질문 subject와 intent가 같은 line/section에서 만난 구조화 근거에 가산점을 준다."""
-    runtime_facts = _get_query_evidence_facts_from_meta(meta or {})
-    facts = _extract_query_evidence_fact_lines(text, analysis, max_facts=5, meta=meta)
-    if not facts:
-        return 0
-    if runtime_facts and analysis.intent == "list":
-        base_score = 520
-    else:
-        base_score = 140 if analysis.intent in STRICT_LOCAL_EVIDENCE_INTENTS else 90
-    return base_score + min(len(facts) - 1, 4) * 25
 
 
 def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analysis: QueryAnalysis) -> str:
@@ -5054,36 +4626,15 @@ def _build_rag_prompt(
     system_prompt: str | None,
     context: str,
     question: str,
-    priority_table_evidence: str = "",
-    priority_query_evidence: str = "",
 ) -> str:
     """검색 근거와 사용자 질문을 LLM 입력 프롬프트로 조합한다."""
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
-    priority_blocks: list[str] = []
-    if priority_table_evidence.strip():
-        priority_blocks.append(f"""
-[우선 표 근거]
-{priority_table_evidence.strip()}
-
-[우선 표 근거 사용 규칙]
-- [우선 표 근거]가 있으면 이 블록의 행, 열, 값 관계를 [검색 근거]보다 먼저 사용한다.
-- [우선 표 근거]에 없는 조건, 전형, 서류, 해석은 만들지 않는다.
-""")
-    if priority_query_evidence.strip():
-        priority_blocks.append(f"""
-[우선 질의 근거]
-{priority_query_evidence.strip()}
-
-[우선 질의 근거 사용 규칙]
-- [우선 표 근거]가 있으면 [우선 표 근거]를 먼저 따른다.
-- [우선 표 근거]가 없거나 답변에 직접 필요한 내용이 부족하면 [우선 질의 근거]를 [검색 근거]보다 먼저 사용한다.
-- [우선 질의 근거]에 없는 조건, 절차, 날짜, 숫자, 해석은 만들지 않는다.
-""")
-    priority_block = "\n".join(priority_blocks)
+    # 빈 줄 둘과 [답변 직전 확인]의 '우선 표 근거'·'우선 질의 근거' 두 줄은 규칙 경로(#169에서 삭제)의 흔적이다.
+    # 지우면 프롬프트가 바뀌어 답이 달라질 수 있으므로, 프롬프트를 바꾸는 작업(M2 5단계·모델 선정 ①)에서 측정과 함께 정리한다.
     return f"""{prompt_policy}
 
 {MANDATORY_RAG_PROMPT}
-{priority_block}
+
 
 [검색 근거]
 {context}
@@ -5605,200 +5156,6 @@ def _selected_table_fact_previews(
     }
 
 
-def _priority_table_fact_evidence_for_prompt(
-    question: str,
-    docs: list[str],
-    metadatas: list[dict],
-    ids: list[str],
-) -> PriorityTableFactEvidence | None:
-    """최종 검색 후보에서 prompt에 올릴 수 있는 첫 번째 표 근거를 고른다."""
-    for source_index, (doc, meta, chunk_id) in enumerate(
-        zip(docs, metadatas, ids),
-        start=1,
-    ):
-        meta = meta or {}
-        source_block_id = str(meta.get("source_block_id") or "")
-        table_fact_candidates = _typed_table_fact_contract_candidates(
-            str(chunk_id),
-            doc,
-            meta,
-            source_block_id,
-        )
-        if not table_fact_candidates:
-            continue
-        selection_result = select_table_facts_for_question(
-            question,
-            [table_fact for table_fact, _ in table_fact_candidates],
-        )
-        evidence_preview = build_table_fact_evidence_preview(selection_result)
-        if not evidence_preview.prompt_candidate_ready or not evidence_preview.evidence_text:
-            continue
-        return PriorityTableFactEvidence(
-            evidence_text=evidence_preview.evidence_text,
-            chunk_id=str(chunk_id),
-            source_index=source_index,
-            reasons=evidence_preview.reasons,
-        )
-    return None
-
-
-def _build_priority_table_fact_answer(
-    evidence: PriorityTableFactEvidence | None,
-) -> str | None:
-    """검증된 표 근거가 있으면 LLM 없이 행/열/값 기반 답변을 만든다."""
-    if evidence is None or not evidence.evidence_text.strip():
-        return None
-
-    common_contexts: list[str] = []
-    answer_lines: list[str] = []
-    for line in evidence.evidence_text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("공통 맥락:"):
-            context = stripped.split(":", 1)[1].strip()
-            if context:
-                common_contexts.append(context)
-            continue
-        match = re.match(r"- 행: (?P<row>.+?) / 열: (?P<column>.+?) / 값: (?P<value>.+)$", stripped)
-        if not match:
-            continue
-        row = match.group("row").strip()
-        column = match.group("column").strip()
-        value = match.group("value").strip()
-        if not row or not column or not value:
-            continue
-        if column == "지원자격" or column.endswith(" > 지원자격"):
-            answer_lines.append(f"- {row}: {value}")
-        else:
-            answer_lines.append(f"- {row} / {column}: {value}")
-
-    if not answer_lines:
-        return None
-
-    prefix = "표 근거 기준 답변입니다."
-    if common_contexts:
-        prefix += f"\n공통 맥락: {', '.join(common_contexts)}"
-    return f"{prefix}\n" + "\n".join(answer_lines)
-
-
-def _priority_table_fact_answer_for_request(
-    evidence: PriorityTableFactEvidence | None,
-    system_prompt: str | None,
-) -> str | None:
-    """관리자가 기본값과 다른 prompt를 설정했으면 LLM이 형식 지시를 적용하게 둔다."""
-    if _has_custom_system_prompt(system_prompt):
-        return None
-    return _build_priority_table_fact_answer(evidence)
-
-
-def _priority_table_fact_answer_disabled_reason(
-    evidence: PriorityTableFactEvidence | None,
-    system_prompt: str | None,
-) -> str | None:
-    if evidence is not None and _has_custom_system_prompt(system_prompt):
-        return "custom_system_prompt"
-    return None
-
-
-def _priority_query_fact_answer_score(fact: str, analysis: QueryAnalysis) -> int:
-    """질문과 직접 맞는 query evidence fact를 고정 답변 후보로 점수화한다."""
-    score = 0
-    normalized_fact = fact.lower()
-    for term in analysis.primary_terms:
-        if term and term.lower() in normalized_fact:
-            score += 3
-    for term in analysis.subject_terms:
-        if term and term.lower() in normalized_fact:
-            score += 1
-    for term in PRIORITY_QUERY_PROCEDURE_TERMS:
-        if term.lower() in normalized_fact:
-            score += 1
-    if _query_evidence_fact_label(fact) in {"관련 근거", "관련 항목"}:
-        score -= 4
-    return score
-
-
-def _build_priority_query_evidence_answer(
-    evidence: PriorityQueryEvidence | None,
-    analysis: QueryAnalysis,
-) -> str | None:
-    """안전 조건이 확실한 질문 맞춤 근거만 LLM 없이 답변한다."""
-    if evidence is None or not evidence.facts:
-        return None
-    if evidence.intent not in PRIORITY_QUERY_ANSWER_INTENTS:
-        return None
-
-    ranked_facts = sorted(
-        (
-            (_priority_query_fact_answer_score(fact, analysis), fact)
-            for fact in evidence.facts
-        ),
-        key=lambda item: item[0],
-        reverse=True,
-    )
-    if not ranked_facts:
-        return None
-
-    best_score, best_fact = ranked_facts[0]
-    if best_score < 5:
-        return None
-
-    label = _query_evidence_fact_label(best_fact)
-    body = _query_evidence_fact_body(best_fact)
-    if not label or label in {"관련 근거", "관련 항목"}:
-        return None
-    if len(body) < 12 or _looks_like_numeric_table_dump(body):
-        return None
-    if _priority_query_evidence_safety_reason(best_fact, analysis):
-        return None
-
-    return f"질문 맞춤 근거 기준 답변입니다.\n- {label}: {body}"
-
-
-def _priority_query_evidence_answer_for_request(
-    evidence: PriorityQueryEvidence | None,
-    system_prompt: str | None,
-    analysis: QueryAnalysis,
-) -> str | None:
-    """관리자가 기본값과 다른 prompt를 설정했으면 LLM이 형식 지시를 적용하게 둔다."""
-    if _has_custom_system_prompt(system_prompt):
-        return None
-    return _build_priority_query_evidence_answer(evidence, analysis)
-
-
-def _priority_query_evidence_answer_disabled_reason(
-    evidence: PriorityQueryEvidence | None,
-    system_prompt: str | None,
-    analysis: QueryAnalysis,
-) -> str | None:
-    if evidence is None:
-        return None
-    if _has_custom_system_prompt(system_prompt):
-        return "custom_system_prompt"
-    if evidence.intent not in PRIORITY_QUERY_ANSWER_INTENTS:
-        return "unsupported_intent"
-    if _build_priority_query_evidence_answer(evidence, analysis) is None:
-        return "safety_conditions_not_met"
-    return None
-
-
-def _prompt_priority_query_evidence_text(evidence: PriorityQueryEvidence | None) -> str:
-    """[우선 질의 근거] 블록은 deterministic 답변까지 신뢰하는 intent에만 프롬프트 최우선으로 승격한다.
-
-    [#110 실험4 레버③] count/list 같은 표값 조회 intent는 추출기가 질문 행이 아닌 다른 열·다른 행
-    값을 질문 행으로 오인한다(trace 확인: '수시1차 일반고'(53) 대신 '모집 정원'(93)을 뽑고 타 학과
-    행 값까지 같은 라벨로 오염). 이 추출은 deterministic 답변으로 신뢰할 수 없어 이미 거부되는데
-    (unsupported_intent), 정작 프롬프트 최우선 블록 '[우선 질의 근거]'로는 올라가 정확한 [검색 근거]의
-    '표 검색 정보'(53) 위에 오답을 "먼저 쓰라"고 박아 7.8B를 오도한다. 신뢰 못 할 추출은 최우선
-    블록으로 승격하지 않고 [검색 근거]의 '표 검색 정보'/'질문 의도 추출 정보'에 맡긴다. 검증된
-    method/schedule(PRIORITY_QUERY_ANSWER_INTENTS)만 승격해 회귀를 막는다.
-    """
-    if evidence is None:
-        return ""
-    if evidence.intent not in PRIORITY_QUERY_ANSWER_INTENTS:
-        return ""
-    return evidence.evidence_text
-
-
 def _contract_trace_preview(
     chunk_id: str,
     doc: str,
@@ -6055,7 +5412,7 @@ def _format_table_fact_candidate(candidate: dict) -> dict:
     return formatted
 
 
-def _format_rerank_candidate(
+def _format_trace_candidate(
     rank: int,
     doc: str,
     meta: dict,
@@ -6065,15 +5422,8 @@ def _format_rerank_candidate(
     analysis: QueryAnalysis,
     selected: bool,
 ) -> dict:
-    """재정렬 단계의 후보별 점수와 최종 선택 여부를 trace 응답 형태로 만든다."""
+    """순위 융합 뒤 후보 하나를 trace 응답 형태로 만든다: 어느 검색기가 몇 위로 찾았는지와 프롬프트에 들어갔는지."""
     meta = meta or {}
-    search_text = _build_sparse_search_text(doc, meta)
-    subject_score = _score_subject_match(search_text, analysis)
-    intent_score = _score_intent_evidence(search_text, analysis)
-    heading_score = _score_heading_match(search_text, analysis)
-    evidence_fact_score = _score_query_evidence_facts(doc, analysis, meta)
-    runtime_table_fact_score = _best_runtime_table_fact_score(meta, question)
-    rerank_score = subject_score + intent_score + heading_score + evidence_fact_score + runtime_table_fact_score
     query_evidence_facts = _extract_query_evidence_fact_lines(doc, analysis, max_facts=5, meta=meta)
     matched_table_facts = _get_matched_table_facts(meta)
 
@@ -6084,14 +5434,6 @@ def _format_rerank_candidate(
         "rank": rank,
         "selected_for_prompt": selected,
         "retrieval": retrieval,
-        "scores": {
-            "subject_match": subject_score,
-            "intent_evidence": intent_score,
-            "heading_match": heading_score,
-            "query_evidence": evidence_fact_score,
-            "runtime_table_fact": runtime_table_fact_score,
-            "rerank_total": rerank_score,
-        },
         "query_evidence_facts": query_evidence_facts,
         "matched_table_facts": matched_table_facts,
     })
@@ -6383,100 +5725,33 @@ def _trace_query_retrieval(
     for candidate in table_fact_candidates:
         _record_table_fact_trace(trace_by_id, candidate)
 
-    docs = vector_docs
-    metadatas = vector_metadatas
-    ids = vector_ids
-    if bm25_candidates:
-        docs = [candidate["document"] for candidate in bm25_candidates] + docs
-        metadatas = [candidate["metadata"] for candidate in bm25_candidates] + metadatas
-        ids = [candidate["chunk_id"] for candidate in bm25_candidates] + ids
-    if table_fact_candidates:
-        docs = [candidate["document"] for candidate in table_fact_candidates] + docs
-        metadatas = [candidate["metadata"] for candidate in table_fact_candidates] + metadatas
-        ids = [candidate["chunk_id"] for candidate in table_fact_candidates] + ids
+    def candidate_lists(candidates: list[dict]) -> tuple[list[str], list[dict], list[str]]:
+        return (
+            [candidate["document"] for candidate in candidates],
+            [candidate["metadata"] for candidate in candidates],
+            [candidate["chunk_id"] for candidate in candidates],
+        )
 
-    docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
-    metadatas = _attach_runtime_table_facts(question, docs, metadatas, analysis)
+    # 운영 질의와 같은 함수로 순서를 정한다. 추적 결과가 실제 답의 후보와 어긋나지 않게 한다.
+    docs, metadatas, ids = _order_retrieval_results(
+        question,
+        analysis,
+        (vector_docs, vector_metadatas, vector_ids),
+        candidate_lists(bm25_candidates),
+        candidate_lists(table_fact_candidates),
+    )
     expanded_candidates = [
-        _format_rerank_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, False)
+        _format_trace_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, False)
         for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids))
     ]
-
-    prioritized_docs, prioritized_metadatas, prioritized_ids = _prioritize_query_results(
-        docs,
-        metadatas,
-        ids,
-        question,
-    )
-    after_table_priority_candidates = [
-        _format_rerank_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, False)
-        for index, (doc, meta, chunk_id) in enumerate(zip(prioritized_docs, prioritized_metadatas, prioritized_ids))
-    ]
-
-    reranked_docs, reranked_metadatas, reranked_ids = _rerank_by_query_analysis(
-        prioritized_docs,
-        prioritized_metadatas,
-        prioritized_ids,
-        question,
-        analysis,
-    )
-    focused_docs, focused_metadatas, focused_ids = _focus_candidates_with_query_evidence(
-        reranked_docs,
-        reranked_metadatas,
-        reranked_ids,
-        analysis,
-    )
-    after_evidence_focus_candidates = [
-        _format_rerank_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, False)
-        for index, (doc, meta, chunk_id) in enumerate(zip(focused_docs, focused_metadatas, focused_ids))
-    ]
-    final_docs = focused_docs[:top_k]
-    final_metadatas = focused_metadatas[:top_k]
-    final_ids = focused_ids[:top_k]
-    priority_table_evidence = (
-        _priority_table_fact_evidence_for_prompt(
-            question,
-            final_docs,
-            final_metadatas,
-            final_ids,
-        )
-        if final_docs
-        else None
-    )
-    priority_query_evidence = (
-        _priority_query_evidence_for_prompt(
-            final_docs,
-            final_metadatas,
-            final_ids,
-            analysis,
-        )
-        if final_docs
-        else None
-    )
+    final_docs = docs[:top_k]
+    final_metadatas = metadatas[:top_k]
+    final_ids = ids[:top_k]
     context = _build_context(final_docs, final_metadatas, final_ids, analysis) if final_docs else ""
-    prompt = (
-        _build_rag_prompt(
-            system_prompt,
-            context,
-            question,
-            priority_table_evidence.evidence_text if priority_table_evidence else "",
-            _prompt_priority_query_evidence_text(priority_query_evidence),
-        )
-        if final_docs
-        else ""
-    )
+    prompt = _build_rag_prompt(system_prompt, context, question) if final_docs else ""
     final_candidates = [
-        _format_rerank_candidate(
-            index + 1,
-            doc,
-            meta,
-            chunk_id,
-            trace_by_id,
-            question,
-            analysis,
-            index < top_k,
-        )
-        for index, (doc, meta, chunk_id) in enumerate(zip(focused_docs, focused_metadatas, focused_ids))
+        _format_trace_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, index < top_k)
+        for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids))
     ]
 
     logger.info(
@@ -6529,49 +5804,9 @@ def _trace_query_retrieval(
             "bm25_candidates": [_format_bm25_candidate(candidate) for candidate in bm25_candidates],
             "table_fact_candidates": [_format_table_fact_candidate(candidate) for candidate in table_fact_candidates],
             "expanded_candidates": expanded_candidates,
-            "after_table_priority_candidates": after_table_priority_candidates,
-            "after_evidence_focus_candidates": after_evidence_focus_candidates,
             "final_candidates": final_candidates,
         },
         "final_context": context,
-        "priority_table_evidence": {
-            "runtime_connection": "query_prompt",
-            "chunk_id": priority_table_evidence.chunk_id,
-            "source_index": priority_table_evidence.source_index,
-            "reasons": list(priority_table_evidence.reasons),
-            "evidence_text": priority_table_evidence.evidence_text,
-            "deterministic_answer": _priority_table_fact_answer_for_request(
-                priority_table_evidence,
-                system_prompt,
-            ),
-            "deterministic_answer_disabled_reason": (
-                _priority_table_fact_answer_disabled_reason(
-                    priority_table_evidence,
-                    system_prompt,
-                )
-            ),
-        } if priority_table_evidence else None,
-        "priority_query_evidence": {
-            "runtime_connection": "query_prompt",
-            "chunk_id": priority_query_evidence.chunk_id,
-            "source_index": priority_query_evidence.source_index,
-            "facts": list(priority_query_evidence.facts),
-            "intent": priority_query_evidence.intent,
-            "reasons": list(priority_query_evidence.reasons),
-            "evidence_text": priority_query_evidence.evidence_text,
-            "deterministic_answer": _priority_query_evidence_answer_for_request(
-                priority_query_evidence,
-                system_prompt,
-                analysis,
-            ),
-            "deterministic_answer_disabled_reason": (
-                _priority_query_evidence_answer_disabled_reason(
-                    priority_query_evidence,
-                    system_prompt,
-                    analysis,
-                )
-            ),
-        } if priority_query_evidence else None,
         "final_prompt_preview": _preview_text(prompt, 3000),
         "timing": {
             "embedding_elapsed": _round_float(embedding_elapsed, 4),
@@ -6615,6 +5850,24 @@ def _fuse_reciprocal_rank(
     )
 
 
+def _order_retrieval_results(
+    question: str,
+    analysis: QueryAnalysis,
+    vector: tuple[list[str], list[dict], list[str]],
+    bm25: tuple[list[str], list[dict], list[str]],
+    table_fact: tuple[list[str], list[dict], list[str]],
+) -> tuple[list[str], list[dict], list[str]]:
+    """검색기 셋의 결과를 프롬프트 후보 순서로 세운다(ADR-0032). 운영 질의(_prepare_query)와 /debug/rag-trace가 함께 쓴다.
+
+    표 사실 → BM25 → 벡터 순으로 넣어 순위 융합하고(점수가 같으면 앞 목록이 앞선다), 표 사실을 부모 청크로 펼친 뒤
+    질문에 맞는 표 사실을 메타데이터에 붙인다. 호출자가 상위 top_k를 자른다.
+    """
+    docs, metadatas, ids = _fuse_reciprocal_rank([table_fact, bm25, vector])
+    docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
+    metadatas = _attach_runtime_table_facts(question, docs, metadatas, analysis)
+    return docs, metadatas, ids
+
+
 def _record_eval_stage(stages: dict | None, name: str, docs: list, metadatas: list, ids: list) -> None:
     """평가용 기록: 한 단계의 후보를 글 전체와 함께 남긴다. stages가 None(운영 경로)이면 아무것도 하지 않는다."""
     if stages is None:
@@ -6637,18 +5890,13 @@ def _prepare_query(
     top_k: int,
     system_prompt: str | None = None,
     eval_stages: dict | None = None,
-    retrieval_mode: str = DEFAULT_RETRIEVAL_MODE,
 ) -> tuple[str | None, list, dict]:
     """
-    질문 임베딩 → ChromaDB 검색 → 프롬프트 + 출처 조합.
+    질문 임베딩 → ChromaDB 검색 → 순위 융합 → 프롬프트 + 출처 조합.
     문서가 없으면 prompt를 None으로 반환한다. 호출자가 빈 응답 처리를 담당한다.
     eval_stages(평가용 dict)를 주면 단계별 후보·문맥·프롬프트를 그 안에 기록한다. 검색·답은 주지 않을 때와 같다.
-    retrieval_mode(ADR-0032): "rrf"(기본, AI_RETRIEVAL_MODE)는 표 사실·BM25·벡터 결과를 순위 융합만 해서 상위 top_k를 쓰고,
-    사람이 만든 우선순위·재정렬·근거 좁히기와 우선 경로 답(모델을 거치지 않는 답)을 쓰지 않는다. "rules"는 되돌리기용 규칙 경로다.
+    검색 순서는 _order_retrieval_results(순위 융합, ADR-0032) 하나로 정한다. /debug/rag-trace도 같은 함수를 쓴다.
     """
-    if retrieval_mode not in RETRIEVAL_MODES:
-        raise ValueError(f"retrieval_mode must be one of {RETRIEVAL_MODES}")
-    rules = retrieval_mode == "rules"
     prepare_start = time.perf_counter()
     analysis = _analyze_query(question)
     embedding_start = time.perf_counter()
@@ -6676,33 +5924,14 @@ def _prepare_query(
     _record_eval_stage(eval_stages, "vector", docs, metadatas, ids)
     _record_eval_stage(eval_stages, "bm25", bm25_docs, bm25_metadatas, bm25_ids)
     _record_eval_stage(eval_stages, "table_fact", lexical_docs, lexical_metadatas, lexical_ids)
-    if rules:
-        if bm25_docs:
-            docs = bm25_docs + docs
-            metadatas = bm25_metadatas + metadatas
-            ids = bm25_ids + ids
-        if lexical_docs:
-            docs = lexical_docs + docs
-            metadatas = lexical_metadatas + metadatas
-            ids = lexical_ids + ids
-    else:
-        docs, metadatas, ids = _fuse_reciprocal_rank([
-            (lexical_docs, lexical_metadatas, lexical_ids),
-            (bm25_docs, bm25_metadatas, bm25_ids),
-            (docs, metadatas, ids),
-        ])
-    docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
-    metadatas = _attach_runtime_table_facts(question, docs, metadatas, analysis)
+    docs, metadatas, ids = _order_retrieval_results(
+        question,
+        analysis,
+        (docs, metadatas, ids),
+        (bm25_docs, bm25_metadatas, bm25_ids),
+        (lexical_docs, lexical_metadatas, lexical_ids),
+    )
     _record_eval_stage(eval_stages, "expanded", docs, metadatas, ids)
-    if rules:
-        docs, metadatas, ids = _prioritize_query_results(docs, metadatas, ids, question)
-    _record_eval_stage(eval_stages, "prioritized", docs, metadatas, ids)
-    if rules:
-        docs, metadatas, ids = _rerank_by_query_analysis(docs, metadatas, ids, question, analysis)
-    _record_eval_stage(eval_stages, "reranked", docs, metadatas, ids)
-    if rules:
-        docs, metadatas, ids = _focus_candidates_with_query_evidence(docs, metadatas, ids, analysis)
-    _record_eval_stage(eval_stages, "focused", docs, metadatas, ids)
     docs = docs[:top_k]
     metadatas = metadatas[:top_k]
     ids = ids[:top_k]
@@ -6745,39 +5974,12 @@ def _prepare_query(
         return None, [], metrics
 
     context_build_start = time.perf_counter()
-    priority_table_evidence = _priority_table_fact_evidence_for_prompt(
-        question,
-        docs,
-        metadatas,
-        ids,
-    ) if rules else None
-    priority_query_evidence = _priority_query_evidence_for_prompt(
-        docs,
-        metadatas,
-        ids,
-        analysis,
-    ) if rules else None
     context = _build_context(docs, metadatas, ids, analysis)
     # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
-    prompt = _build_rag_prompt(
-        system_prompt,
-        context,
-        question,
-        priority_table_evidence.evidence_text if priority_table_evidence else "",
-        _prompt_priority_query_evidence_text(priority_query_evidence),
-    )
+    prompt = _build_rag_prompt(system_prompt, context, question)
     if eval_stages is not None:
         eval_stages["context"] = context
         eval_stages["prompt"] = prompt
-    priority_table_fact_answer = _priority_table_fact_answer_for_request(
-        priority_table_evidence,
-        system_prompt,
-    )
-    priority_query_evidence_answer = _priority_query_evidence_answer_for_request(
-        priority_query_evidence,
-        system_prompt,
-        analysis,
-    )
 
     # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 사용자 표시용 헤더 포함
     sources = []
@@ -6827,29 +6029,6 @@ def _prepare_query(
         "retrieval_chunk_query_error": results.get("retrieval_chunk_query_error"),
         "query_intent": analysis.intent,
         "query_subject_terms": sorted(analysis.subject_terms),
-        "priority_table_evidence_used": priority_table_evidence is not None,
-        "priority_table_evidence_chunk_id": (
-            priority_table_evidence.chunk_id if priority_table_evidence else None
-        ),
-        "priority_table_fact_answer": priority_table_fact_answer,
-        "priority_table_fact_answer_disabled_reason": (
-            _priority_table_fact_answer_disabled_reason(
-                priority_table_evidence,
-                system_prompt,
-            )
-        ),
-        "priority_query_evidence_used": priority_query_evidence is not None,
-        "priority_query_evidence_chunk_id": (
-            priority_query_evidence.chunk_id if priority_query_evidence else None
-        ),
-        "priority_query_evidence_answer": priority_query_evidence_answer,
-        "priority_query_evidence_answer_disabled_reason": (
-            _priority_query_evidence_answer_disabled_reason(
-                priority_query_evidence,
-                system_prompt,
-                analysis,
-            )
-        ),
     }
     logger.info(
         "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s retrieval_chunk_vector=%s legacy_vector=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
@@ -6989,7 +6168,7 @@ async def list_document_chunks(document_id: int):
 async def debug_rag_trace(request: RagTraceRequest):
     """
     답변 생성 없이 RAG 검색 파이프라인을 단계별로 추적한다.
-    vector, BM25, table_fact, rerank 후보를 JSON으로 반환해 검색 품질 디버깅에 사용한다.
+    벡터·BM25·표 사실 후보와 순위 융합 뒤 후보를 JSON으로 반환해 검색 품질 디버깅에 사용한다.
     """
     return await asyncio.to_thread(
         _trace_query_retrieval,
@@ -7061,35 +6240,10 @@ async def query_document(request: QueryRequest):
         request.top_k,
         request.system_prompt,
         eval_stages,
-        request.retrieval_mode,
     )
 
     if prompt is None:
         return _eval_response({"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}, eval_stages, "no_documents")
-
-    priority_answer = query_metrics.get("priority_table_fact_answer")
-    if priority_answer:
-        logger.info(
-            "[query] priority_table_fact_answer sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs total=%.2fs",
-            len(sources),
-            query_metrics["context_chars"],
-            query_metrics["prompt_chars"],
-            query_metrics["prepare_elapsed"],
-            time.perf_counter() - query_start,
-        )
-        return _eval_response({"answer": priority_answer, "sources": sources}, eval_stages, "priority_table_fact")
-
-    priority_answer = query_metrics.get("priority_query_evidence_answer")
-    if priority_answer:
-        logger.info(
-            "[query] priority_query_evidence_answer sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs total=%.2fs",
-            len(sources),
-            query_metrics["context_chars"],
-            query_metrics["prompt_chars"],
-            query_metrics["prepare_elapsed"],
-            time.perf_counter() - query_start,
-        )
-        return _eval_response({"answer": priority_answer, "sources": sources}, eval_stages, "priority_query_evidence")
 
     # async 핸들러에서 ainvoke()로 이벤트 루프 블로킹 방지
     llm_start = time.perf_counter()
@@ -7113,7 +6267,7 @@ async def query_document(request: QueryRequest):
 async def query_stream(request: QueryRequest):
     """
     SSE 스트리밍 RAG 파이프라인:
-    1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query, 검색 방식은 요청값 또는 AI_RETRIEVAL_MODE)
+    1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query)
     2. 생성 모델 토큰 스트리밍 → SSE data 이벤트 전송
     3. 완료 시 sources 포함 done 이벤트 전송
     클라이언트 연결 종료 시 asyncio.CancelledError로 자동 중단된다.
@@ -7125,7 +6279,6 @@ async def query_stream(request: QueryRequest):
         request.top_k,
         request.system_prompt,
         None,
-        request.retrieval_mode,
     )
 
     if prompt is None:
@@ -7140,54 +6293,6 @@ async def query_stream(request: QueryRequest):
             empty_stream(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-        )
-
-    priority_answer = query_metrics.get("priority_table_fact_answer")
-    if priority_answer:
-        async def priority_stream():
-            yield f"data: {json.dumps({'answer': priority_answer}, ensure_ascii=False)}\n\n"
-            payload = json.dumps(
-                {"done": True, "answer": priority_answer, "sources": sources},
-                ensure_ascii=False,
-            )
-            yield f"data: {payload}\n\n"
-
-        logger.info(
-            "[query_stream] priority_table_fact_answer sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs total=%.2fs",
-            len(sources),
-            query_metrics["context_chars"],
-            query_metrics["prompt_chars"],
-            query_metrics["prepare_elapsed"],
-            time.perf_counter() - stream_start,
-        )
-        return StreamingResponse(
-            priority_stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    priority_answer = query_metrics.get("priority_query_evidence_answer")
-    if priority_answer:
-        async def priority_query_stream():
-            yield f"data: {json.dumps({'answer': priority_answer}, ensure_ascii=False)}\n\n"
-            payload = json.dumps(
-                {"done": True, "answer": priority_answer, "sources": sources},
-                ensure_ascii=False,
-            )
-            yield f"data: {payload}\n\n"
-
-        logger.info(
-            "[query_stream] priority_query_evidence_answer sources=%s context_chars=%s prompt_chars=%s prepare=%.2fs total=%.2fs",
-            len(sources),
-            query_metrics["context_chars"],
-            query_metrics["prompt_chars"],
-            query_metrics["prepare_elapsed"],
-            time.perf_counter() - stream_start,
-        )
-        return StreamingResponse(
-            priority_query_stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     async def token_stream():
