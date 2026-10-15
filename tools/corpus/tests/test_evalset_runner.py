@@ -90,25 +90,23 @@ def test_run_marks_server_without_eval_trace_as_failure(evalset, tmp_path):
     assert "eval_trace" in runner.read_answers(tmp_path / "run")["ev-0001"]["error"]
 
 
-def test_run_always_sends_retrieval_mode(evalset, tmp_path):
-    plain = FakeSession()
-    run(evalset, tmp_path / "plain", plain, ids=["ev-0001"])
-    assert plain.requests[0][1]["retrieval_mode"] == "rrf"  # 기본값(운영 기본값)도 적어 보낸다
-    manifest = json.loads((tmp_path / "plain" / runner.MANIFEST).read_text(encoding="utf-8"))
+def test_run_records_rank_fusion_and_does_not_send_a_mode(evalset, tmp_path):
+    session = FakeSession()
+    run(evalset, tmp_path / "run", session, ids=["ev-0001"])
+    assert "retrieval_mode" not in session.requests[0][1]  # AI 서버는 순위 융합 하나뿐이다(#169)
+    manifest = json.loads((tmp_path / "run" / runner.MANIFEST).read_text(encoding="utf-8"))
     assert manifest["retrieval_mode"] == "rrf"
-    rules = FakeSession()
-    run(evalset, tmp_path / "rules", rules, ids=["ev-0001"], retrieval_mode="rules")
-    assert rules.requests[0][1]["retrieval_mode"] == "rules"  # 서버 기본값이 바뀌어도 규칙 경로로 돈다
-    with pytest.raises(ValueError, match="retrieval_mode"):  # 한 실행 폴더에 다른 검색 방식을 섞지 않는다
-        run(evalset, tmp_path / "rules", FakeSession(), ids=["ev-0001"])
 
 
-def test_run_reads_old_manifest_without_retrieval_mode_as_rules(evalset, tmp_path):
-    run(evalset, tmp_path / "old", FakeSession(), ids=["ev-0001"], retrieval_mode="rules")
+@pytest.mark.parametrize("old_mode", ["rules", None])
+def test_run_refuses_to_append_to_rule_path_runs(evalset, tmp_path, old_mode):
+    run(evalset, tmp_path / "old", FakeSession(), ids=["ev-0001"])
     path = tmp_path / "old" / runner.MANIFEST
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    del manifest["retrieval_mode"]  # 이 옵션이 생기기 전의 실행 기록
+    if old_mode is None:
+        del manifest["retrieval_mode"]  # #168 전 실행 기록: 칸이 없고 규칙 경로로 돌았다
+    else:
+        manifest["retrieval_mode"] = old_mode
     path.write_text(json.dumps(manifest), encoding="utf-8")
-    assert run(evalset, tmp_path / "old", FakeSession(), retrieval_mode="rules")["skipped"] == 1
-    with pytest.raises(ValueError, match="retrieval_mode"):  # 옛 기록에 지금 기본값(rrf)으로 이어 붙이지 않는다
+    with pytest.raises(ValueError, match="retrieval_mode"):  # 규칙 경로 기록에 순위 융합 답을 섞지 않는다
         run(evalset, tmp_path / "old", FakeSession())

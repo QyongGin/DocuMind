@@ -14,11 +14,11 @@ golden 파일과 **byte 단위로** 비교한다. 의도한 블록만 바뀌었�
 생기는 ``[우선 질의 근거 사용 규칙]`` 이다. 골든 스냅샷은 이런 부분 문자열
 검사 대신 프롬프트 전체를 잠그므로 같은 함정을 원천 차단한다.
 
-5 대표 케이스
--------------
-``_build_rag_prompt`` 의 분기는 (1) system_prompt 기본/커스텀,
-(2) 우선 표 근거 유무, (3) 우선 질의 근거 유무 세 가지다. 아래 5케이스가
-이 분기를 모두 덮는다. 핸드오프의 (a)~(e) 라벨과의 대응을 주석에 적었다.
+대표 케이스
+-----------
+``_build_rag_prompt`` 의 분기는 system_prompt 기본/커스텀 하나다. 우선 표 근거·우선 질의 근거
+블록(옛 a·b·d 케이스)은 규칙 경로와 함께 지웠다(#169, ADR-0032). 남은 c·e 골든 파일은 그대로 두어,
+지운 뒤에도 운영 프롬프트가 byte 단위로 같음을 잠근다.
 
 입력은 전부 합성(synthetic)이다. 실제 PDF/임베딩/DB 가 필요 없다.
 
@@ -52,53 +52,21 @@ _SYNTHETIC_CONTEXT = (
     "[질문 관련 발췌]\n"
     "합성 문서의 합성 문단 발췌."
 )
-_SYNTHETIC_TABLE_EVIDENCE = (
-    "표: 합성 표\n행: 가 / 열: 금액 / 값: 10,000원\n행: 나 / 열: 금액 / 값: 20,000원"
-)
-_SYNTHETIC_QUERY_EVIDENCE = "신청 방법: 합성 홈페이지에서 신청서를 제출한다."
 _SYNTHETIC_CUSTOM_SYSTEM = "너는 합성 안내원이다. 반드시 JSON 형식으로만 답하라."
 
-# 핸드오프 (a)~(e) 매핑:
-#   a_priority_table  -> (a) 우선 표 근거 발동
-#   b_priority_query  -> (b) 우선 질의 근거 발동
-#   c_no_priority     -> (c) 둘 다 없음
-#   d_table_and_query -> (d) deterministic 우회 답변 경로(우선 표+질의 동시)
-#   e_custom_system   -> (e) unsupported/관리자 커스텀 system_prompt 경로
+# 케이스 이름은 골든 파일 이름과 같다(옛 이름 그대로 — 파일이 바뀌지 않았음을 git으로도 확인할 수 있게).
+#   c_no_priority   -> 기본 system_prompt
+#   e_custom_system -> 관리자 커스텀 system_prompt
 CASES = {
-    "a_priority_table": {
-        "system_prompt": None,
-        "context": _SYNTHETIC_CONTEXT,
-        "question": "가 항목의 금액은 얼마인가요?",
-        "priority_table_evidence": _SYNTHETIC_TABLE_EVIDENCE,
-        "priority_query_evidence": "",
-    },
-    "b_priority_query": {
-        "system_prompt": None,
-        "context": _SYNTHETIC_CONTEXT,
-        "question": "신청은 어떻게 하나요?",
-        "priority_table_evidence": "",
-        "priority_query_evidence": _SYNTHETIC_QUERY_EVIDENCE,
-    },
     "c_no_priority": {
         "system_prompt": None,
         "context": _SYNTHETIC_CONTEXT,
         "question": "합성 문서에 대한 일반 질문입니다.",
-        "priority_table_evidence": "",
-        "priority_query_evidence": "",
-    },
-    "d_table_and_query": {
-        "system_prompt": None,
-        "context": _SYNTHETIC_CONTEXT,
-        "question": "가 항목 금액과 신청 방법을 함께 알려주세요.",
-        "priority_table_evidence": _SYNTHETIC_TABLE_EVIDENCE,
-        "priority_query_evidence": _SYNTHETIC_QUERY_EVIDENCE,
     },
     "e_custom_system": {
         "system_prompt": _SYNTHETIC_CUSTOM_SYSTEM,
         "context": _SYNTHETIC_CONTEXT,
         "question": "근거에 없는 내용을 물어봅니다.",
-        "priority_table_evidence": "",
-        "priority_query_evidence": "",
     },
 }
 

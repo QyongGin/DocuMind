@@ -23,7 +23,7 @@ try:
         _build_bm25_sparse_index,
         _build_opendataloader_json_index_artifacts,
         _expand_table_fact_results,
-        _priority_table_fact_evidence_for_prompt,
+        _get_matched_table_facts,
         _typed_table_fact_contract_candidates,
     )
 finally:
@@ -250,22 +250,17 @@ def main() -> None:
     assert sum(1 for doc in index_docs if doc.metadata.get("table_fact_source")) == 3
 
     comparison_docs = artifacts.table_fact_docs[:2]
-    expanded_docs, expanded_metadatas, expanded_ids = _expand_table_fact_results(
+    expanded_docs, expanded_metadatas, _ = _expand_table_fact_results(
         [doc.page_content for doc in comparison_docs],
         [doc.metadata for doc in comparison_docs],
         [doc.metadata["table_fact_lookup_id"] for doc in comparison_docs],
     )
     assert len(expanded_docs) == 1
 
-    priority_evidence = _priority_table_fact_evidence_for_prompt(
-        "유형 I과 유형 II의 지원자격은?",
-        expanded_docs,
-        expanded_metadatas,
-        expanded_ids,
-    )
-    assert priority_evidence is not None
-    assert "행: 유형Ⅰ / 열: 지원자격" in priority_evidence.evidence_text
-    assert "행: 유형Ⅱ / 열: 지원자격" in priority_evidence.evidence_text
+    # 부모 청크로 펼친 뒤에도 행 이름이 남아야 프롬프트의 '표 검색 정보'가 행을 가린다
+    matched_facts = _get_matched_table_facts(expanded_metadatas[0])
+    assert any("유형Ⅰ 행 정보는 지원자격=" in fact for fact in matched_facts)
+    assert any("유형Ⅱ 행 정보는 지원자격=" in fact for fact in matched_facts)
 
     rowspan_artifacts = _build_opendataloader_json_index_artifacts(
         [_rowspan_json_page()],
@@ -289,20 +284,15 @@ def main() -> None:
     ]
     assert "행 경로=지역전형 > 유형Ⅰ" in support_by_row["유형Ⅰ"].page_content
 
-    rowspan_expanded_docs, rowspan_expanded_metadatas, rowspan_expanded_ids = _expand_table_fact_results(
+    rowspan_expanded_docs, rowspan_expanded_metadatas, _ = _expand_table_fact_results(
         [doc.page_content for doc in support_docs],
         [doc.metadata for doc in support_docs],
         [doc.metadata["table_fact_lookup_id"] for doc in support_docs],
     )
-    rowspan_evidence = _priority_table_fact_evidence_for_prompt(
-        "지역전형 유형 I과 유형 II의 지원자격은?",
-        rowspan_expanded_docs,
-        rowspan_expanded_metadatas,
-        rowspan_expanded_ids,
-    )
-    assert rowspan_evidence is not None
-    assert "행: 지역전형 > 유형Ⅰ / 열: 지원자격" in rowspan_evidence.evidence_text
-    assert "행: 지역전형 > 유형Ⅱ / 열: 지원자격" in rowspan_evidence.evidence_text
+    assert len(rowspan_expanded_docs) == 1
+    rowspan_facts = _get_matched_table_facts(rowspan_expanded_metadatas[0])
+    assert any("행 경로=지역전형 > 유형Ⅰ; 지원자격=" in fact for fact in rowspan_facts)
+    assert any("행 경로=지역전형 > 유형Ⅱ; 지원자격=" in fact for fact in rowspan_facts)
 
     _check_bm25_limit_uses_raw_records()
 

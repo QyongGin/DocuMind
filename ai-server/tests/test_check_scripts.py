@@ -3,7 +3,7 @@
 설계 원칙
 ---------
 - 원본 check_*.py 는 한 줄도 바꾸지 않는다. import 해서 호출만 한다(로직 복제 금지).
-- assertion 기반 스크립트 7종은 ``main()`` 을 그대로 호출한다. 실패 시
+- assertion 기반 스크립트 6종은 ``main()`` 을 그대로 호출한다. 실패 시
   ``AssertionError`` 가 올라오므로 pytest 가 자연히 잡는다.
 - 나머지 2종은 assertion 기반 단위 테스트가 아니라 라이브 ChromaDB 진단 도구다.
   ``check_section_paths`` 는 순수 집계 함수 ``summarize_section_paths`` 를
@@ -11,7 +11,7 @@
   ``check_chunks`` 는 자체 assertion 이 없고 import 시점에 ChromaDB 에 붙는
   순수 출력 도구라, 라이브 DB 가 있을 때만 실행하고 평소엔 skip 한다.
 
-총 9개 check_*.py 가 ``pytest tests/`` 한 명령으로 커버된다.
+총 8개 check_*.py 가 ``pytest tests/`` 한 명령으로 커버된다.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ import pytest
 ASSERTION_CHECK_MODULES = [
     "check_opendataloader_contract_adapter",
     "check_opendataloader_json_indexing",
-    "check_query_evidence_priority",
     "check_rag_contracts",
     "check_table_fact_evidence",
     "check_table_fact_runtime_extraction",
