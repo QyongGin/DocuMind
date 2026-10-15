@@ -129,7 +129,8 @@ OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 OLLAMA_TEMPERATURE = _env_float("OLLAMA_TEMPERATURE", 0.0)
 OLLAMA_EMBEDDING_WARMUP_ON_STARTUP = _env_bool("OLLAMA_EMBEDDING_WARMUP_ON_STARTUP")
 # 생성 문맥(프롬프트 + 답). 4,096에서는 긴 질문의 근거가 잘렸다(2026-10-01 실측, EXAONE 27문항 중 4개).
-OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 8192)
+# 근거 8개(M2 2단계, 2026-10-15): 개발셋 최대 프롬프트 9,424토큰 + 출력 512에 처음 보는 질문을 위한 여유를 둬 12,288.
+OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 12288)
 # 임베딩 문맥. 생성 문맥과 따로 둔다. 서비스 전체 색인(2026-10-04)에서 임베딩하는 글 5만여 개 중
 # 2,048토큰을 넘는 것은 한 PDF의 긴 청크 2개(2,098·2,124토큰)뿐이고 나머지는 1,372토큰 이하다.
 # 넘는 글은 끝부분이 잘린 채 임베딩된다(청크 길이 상한은 M2). 생성 문맥을 늘려도 임베딩 모델이
@@ -142,7 +143,8 @@ CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 80, minimum=0)
 CHUNK_MERGE_MIN_SIZE = _env_int("CHUNK_MERGE_MIN_SIZE", 300, minimum=0)
 EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 64)
 UPLOAD_READ_CHUNK_BYTES = _env_int("UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)
-DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 5)
+# 생성 모델에 넣는 근거 청크 수(M2 2단계, 2026-10-15: 5·8·10 중 채택 기준을 넘은 가장 작은 값). 백엔드·프론트 기본값과 같게 둔다.
+DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 8)
 # 검색 순서 정하기(ADR-0032). rrf: 표 사실·BM25·벡터 결과를 순위 융합만 해서 상위 top_k를 쓴다(기본).
 # rules: 사람이 만든 규칙 세 개와 우선 경로 답(되돌리기용, M2 2단계 뒤 코드와 함께 지운다).
 RETRIEVAL_MODES = ("rules", "rrf")

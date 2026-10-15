@@ -22,7 +22,7 @@ from . import schema
 
 MANIFEST = "manifest.json"
 ANSWERS = "answers.jsonl"
-DEFAULT_TOP_K = 5  # 백엔드·프론트·AI 서버 운영 기본값(.env.example)
+DEFAULT_TOP_K = 8  # 백엔드·프론트·AI 서버 운영 기본값(.env.example, M2 2단계 2026-10-15)
 FIXED = ("evalset_sha256", "index", "top_k", "system_prompt_sha256", "retrieval_mode")
 DEFAULT_RETRIEVAL_MODE = "rrf"  # AI 서버 운영 기본값(ADR-0032: 규칙 없이 순위 융합). "rules"는 되돌리기용 규칙 경로
 LEGACY_RETRIEVAL_MODE = "rules"  # retrieval_mode 칸이 없는 옛 실행 기록(#168 전)은 규칙 경로로 돌았다
