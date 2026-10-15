@@ -3206,13 +3206,12 @@ def _lookup_lexical_table_fact_candidates(question: str, limit: int = 5) -> list
     ]
 
 
-def _lookup_lexical_table_facts(question: str, limit: int = 5) -> tuple[list[str], list[dict], list[str]]:
-    """표 질의에서 벡터 검색이 놓치는 table_fact를 얇은 lexical 보강으로 찾는다."""
-    selected = _lookup_lexical_table_fact_candidates(question, limit)
+def _candidate_lists(candidates: list[dict]) -> tuple[list[str], list[dict], list[str]]:
+    """검색기 후보(dict) 목록을 글·메타데이터·청크 id 목록 셋으로 나눈다. 점수는 호출자가 후보에서 따로 읽는다."""
     return (
-        [candidate["document"] for candidate in selected],
-        [candidate["metadata"] for candidate in selected],
-        [candidate["chunk_id"] for candidate in selected],
+        [candidate["document"] for candidate in candidates],
+        [candidate["metadata"] for candidate in candidates],
+        [candidate["chunk_id"] for candidate in candidates],
     )
 
 
@@ -3510,16 +3509,6 @@ def _lookup_bm25_raw_chunk_candidates(analysis: QueryAnalysis, limit: int = 5) -
         }
         for index, (score, _, record) in enumerate(selected)
     ]
-
-
-def _lookup_bm25_raw_chunks(analysis: QueryAnalysis, limit: int = 5) -> tuple[list[str], list[dict], list[str]]:
-    """BM25 sparse retrieval로 vector search가 놓친 raw chunk 후보를 보강한다."""
-    selected = _lookup_bm25_raw_chunk_candidates(analysis, limit)
-    return (
-        [candidate["document"] for candidate in selected],
-        [candidate["metadata"] for candidate in selected],
-        [candidate["chunk_id"] for candidate in selected],
-    )
 
 
 def _is_table_value_question(question: str) -> bool:
@@ -5725,20 +5714,13 @@ def _trace_query_retrieval(
     for candidate in table_fact_candidates:
         _record_table_fact_trace(trace_by_id, candidate)
 
-    def candidate_lists(candidates: list[dict]) -> tuple[list[str], list[dict], list[str]]:
-        return (
-            [candidate["document"] for candidate in candidates],
-            [candidate["metadata"] for candidate in candidates],
-            [candidate["chunk_id"] for candidate in candidates],
-        )
-
     # 운영 질의와 같은 함수로 순서를 정한다. 추적 결과가 실제 답의 후보와 어긋나지 않게 한다.
     docs, metadatas, ids = _order_retrieval_results(
         question,
         analysis,
         (vector_docs, vector_metadatas, vector_ids),
-        candidate_lists(bm25_candidates),
-        candidate_lists(table_fact_candidates),
+        _candidate_lists(bm25_candidates),
+        _candidate_lists(table_fact_candidates),
     )
     expanded_candidates = [
         _format_trace_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, False)
@@ -5868,21 +5850,41 @@ def _order_retrieval_results(
     return docs, metadatas, ids
 
 
-def _record_eval_stage(stages: dict | None, name: str, docs: list, metadatas: list, ids: list) -> None:
-    """평가용 기록: 한 단계의 후보를 글 전체와 함께 남긴다. stages가 None(운영 경로)이면 아무것도 하지 않는다."""
+def _record_eval_stage(
+    stages: dict | None,
+    name: str,
+    docs: list,
+    metadatas: list,
+    ids: list,
+    scores: dict[str, list] | None = None,
+) -> None:
+    """평가용 기록: 한 단계의 후보를 글 전체와 함께 남긴다. stages가 None(운영 경로)이면 아무것도 하지 않는다.
+
+    scores는 후보와 같은 순서의 검색기 점수 목록이다(예: {"distance": [...]}). 표 사실은 부모 청크 id를,
+    벡터 후보는 출처 컬렉션을 함께 남긴다. 점수 결합·재순위를 같은 후보로 오프라인 비교하려고 남긴다(M2 3단계).
+    """
     if stages is None:
         return
-    stages[name] = [
-        {
+    entries = []
+    for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids)):
+        meta = meta or {}
+        entry = {
             "chunk_id": str(chunk_id),
-            "document_id": str((meta or {}).get("document_id", "")),
-            "ledger_id": (meta or {}).get("ledger_id"),
-            "chunk_index": (meta or {}).get("chunk_index"),
-            "chunk_role": (meta or {}).get("chunk_role", "raw"),
+            "document_id": str(meta.get("document_id", "")),
+            "ledger_id": meta.get("ledger_id"),
+            "chunk_index": meta.get("chunk_index"),
+            "chunk_role": meta.get("chunk_role", "raw"),
             "text": doc,
         }
-        for doc, meta, chunk_id in zip(docs, metadatas, ids)
-    ]
+        if entry["chunk_role"] == "table_fact":
+            entry["parent_chunk_id"] = str(meta.get("parent_chunk_id", "")).strip() or None
+        if meta.get("vector_source_collection"):
+            entry["vector_source_collection"] = meta["vector_source_collection"]
+        for key, values in (scores or {}).items():
+            if index < len(values):
+                entry[key] = values[index]
+        entries.append(entry)
+    stages[name] = entries
 
 
 def _prepare_query(
@@ -5919,11 +5921,16 @@ def _prepare_query(
     raw_result_count = len(docs)
     retrieval_chunk_hits = int(results.get("retrieval_chunk_hits") or 0)
     legacy_vector_hits = int(results.get("legacy_vector_hits") or 0)
-    bm25_docs, bm25_metadatas, bm25_ids = _lookup_bm25_raw_chunks(analysis, limit=top_k)
-    lexical_docs, lexical_metadatas, lexical_ids = _lookup_lexical_table_facts(question)
-    _record_eval_stage(eval_stages, "vector", docs, metadatas, ids)
-    _record_eval_stage(eval_stages, "bm25", bm25_docs, bm25_metadatas, bm25_ids)
-    _record_eval_stage(eval_stages, "table_fact", lexical_docs, lexical_metadatas, lexical_ids)
+    bm25_candidates = _lookup_bm25_raw_chunk_candidates(analysis, limit=top_k)
+    table_fact_candidates = _lookup_lexical_table_fact_candidates(question)
+    bm25_docs, bm25_metadatas, bm25_ids = _candidate_lists(bm25_candidates)
+    lexical_docs, lexical_metadatas, lexical_ids = _candidate_lists(table_fact_candidates)
+    # 벡터는 거리(작을수록 가까움), BM25·표 사실은 각자의 점수(클수록 가까움). 순위 융합은 점수를 쓰지 않는다.
+    _record_eval_stage(eval_stages, "vector", docs, metadatas, ids, {"distance": distance_values})
+    _record_eval_stage(eval_stages, "bm25", bm25_docs, bm25_metadatas, bm25_ids,
+                       {"bm25_score": [candidate["bm25_score"] for candidate in bm25_candidates]})
+    _record_eval_stage(eval_stages, "table_fact", lexical_docs, lexical_metadatas, lexical_ids,
+                       {"table_fact_score": [candidate["table_fact_score"] for candidate in table_fact_candidates]})
     docs, metadatas, ids = _order_retrieval_results(
         question,
         analysis,
