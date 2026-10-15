@@ -1,0 +1,46 @@
+"""운영 기본값이 여러 파일에 나뉘어 있어도 같은 값인지 확인한다(M2 2단계, 2026-10-15).
+
+검색 개수(상위 k)는 백엔드·프론트·AI 서버가 각자 기본값을 갖는다. 백엔드가 AI 서버에 늘 값을 보내므로
+한 곳만 바뀌면 화면·백엔드·AI 서버가 서로 다른 개수로 동작한다. 생성 문맥도 compose·환경 예시·AI 서버에 있다.
+"""
+import re
+from pathlib import Path
+
+import main
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def read(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+def env_example(name: str) -> int:
+    return int(re.search(rf"^{name}=(\d+)$", read(".env.example"), re.M).group(1))
+
+
+def compose_default(name: str) -> int:
+    return int(re.search(rf"\$\{{{name}:-(\d+)\}}", read("docker-compose.yml")).group(1))
+
+
+def test_default_top_k_is_the_same_everywhere():
+    values = {
+        "ai-server main.py": main.DEFAULT_TOP_K,
+        ".env.example CHAT": env_example("CHAT_DEFAULT_TOP_K"),
+        ".env.example AI": env_example("AI_DEFAULT_TOP_K"),
+        ".env.example VITE": env_example("VITE_DEFAULT_TOP_K"),
+        "compose CHAT": compose_default("CHAT_DEFAULT_TOP_K"),
+        "compose AI": compose_default("AI_DEFAULT_TOP_K"),
+        "compose VITE": compose_default("VITE_DEFAULT_TOP_K"),
+        "backend application.yaml": int(re.search(r"\$\{CHAT_DEFAULT_TOP_K:(\d+)\}", read("backend/src/main/resources/application.yaml")).group(1)),
+        "frontend Dockerfile": int(re.search(r"ARG VITE_DEFAULT_TOP_K=(\d+)", read("frontend/Dockerfile")).group(1)),
+        "frontend env.js 기본": int(re.search(r"VITE_DEFAULT_TOP_K \?\? '(\d+)'", read("frontend/src/config/env.js")).group(1)),
+        "frontend env.js 잘못된 값일 때": int(re.search(r"parsedTopK : (\d+),", read("frontend/src/config/env.js")).group(1)),
+    }
+    assert len(set(values.values())) == 1, values
+
+
+def test_generation_context_is_the_same_everywhere():
+    values = {"ai-server main.py": main.OLLAMA_NUM_CTX, ".env.example": env_example("OLLAMA_NUM_CTX"),
+              "compose": compose_default("OLLAMA_NUM_CTX")}
+    assert len(set(values.values())) == 1, values

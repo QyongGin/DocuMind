@@ -57,7 +57,7 @@ def test_run_writes_manifest_and_answers(evalset, tmp_path):
     summary = run(evalset, tmp_path / "run", session, version="v2")
     assert summary == {"asked": 2, "skipped": 0, "errors": 0}  # 버린 문항은 묻지 않는다
     url, body = session.requests[0]
-    assert url == "http://gana:8000/query" and body["include_eval_trace"] is True and body["top_k"] == 5
+    assert url == "http://gana:8000/query" and body["include_eval_trace"] is True and body["top_k"] == 8
     answers = runner.read_answers(tmp_path / "run")
     assert sorted(answers) == ["ev-0001", "ev-0002"] and answers["ev-0001"]["eval_trace"]["answer_path"] == "llm"
     manifest = json.loads((tmp_path / "run" / runner.MANIFEST).read_text(encoding="utf-8"))
