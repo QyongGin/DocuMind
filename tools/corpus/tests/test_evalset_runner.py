@@ -90,23 +90,25 @@ def test_run_marks_server_without_eval_trace_as_failure(evalset, tmp_path):
     assert "eval_trace" in runner.read_answers(tmp_path / "run")["ev-0001"]["error"]
 
 
-def test_run_sends_retrieval_mode_only_for_experiments(evalset, tmp_path):
+def test_run_always_sends_retrieval_mode(evalset, tmp_path):
     plain = FakeSession()
     run(evalset, tmp_path / "plain", plain, ids=["ev-0001"])
-    assert "retrieval_mode" not in plain.requests[0][1]  # 운영 경로 요청은 그대로
-    trial = FakeSession()
-    run(evalset, tmp_path / "rrf", trial, ids=["ev-0001"], retrieval_mode="rrf")
-    assert trial.requests[0][1]["retrieval_mode"] == "rrf"
-    manifest = json.loads((tmp_path / "rrf" / runner.MANIFEST).read_text(encoding="utf-8"))
+    assert plain.requests[0][1]["retrieval_mode"] == "rrf"  # 기본값(운영 기본값)도 적어 보낸다
+    manifest = json.loads((tmp_path / "plain" / runner.MANIFEST).read_text(encoding="utf-8"))
     assert manifest["retrieval_mode"] == "rrf"
+    rules = FakeSession()
+    run(evalset, tmp_path / "rules", rules, ids=["ev-0001"], retrieval_mode="rules")
+    assert rules.requests[0][1]["retrieval_mode"] == "rules"  # 서버 기본값이 바뀌어도 규칙 경로로 돈다
     with pytest.raises(ValueError, match="retrieval_mode"):  # 한 실행 폴더에 다른 검색 방식을 섞지 않는다
-        run(evalset, tmp_path / "rrf", FakeSession(), ids=["ev-0001"])
+        run(evalset, tmp_path / "rules", FakeSession(), ids=["ev-0001"])
 
 
 def test_run_reads_old_manifest_without_retrieval_mode_as_rules(evalset, tmp_path):
-    run(evalset, tmp_path / "old", FakeSession(), ids=["ev-0001"])
+    run(evalset, tmp_path / "old", FakeSession(), ids=["ev-0001"], retrieval_mode="rules")
     path = tmp_path / "old" / runner.MANIFEST
     manifest = json.loads(path.read_text(encoding="utf-8"))
     del manifest["retrieval_mode"]  # 이 옵션이 생기기 전의 실행 기록
     path.write_text(json.dumps(manifest), encoding="utf-8")
-    assert run(evalset, tmp_path / "old", FakeSession())["skipped"] == 1
+    assert run(evalset, tmp_path / "old", FakeSession(), retrieval_mode="rules")["skipped"] == 1
+    with pytest.raises(ValueError, match="retrieval_mode"):  # 옛 기록에 지금 기본값(rrf)으로 이어 붙이지 않는다
+        run(evalset, tmp_path / "old", FakeSession())

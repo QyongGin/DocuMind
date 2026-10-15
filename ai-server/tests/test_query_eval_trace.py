@@ -74,7 +74,7 @@ def fake_prepare(priority_answer: str | None = None):
     source = {"document_id": "11", "source": "모집요강.pdf", "page": None, "chunk_index": 0, "content": "전형료 30,000원"}
     metrics = {"context_chars": 10, "prompt_chars": 20, "prepare_elapsed": 0.0, "priority_table_fact_answer": priority_answer}
 
-    def prepare(question, top_k, system_prompt=None, eval_stages=None, retrieval_mode="rules"):
+    def prepare(question, top_k, system_prompt=None, eval_stages=None, retrieval_mode="rrf"):
         prepare.modes.append(retrieval_mode)
         if eval_stages is not None:
             eval_stages.update(final=[{"chunk_id": "11_0", "document_id": "11", "ledger_id": "gana/page/1",
@@ -122,7 +122,8 @@ def test_eval_trace_marks_priority_answer_without_calling_llm(monkeypatch):
     assert fake.calls == []
 
 
-# M2 실험용 검색 방식(retrieval_mode): 운영 기본값은 rules 그대로, rrf는 규칙 없이 순위 융합만 쓴다(가나대학 합성 데이터).
+# 검색 방식(retrieval_mode, ADR-0032): 기본값은 서버 설정 AI_RETRIEVAL_MODE(기본 rrf = 규칙 없이 순위 융합),
+# rules는 되돌리기용 규칙 경로다(가나대학 합성 데이터).
 def test_fuse_reciprocal_rank_merges_same_chunk_and_orders_by_score():
     vector = (["벡터1", "공통"], [{"id": "v1"}, {"id": "c"}], ["v1", "c"])
     bm25 = (["공통", "키워드1"], [{"id": "c"}, {"id": "b1"}], ["c", "b1"])
@@ -152,7 +153,9 @@ def test_prepare_query_rrf_mode_skips_rule_stages(fake_retrieval, monkeypatch):
     assert prompt and sources[0]["document_id"] == "12"
     called.clear()
     main._prepare_query("가나대학 기숙사 신청 언제예요?", 5, None, None)
-    assert "_prioritize_query_results" in called  # 기본값(rules)은 운영 경로 그대로
+    assert called == []  # 기본값(rrf)도 규칙을 거치지 않는다
+    main._prepare_query("가나대학 기숙사 신청 언제예요?", 5, None, None, "rules")
+    assert "_prioritize_query_results" in called  # 되돌리기용 규칙 경로
 
 
 def test_prepare_query_rejects_unknown_retrieval_mode(fake_retrieval):
@@ -160,12 +163,24 @@ def test_prepare_query_rejects_unknown_retrieval_mode(fake_retrieval):
         main._prepare_query("가나대학 전형료 얼마예요?", 5, None, None, "dense")
 
 
-def test_query_passes_retrieval_mode_and_defaults_to_rules(monkeypatch):
+def test_query_and_stream_pass_retrieval_mode_and_default_to_rrf(monkeypatch):
     monkeypatch.setattr(main, "llm", FakeLLM())
-    prepare = fake_prepare()
+    prepare = fake_prepare(priority_answer="전형료는 30,000원입니다.")  # 스트리밍이 생성 모델을 부르지 않게
     monkeypatch.setattr(main, "_prepare_query", prepare)
     client = TestClient(main.app)
     client.post("/query", json={"question": "가나대학 전형료 얼마예요?"})
-    client.post("/query", json={"question": "가나대학 전형료 얼마예요?", "retrieval_mode": "rrf", "include_eval_trace": True})
-    assert prepare.modes == ["rules", "rrf"]
+    client.post("/query", json={"question": "가나대학 전형료 얼마예요?", "retrieval_mode": "rules", "include_eval_trace": True})
+    client.post("/query/stream", json={"question": "가나대학 전형료 얼마예요?"})  # 백엔드가 쓰는 경로
+    client.post("/query/stream", json={"question": "가나대학 전형료 얼마예요?", "retrieval_mode": "rules"})
+    assert main.DEFAULT_RETRIEVAL_MODE == "rrf"
+    assert prepare.modes == ["rrf", "rules", "rrf", "rules"]
     assert client.post("/query", json={"question": "가나대학 전형료 얼마예요?", "retrieval_mode": "dense"}).status_code == 422
+
+
+def test_env_choice_reads_retrieval_mode_and_falls_back_on_unknown(monkeypatch):
+    monkeypatch.setenv("AI_RETRIEVAL_MODE", " RULES ")
+    assert main._env_choice("AI_RETRIEVAL_MODE", main.RETRIEVAL_MODES, "rrf") == "rules"
+    monkeypatch.setenv("AI_RETRIEVAL_MODE", "dense")
+    assert main._env_choice("AI_RETRIEVAL_MODE", main.RETRIEVAL_MODES, "rrf") == "rrf"
+    monkeypatch.delenv("AI_RETRIEVAL_MODE")
+    assert main._env_choice("AI_RETRIEVAL_MODE", main.RETRIEVAL_MODES, "rrf") == "rrf"
