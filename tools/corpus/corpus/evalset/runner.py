@@ -24,7 +24,8 @@ MANIFEST = "manifest.json"
 ANSWERS = "answers.jsonl"
 DEFAULT_TOP_K = 5  # 백엔드·프론트·AI 서버 운영 기본값(.env.example)
 FIXED = ("evalset_sha256", "index", "top_k", "system_prompt_sha256", "retrieval_mode")
-DEFAULT_RETRIEVAL_MODE = "rules"  # AI 서버 운영 경로 그대로. "rrf"는 M2 실험(규칙 없이 순위 융합)
+DEFAULT_RETRIEVAL_MODE = "rrf"  # AI 서버 운영 기본값(ADR-0032: 규칙 없이 순위 융합). "rules"는 되돌리기용 규칙 경로
+LEGACY_RETRIEVAL_MODE = "rules"  # retrieval_mode 칸이 없는 옛 실행 기록(#168 전)은 규칙 경로로 돌았다
 
 
 def sha256(text: str) -> str:
@@ -99,9 +100,9 @@ def run(evalset_path: str | Path, run_dir: str | Path, ai_url: str, index: str, 
                          Path(repo) if repo else evalset_path.parent, now(), retrieval_mode)
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        # retrieval_mode가 없는 옛 실행 기록은 운영 경로(rules)로 돈 것이다
+        # retrieval_mode가 없는 옛 실행 기록은 규칙 경로(rules)로 돈 것이다
         different = [key for key in FIXED
-                     if manifest.get(key, DEFAULT_RETRIEVAL_MODE if key == "retrieval_mode" else None) != fresh[key]]
+                     if manifest.get(key, LEGACY_RETRIEVAL_MODE if key == "retrieval_mode" else None) != fresh[key]]
         if different:
             raise ValueError(f"실행 기록과 조건이 다르다({', '.join(different)}). 새 실행 폴더를 쓴다")
     else:
@@ -117,10 +118,9 @@ def run(evalset_path: str | Path, run_dir: str | Path, ai_url: str, index: str, 
             started = clock()
             record = {"id": item["id"], "rev": item.get("rev", 1), "question": item["question"]}
             try:
+                # 검색 방식은 늘 적어 보낸다. 서버 기본값이 바뀌어도 실행 기록과 실제 검색 방식이 어긋나지 않게
                 request = {"question": item["question"], "top_k": top_k, "system_prompt": system_prompt,
-                           "include_eval_trace": True}
-                if retrieval_mode != DEFAULT_RETRIEVAL_MODE:  # 운영 경로 요청은 그대로 둔다
-                    request["retrieval_mode"] = retrieval_mode
+                           "include_eval_trace": True, "retrieval_mode": retrieval_mode}
                 response = session.post(f"{manifest['ai_url']}/query", timeout=timeout, json=request)
                 response.raise_for_status()
                 body = response.json()

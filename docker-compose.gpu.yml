@@ -38,4 +38,4 @@ services:
         condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
-    command: ["pull", "${OLLAMA_LLM_MODEL:-exaone3.5:7.8b}"]
+    command: ["pull", "${OLLAMA_LLM_MODEL:-gemma4:12b-it-qat}"]

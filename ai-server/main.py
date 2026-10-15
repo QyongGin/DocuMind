@@ -86,6 +86,18 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_choice(name: str, choices: tuple[str, ...], default: str) -> str:
+    """정해진 값 중 하나인 환경변수를 읽는다. 목록에 없는 값이면 기본값을 쓴다."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    value = raw_value.strip().lower()
+    if value not in choices:
+        logger.warning("%s=%s 값이 %s 중 하나가 아니어서 기본값 %s를 사용합니다.", name, raw_value, "·".join(choices), default)
+        return default
+    return value
+
+
 def _env_float(name: str, default: float = 0.0, minimum: float = 0.0) -> float:
     """float 환경변수를 읽는다. 파싱 실패나 최소값 미만이면 기본값을 쓴다."""
     raw_value = os.getenv(name)
@@ -106,8 +118,9 @@ def _env_float(name: str, default: float = 0.0, minimum: float = 0.0) -> float:
 # 로컬: OLLAMA_BASE_URL 미설정 시 localhost 사용
 # Docker: OLLAMA_BASE_URL=http://ollama:11434
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-# 환경변수로 LLM 모델명 분기. Docker: OLLAMA_LLM_MODEL=exaone3.5:7.8b
-OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "exaone3.5:7.8b")
+# 생성 모델. 기본은 M2 검색 실험에서 답을 만드는 모델 Gemma 4 12B 4비트 QAT판(ADR-0031, Apache 2.0).
+# 이전 기본값 EXAONE 3.5 7.8B는 연구용(비상업) 라이선스라 기준점 비교에만 쓴다.
+OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "gemma4:12b-it-qat")
 # 환경변수로 임베딩 모델명 분기. VRAM이 작은 서버에서는 qwen3-embedding:4b를 우선 사용한다.
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:4b")
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
@@ -130,6 +143,10 @@ CHUNK_MERGE_MIN_SIZE = _env_int("CHUNK_MERGE_MIN_SIZE", 300, minimum=0)
 EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 64)
 UPLOAD_READ_CHUNK_BYTES = _env_int("UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)
 DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 5)
+# 검색 순서 정하기(ADR-0032). rrf: 표 사실·BM25·벡터 결과를 순위 융합만 해서 상위 top_k를 쓴다(기본).
+# rules: 사람이 만든 규칙 세 개와 우선 경로 답(되돌리기용, M2 2단계 뒤 코드와 함께 지운다).
+RETRIEVAL_MODES = ("rules", "rrf")
+DEFAULT_RETRIEVAL_MODE = _env_choice("AI_RETRIEVAL_MODE", RETRIEVAL_MODES, "rrf")
 BM25_INDEX_MAX_ENTRIES = _env_int("BM25_INDEX_MAX_ENTRIES", 50000)
 # Chroma에서 많은 항목을 가져올 때 한 번에 받을 수. Chroma 내부 SQLite는 한 질의의 변수 수에 한도가 있어,
 # 표 사실 45,878개를 한 번에 가져오다 "too many SQL variables"로 실패했다(2026-10-04 서비스 전체 색인).
@@ -2666,8 +2683,9 @@ class QueryRequest(BaseModel):
     # 평가용(M1 11번 채점기): 이 답을 만든 바로 그 실행의 단계별 후보(글 전체)·프롬프트·생성 종료 이유를 함께 돌려준다.
     # 운영 경로(Spring Boot)는 보내지 않으므로 응답이 바뀌지 않는다. /query에만 있다.
     include_eval_trace: bool = False
-    # 평가 실험용(M2): 검색 순서 정하기 방식. 운영 경로는 보내지 않으므로 기본값 rules(지금 운영 그대로)다.
-    retrieval_mode: Literal["rules", "rrf"] = "rules"
+    # 검색 순서 정하기 방식. 운영 경로(Spring Boot)는 보내지 않으므로 서버 설정 AI_RETRIEVAL_MODE(기본 rrf)를 따른다.
+    # 평가 실행기는 늘 적어 보내 실행 기록과 실제 검색 방식이 어긋나지 않게 한다.
+    retrieval_mode: Literal["rules", "rrf"] = DEFAULT_RETRIEVAL_MODE
 
 
 class RagTraceRequest(BaseModel):
@@ -6564,7 +6582,6 @@ def _trace_query_retrieval(
     }
 
 
-RETRIEVAL_MODES = ("rules", "rrf")
 RRF_K = 60  # Cormack 외(2009) 순위 융합 상수
 
 
@@ -6618,14 +6635,14 @@ def _prepare_query(
     top_k: int,
     system_prompt: str | None = None,
     eval_stages: dict | None = None,
-    retrieval_mode: str = "rules",
+    retrieval_mode: str = DEFAULT_RETRIEVAL_MODE,
 ) -> tuple[str | None, list, dict]:
     """
     질문 임베딩 → ChromaDB 검색 → 프롬프트 + 출처 조합.
     문서가 없으면 prompt를 None으로 반환한다. 호출자가 빈 응답 처리를 담당한다.
     eval_stages(평가용 dict)를 주면 단계별 후보·문맥·프롬프트를 그 안에 기록한다. 검색·답은 주지 않을 때와 같다.
-    retrieval_mode(평가 실험용, M2): "rules"는 운영 경로 그대로. "rrf"는 표 사실·BM25·벡터 결과를 순위 융합만 해서
-    상위 top_k를 쓰고, 사람이 만든 우선순위·재정렬·근거 좁히기와 우선 경로 답(모델을 거치지 않는 답)을 쓰지 않는다.
+    retrieval_mode(ADR-0032): "rrf"(기본, AI_RETRIEVAL_MODE)는 표 사실·BM25·벡터 결과를 순위 융합만 해서 상위 top_k를 쓰고,
+    사람이 만든 우선순위·재정렬·근거 좁히기와 우선 경로 답(모델을 거치지 않는 답)을 쓰지 않는다. "rules"는 되돌리기용 규칙 경로다.
     """
     if retrieval_mode not in RETRIEVAL_MODES:
         raise ValueError(f"retrieval_mode must be one of {RETRIEVAL_MODES}")
@@ -7094,8 +7111,8 @@ async def query_document(request: QueryRequest):
 async def query_stream(request: QueryRequest):
     """
     SSE 스트리밍 RAG 파이프라인:
-    1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query)
-    2. EXAONE 토큰 스트리밍 → SSE data 이벤트 전송
+    1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query, 검색 방식은 요청값 또는 AI_RETRIEVAL_MODE)
+    2. 생성 모델 토큰 스트리밍 → SSE data 이벤트 전송
     3. 완료 시 sources 포함 done 이벤트 전송
     클라이언트 연결 종료 시 asyncio.CancelledError로 자동 중단된다.
     """
@@ -7104,7 +7121,9 @@ async def query_stream(request: QueryRequest):
         _prepare_query,
         request.question,
         request.top_k,
-        request.system_prompt
+        request.system_prompt,
+        None,
+        request.retrieval_mode,
     )
 
     if prompt is None:
