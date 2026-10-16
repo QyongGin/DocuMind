@@ -8,6 +8,7 @@ from langchain_ollama import OllamaLLM
 from ollama import Client
 from pydantic import BaseModel, Field
 import chromadb
+import httpx
 import tempfile
 import os
 import re
@@ -132,6 +133,12 @@ EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 64)
 UPLOAD_READ_CHUNK_BYTES = _env_int("UPLOAD_READ_CHUNK_BYTES", 1024 * 1024)
 # 생성 모델에 넣는 근거 청크 수(M2 2단계, 2026-10-15: 5·8·10 중 채택 기준을 넘은 가장 작은 값). 백엔드·프론트 기본값과 같게 둔다.
 DEFAULT_TOP_K = _env_int("AI_DEFAULT_TOP_K", 8)
+# 재순위(M2 3단계, #174): 순위 융합 후보 앞 AI_RERANK_CANDIDATES개를 재순위 서버(Hugging Face TEI의 /rerank)로 다시 매긴다.
+# AI_RERANKER_URL이 비면 끈다(기본). 서버가 실패하면 순위 융합 순서를 그대로 쓴다. CPU로는 질문당 20초가 넘어 GPU 서버를 전제로 한다.
+RERANKER_URL = os.getenv("AI_RERANKER_URL", "").strip().rstrip("/")
+RERANK_CANDIDATES = _env_int("AI_RERANK_CANDIDATES", 20)
+RERANK_DOC_CHARS = _env_int("AI_RERANK_DOC_CHARS", 1200, minimum=100)
+RERANK_TIMEOUT_SECONDS = _env_float("AI_RERANK_TIMEOUT_SECONDS", 10.0, minimum=0.1)
 BM25_INDEX_MAX_ENTRIES = _env_int("BM25_INDEX_MAX_ENTRIES", 50000)
 # Chroma에서 많은 항목을 가져올 때 한 번에 받을 수. Chroma 내부 SQLite는 한 질의의 변수 수에 한도가 있어,
 # 표 사실 45,878개를 한 번에 가져오다 "too many SQL variables"로 실패했다(2026-10-04 서비스 전체 색인).
@@ -218,7 +225,7 @@ _table_fact_cache = None
 _document_progress: dict[int, dict] = {}
 
 logger.info(
-    "[startup] ollama_base_url=%s llm_model=%s llm_temperature=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s embedding_num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s query_retrieval_chunks_enabled=%s opendataloader_json_table_facts_enabled=%s chroma_host=%s chroma_port=%s",
+    "[startup] ollama_base_url=%s llm_model=%s llm_temperature=%s embedding_model=%s keep_alive=%s embedding_warmup=%s num_ctx=%s embedding_num_ctx=%s num_predict=%s num_thread=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s embedding_batch_size=%s default_top_k=%s reranker_url=%s rerank_candidates=%s bm25_index_max_entries=%s embed_table_raw_chunks=%s query_retrieval_chunks_enabled=%s opendataloader_json_table_facts_enabled=%s chroma_host=%s chroma_port=%s",
     OLLAMA_BASE_URL,
     OLLAMA_LLM_MODEL,
     OLLAMA_TEMPERATURE,
@@ -234,6 +241,8 @@ logger.info(
     CHUNK_MERGE_MIN_SIZE,
     EMBEDDING_BATCH_SIZE,
     DEFAULT_TOP_K,
+    RERANKER_URL or "off",
+    RERANK_CANDIDATES,
     BM25_INDEX_MAX_ENTRIES,
     EMBED_TABLE_RAW_CHUNKS,
     QUERY_RETRIEVAL_CHUNKS_ENABLED,
@@ -5715,7 +5724,7 @@ def _trace_query_retrieval(
         _record_table_fact_trace(trace_by_id, candidate)
 
     # 운영 질의와 같은 함수로 순서를 정한다. 추적 결과가 실제 답의 후보와 어긋나지 않게 한다.
-    docs, metadatas, ids = _order_retrieval_results(
+    ordered = _order_retrieval_results(
         question,
         analysis,
         (vector_docs, vector_metadatas, vector_ids),
@@ -5724,8 +5733,9 @@ def _trace_query_retrieval(
     )
     expanded_candidates = [
         _format_trace_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, False)
-        for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids))
+        for index, (doc, meta, chunk_id) in enumerate(zip(*ordered.fused))
     ]
+    docs, metadatas, ids = ordered.final
     final_docs = docs[:top_k]
     final_metadatas = metadatas[:top_k]
     final_ids = ids[:top_k]
@@ -5735,6 +5745,8 @@ def _trace_query_retrieval(
         _format_trace_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, index < top_k)
         for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids))
     ]
+    for candidate in final_candidates:
+        candidate["rerank_score"] = ordered.rerank["scores"].get(candidate["chunk_id"])
 
     logger.info(
         "[rag_trace] top_k=%s retrieval_limit=%s vector=%s retrieval_chunk_vector=%s legacy_vector=%s bm25=%s table_fact=%s final=%s context_chars=%s embed=%.2fs chroma=%.2fs total=%.2fs",
@@ -5788,6 +5800,7 @@ def _trace_query_retrieval(
             "expanded_candidates": expanded_candidates,
             "final_candidates": final_candidates,
         },
+        "rerank": {key: value for key, value in ordered.rerank.items() if key != "scores"},
         "final_context": context,
         "final_prompt_preview": _preview_text(prompt, 3000),
         "timing": {
@@ -5832,22 +5845,71 @@ def _fuse_reciprocal_rank(
     )
 
 
+@dataclass
+class OrderedCandidates:
+    """검색 순서 함수의 결과. fused는 순위 융합·펼친 뒤, final은 재순위 뒤 순서다(재순위가 꺼졌거나 실패하면 fused와 같다)."""
+
+    fused: tuple[list[str], list[dict], list[str]]
+    final: tuple[list[str], list[dict], list[str]]
+    rerank: dict
+
+
 def _order_retrieval_results(
     question: str,
     analysis: QueryAnalysis,
     vector: tuple[list[str], list[dict], list[str]],
     bm25: tuple[list[str], list[dict], list[str]],
     table_fact: tuple[list[str], list[dict], list[str]],
-) -> tuple[list[str], list[dict], list[str]]:
+) -> OrderedCandidates:
     """검색기 셋의 결과를 프롬프트 후보 순서로 세운다(ADR-0032). 운영 질의(_prepare_query)와 /debug/rag-trace가 함께 쓴다.
 
     표 사실 → BM25 → 벡터 순으로 넣어 순위 융합하고(점수가 같으면 앞 목록이 앞선다), 표 사실을 부모 청크로 펼친 뒤
-    질문에 맞는 표 사실을 메타데이터에 붙인다. 호출자가 상위 top_k를 자른다.
+    질문에 맞는 표 사실을 메타데이터에 붙인다. 재순위가 켜져 있으면 앞 후보를 다시 매긴다. 호출자가 상위 top_k를 자른다.
     """
     docs, metadatas, ids = _fuse_reciprocal_rank([table_fact, bm25, vector])
     docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
     metadatas = _attach_runtime_table_facts(question, docs, metadatas, analysis)
-    return docs, metadatas, ids
+    final, rerank = _rerank_candidates(question, docs, metadatas, ids)
+    return OrderedCandidates(fused=(docs, metadatas, ids), final=final, rerank=rerank)
+
+
+def _rerank_candidates(
+    question: str,
+    docs: list[str],
+    metadatas: list[dict],
+    ids: list[str],
+) -> tuple[tuple[list[str], list[dict], list[str]], dict]:
+    """순위 융합 후보 앞 RERANK_CANDIDATES개를 재순위 서버 점수가 높은 순으로 다시 세운다(M2 3단계, #174).
+
+    재순위 서버는 Hugging Face TEI의 POST /rerank다(질문 하나와 글 목록 → 글마다 점수). 나머지 후보는 순위 융합 순서
+    그대로 뒤에 둔다. 꺼져 있거나(AI_RERANKER_URL 비어 있음) 서버가 실패하면 받은 순서를 그대로 돌려준다.
+    두 번째 값은 기록용 요약이다: 켜짐·사용 여부, 다시 매긴 후보 수, 걸린 초, 실패 이유, 청크 id별 점수.
+    """
+    info = {"enabled": bool(RERANKER_URL), "used": False, "candidates": 0, "elapsed": 0.0, "error": None, "scores": {}}
+    head = min(RERANK_CANDIDATES, len(docs))
+    if not RERANKER_URL or head < 2:
+        return (docs, metadatas, ids), info
+    texts = [str(doc or "").replace("\x00", "")[:RERANK_DOC_CHARS] for doc in docs[:head]]
+    started = time.perf_counter()
+    try:
+        response = httpx.post(
+            f"{RERANKER_URL}/rerank",
+            json={"query": question, "texts": texts, "truncate": True},
+            timeout=RERANK_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        scores = {int(item["index"]): float(item["score"]) for item in response.json()}
+        if sorted(scores) != list(range(head)):
+            raise ValueError(f"재순위 응답의 index가 후보 {head}개와 맞지 않음")
+    except Exception as exc:  # 재순위는 순서를 다듬는 단계라, 실패해도 순위 융합 순서로 답한다
+        info.update(elapsed=time.perf_counter() - started, error=f"{type(exc).__name__}: {exc}")
+        logger.warning("[rerank] failed, keep fused order: %s", info["error"])
+        return (docs, metadatas, ids), info
+    order = sorted(range(head), key=lambda index: (-scores[index], index)) + list(range(head, len(docs)))
+    info.update(used=True, candidates=head, elapsed=time.perf_counter() - started,
+                scores={str(ids[index]): scores[index] for index in range(head)})
+    logger.info("[rerank] candidates=%s elapsed=%.3fs", head, info["elapsed"])
+    return ([docs[i] for i in order], [metadatas[i] for i in order], [ids[i] for i in order]), info
 
 
 def _record_eval_stage(
@@ -5931,14 +5993,21 @@ def _prepare_query(
                        {"bm25_score": [candidate["bm25_score"] for candidate in bm25_candidates]})
     _record_eval_stage(eval_stages, "table_fact", lexical_docs, lexical_metadatas, lexical_ids,
                        {"table_fact_score": [candidate["table_fact_score"] for candidate in table_fact_candidates]})
-    docs, metadatas, ids = _order_retrieval_results(
+    ordered = _order_retrieval_results(
         question,
         analysis,
         (docs, metadatas, ids),
         (bm25_docs, bm25_metadatas, bm25_ids),
         (lexical_docs, lexical_metadatas, lexical_ids),
     )
-    _record_eval_stage(eval_stages, "expanded", docs, metadatas, ids)
+    _record_eval_stage(eval_stages, "expanded", *ordered.fused)
+    docs, metadatas, ids = ordered.final
+    rerank_info = ordered.rerank
+    if rerank_info["used"]:
+        _record_eval_stage(eval_stages, "reranked", docs, metadatas, ids,
+                           {"rerank_score": [rerank_info["scores"].get(str(chunk_id)) for chunk_id in ids]})
+    if eval_stages is not None:
+        eval_stages["rerank"] = {key: value for key, value in rerank_info.items() if key != "scores"}
     docs = docs[:top_k]
     metadatas = metadatas[:top_k]
     ids = ids[:top_k]
@@ -6036,6 +6105,9 @@ def _prepare_query(
         "retrieval_chunk_query_error": results.get("retrieval_chunk_query_error"),
         "query_intent": analysis.intent,
         "query_subject_terms": sorted(analysis.subject_terms),
+        "rerank_used": rerank_info["used"],
+        "rerank_elapsed": rerank_info["elapsed"],
+        "rerank_error": rerank_info["error"],
     }
     logger.info(
         "[query_context] top_k=%s retrieval_limit=%s raw_docs=%s retrieval_chunk_vector=%s legacy_vector=%s bm25_raw_chunks=%s lexical_table_facts=%s docs=%s intent=%s subject_terms=%s context_chars=%s source_chars=%s distances=%s distance_min=%s distance_max=%s distance_avg=%s",
@@ -6191,7 +6263,7 @@ def _eval_response(response: dict, eval_stages: dict | None, answer_path: str, g
     """평가용 옵션을 켠 요청이면 응답에 eval_trace를 붙인다. 끈 요청(운영)은 응답을 그대로 돌려준다."""
     if eval_stages is None:
         return response
-    trace = {key: value for key, value in eval_stages.items() if key not in ("context", "prompt")}
+    trace = {key: value for key, value in eval_stages.items() if key not in ("context", "prompt", "rerank")}
     return {
         **response,
         "eval_trace": {
@@ -6200,9 +6272,27 @@ def _eval_response(response: dict, eval_stages: dict | None, answer_path: str, g
             "context": eval_stages.get("context", ""),
             "prompt": eval_stages.get("prompt", ""),
             "generation": generation,
+            "rerank": eval_stages.get("rerank"),
             "runtime": _eval_runtime_settings(),
         },
     }
+
+
+_reranker_info_cache: dict | None = None
+
+
+def _reranker_model_info() -> dict | None:
+    """재순위 서버가 알려 주는 모델 id·리비전(TEI GET /info). 실행 기록용이라 한 번 받으면 기억한다. 꺼져 있으면 None."""
+    global _reranker_info_cache
+    if not RERANKER_URL:
+        return None
+    if _reranker_info_cache is None:
+        try:
+            data = httpx.get(f"{RERANKER_URL}/info", timeout=RERANK_TIMEOUT_SECONDS).json()
+            _reranker_info_cache = {"model_id": data.get("model_id"), "model_sha": data.get("model_sha")}
+        except Exception as exc:  # 기록용이라 실패해도 질의는 계속한다. 다음 기록 때 다시 시도한다
+            return {"error": f"{type(exc).__name__}: {exc}"}
+    return _reranker_info_cache
 
 
 def _eval_runtime_settings() -> dict:
@@ -6215,6 +6305,11 @@ def _eval_runtime_settings() -> dict:
         "embedding_num_ctx": OLLAMA_EMBEDDING_NUM_CTX,
         "num_predict": OLLAMA_NUM_PREDICT,
         "query_retrieval_chunks_enabled": QUERY_RETRIEVAL_CHUNKS_ENABLED,
+        "reranker": {
+            "model": _reranker_model_info(),
+            "candidates": RERANK_CANDIDATES,
+            "doc_chars": RERANK_DOC_CHARS,
+        } if RERANKER_URL else None,
     }
 
 
