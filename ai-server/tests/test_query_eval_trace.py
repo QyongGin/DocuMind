@@ -22,9 +22,6 @@ METAS = [
 ]
 IDS = ["11_0", "12_3"]
 STAGES = ("vector", "bm25", "table_fact", "expanded", "final")
-# 픽스처가 바꾸기 전의 실제 함수(검색기 후보 → 목록). 디버그 추적과 운영 질의가 같은 후보를 받는지 볼 때 쓴다.
-LOOKUP_BM25 = main._lookup_bm25_raw_chunks
-LOOKUP_TABLE_FACTS = main._lookup_lexical_table_facts
 
 
 @pytest.fixture
@@ -39,8 +36,8 @@ def fake_retrieval(monkeypatch):
             "distances": [[0.1, 0.2]],
         },
     )
-    monkeypatch.setattr(main, "_lookup_bm25_raw_chunks", lambda analysis, limit: ([], [], []))
-    monkeypatch.setattr(main, "_lookup_lexical_table_facts", lambda question: ([], [], []))
+    monkeypatch.setattr(main, "_lookup_bm25_raw_chunk_candidates", lambda analysis, limit=5: [])
+    monkeypatch.setattr(main, "_lookup_lexical_table_fact_candidates", lambda question, limit=5: [])
     monkeypatch.setattr(main, "_load_source_block_texts", lambda ids: {})
 
 
@@ -125,8 +122,8 @@ def test_fuse_reciprocal_rank_merges_same_chunk_and_orders_by_score():
 
 def test_prepare_query_orders_candidates_by_rank_fusion(fake_retrieval, monkeypatch):
     # 키워드 검색이 기숙사 청크(벡터 2위)를 1위로 찾으면 순위 융합에서 그 청크가 맨 앞에 온다
-    monkeypatch.setattr(main, "_lookup_bm25_raw_chunks",
-                        lambda analysis, limit: ([DOCS[1]], [dict(METAS[1])], [IDS[1]]))
+    monkeypatch.setattr(main, "_lookup_bm25_raw_chunk_candidates", lambda analysis, limit=5: [
+        {"rank": 1, "bm25_score": 3.2, "chunk_id": IDS[1], "document": DOCS[1], "metadata": dict(METAS[1])}])
     stages: dict = {}
     prompt, sources, _ = main._prepare_query("가나대학 기숙사 신청 언제예요?", 5, None, stages)
     assert [entry["chunk_id"] for entry in stages["final"]] == ["12_3", "11_0"]
@@ -135,13 +132,39 @@ def test_prepare_query_orders_candidates_by_rank_fusion(fake_retrieval, monkeypa
     assert "[우선 표 근거 사용 규칙]" not in prompt and "[우선 질의 근거 사용 규칙]" not in prompt
 
 
-def test_rag_trace_follows_the_same_order_and_prompt_as_query(fake_retrieval, monkeypatch):
-    # 디버그 추적(/debug/rag-trace)은 운영 질의와 같은 후보·순서·프롬프트를 보여 줘야 원인을 추적할 수 있다
-    monkeypatch.setattr(main, "_lookup_bm25_raw_chunks", LOOKUP_BM25)
-    monkeypatch.setattr(main, "_lookup_lexical_table_facts", LOOKUP_TABLE_FACTS)
+def test_eval_stages_record_retriever_scores_and_table_fact_parent(fake_retrieval, monkeypatch):
+    # M2 3단계: 점수 결합·재순위를 같은 후보로 오프라인 비교하려면 검색기별 점수와 표 사실의 부모 청크가 기록에 있어야 한다
+    vector_metas = [dict(METAS[0], vector_source_collection="retrieval_chunks"),
+                    dict(METAS[1], vector_source_collection="documents")]
+    monkeypatch.setattr(main, "_query_vector_results", lambda vector, limit, include_vectors=False: {
+        "documents": [list(DOCS)], "metadatas": [vector_metas], "ids": [list(IDS)], "distances": [[0.31, 0.42]]})
     monkeypatch.setattr(main, "_lookup_bm25_raw_chunk_candidates", lambda analysis, limit=5: [
         {"rank": 1, "bm25_score": 3.2, "chunk_id": IDS[1], "document": DOCS[1], "metadata": dict(METAS[1])}])
-    monkeypatch.setattr(main, "_lookup_lexical_table_fact_candidates", lambda question, limit=5: [])
+    fact_meta = {"document_id": "11", "ledger_id": "gana/page/1", "chunk_role": "table_fact", "parent_chunk_id": "11_0"}
+    monkeypatch.setattr(main, "_lookup_lexical_table_fact_candidates", lambda question, limit=5: [
+        {"rank": 1, "table_fact_score": 7, "chunk_id": "11_0_fact_2", "document": "전형료: 일반전형 30,000원",
+         "metadata": fact_meta}])
+    monkeypatch.setattr(main, "_load_parent_chunk",
+                        lambda parent_id: (DOCS[0], dict(METAS[0])) if parent_id == "11_0" else (None, None))
+    plain = main._prepare_query("가나대학 전형료 얼마예요?", 5, None)
+    stages: dict = {}
+    traced = main._prepare_query("가나대학 전형료 얼마예요?", 5, None, stages)
+
+    assert traced[0] == plain[0] and traced[1] == plain[1]  # 기록을 더해도 프롬프트·출처는 같다
+    assert [(e["chunk_id"], e["distance"], e["vector_source_collection"]) for e in stages["vector"]] == [
+        ("11_0", 0.31, "retrieval_chunks"), ("12_3", 0.42, "documents")]
+    assert [(e["chunk_id"], e["bm25_score"]) for e in stages["bm25"]] == [("12_3", 3.2)]
+    fact = stages["table_fact"][0]
+    assert (fact["chunk_id"], fact["table_fact_score"], fact["parent_chunk_id"]) == ("11_0_fact_2", 7, "11_0")
+    # 12_3은 BM25·벡터 둘이 찾아 맨 앞, 표 사실은 부모 청크 11_0으로 펼쳐지고 벡터의 11_0과 합쳐진다
+    assert [e["chunk_id"] for e in stages["expanded"]] == ["12_3", "11_0"]
+    assert "parent_chunk_id" not in stages["bm25"][0]  # 표 사실이 아니면 남기지 않는다
+
+
+def test_rag_trace_follows_the_same_order_and_prompt_as_query(fake_retrieval, monkeypatch):
+    # 디버그 추적(/debug/rag-trace)은 운영 질의와 같은 후보·순서·프롬프트를 보여 줘야 원인을 추적할 수 있다
+    monkeypatch.setattr(main, "_lookup_bm25_raw_chunk_candidates", lambda analysis, limit=5: [
+        {"rank": 1, "bm25_score": 3.2, "chunk_id": IDS[1], "document": DOCS[1], "metadata": dict(METAS[1])}])
     question = "가나대학 기숙사 신청 언제예요?"
     stages: dict = {}
     prompt, _, _ = main._prepare_query(question, 1, None, stages)
