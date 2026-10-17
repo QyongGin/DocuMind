@@ -3728,6 +3728,12 @@ def _extract_attribute_value_from_table_fact(fact: str, analysis: QueryAnalysis)
     return ""
 
 
+def _by_length_desc(terms) -> list[str]:
+    # 긴 단어부터, 길이가 같으면 글자순. 집합(set)의 순회 순서는 해시 씨앗(PYTHONHASHSEED)마다 달라
+    # 길이로만 정렬하면 서버를 띄울 때마다 근거 꼬리표가 바뀌었다(알려진 문제, 2026-10-16).
+    return sorted(terms, key=lambda term: (-len(term), term))
+
+
 def _infer_table_bridge_attribute_label(attribute_fact: str, analysis: QueryAnalysis) -> str:
     """질문과 속성 fact에서 evidence label에 넣을 속성명을 고른다."""
     if not analysis.intent:
@@ -3738,13 +3744,13 @@ def _infer_table_bridge_attribute_label(attribute_fact: str, analysis: QueryAnal
 
     attribute_terms = _table_bridge_attribute_terms(analysis)
     row_subject = _extract_table_fact_row_subject(attribute_fact)
-    for term in sorted(attribute_terms, key=len, reverse=True):
+    for term in _by_length_desc(attribute_terms):
         if _term_in_text(term, row_subject):
             return row_subject
 
     for key, value in _extract_table_fact_pairs(attribute_fact):
         pair_text = f"{key} {value}"
-        for term in sorted(attribute_terms, key=len, reverse=True):
+        for term in _by_length_desc(attribute_terms):
             if _term_in_text(term, key):
                 return key
             if _term_in_text(term, pair_text):
@@ -3786,7 +3792,7 @@ def _extract_subject_label_from_table_facts(facts: list[str], analysis: QueryAna
         candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return candidates[0][2]
 
-    for term in sorted(query_terms, key=len, reverse=True):
+    for term in _by_length_desc(query_terms):
         if term not in INTENT_EVIDENCE_TERMS.get(analysis.intent or "", set()):
             return term
     return ""
@@ -4132,10 +4138,10 @@ def _extract_item_label(line: str, analysis: QueryAnalysis) -> str:
         return line.split(":", 1)[0].strip()
     if "：" in line:
         return line.split("：", 1)[0].strip()
-    for term in sorted(analysis.primary_terms, key=len, reverse=True):
+    for term in _by_length_desc(analysis.primary_terms):
         if _term_in_text(term, line):
             return term
-    for term in sorted(analysis.subject_terms, key=len, reverse=True):
+    for term in _by_length_desc(analysis.subject_terms):
         if _term_in_text(term, line):
             return term
     return "관련 항목"
