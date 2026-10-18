@@ -1,8 +1,28 @@
 # A.X 4.0 Light를 인하공전 챗봇에 써도 되는가 — 사용권 조사 (2026-10-17)
 
 > 목적: 기반 모델을 A.X 4.0 Light로 정하면서(2026-10-17 사용자 결정, ADR-0033), 저작권·상업 이용·학교 공식 챗봇 사용·학습(파인튜닝)·학습한 모델 인계 조건을 원문으로 확인한다.
-> 방법: 2026-10-17 Hugging Face 저장소의 원문 파일(LICENSE, README, 저장소 정보 API)을 직접 열어 읽었다(검색 요약을 쓰지 않음). 법·규제(AI 기본법, 중국 계보 모델 조치, 개인정보)는 `후보모델-공식챗봇-사용가능-심층조사-20261014.md`를 이어받는다.
+> 방법: 2026-10-17 Hugging Face 저장소의 원문 파일(LICENSE, README, 저장소 정보 API)을 직접 열어 읽었다(검색 요약을 쓰지 않음). 2026-10-18 원문 사본·캡처·SKT 공식 발표·72B 대조를 §0에 더했다. 법·규제(AI 기본법, 중국 계보 모델 조치, 개인정보)는 `후보모델-공식챗봇-사용가능-심층조사-20261014.md`를 이어받는다.
 > **법률 자문이 아니다.** 학교 법무 검토 때 확인할 질문은 §5에 모았다.
+
+## 0. 증거 묶음 (발표용, 2026-10-18 보강)
+
+원문 사본은 `evidence/A.X-4.0-Light-20261018/`(이 폴더, 커밋), 화면 캡처는 `outputs/ax-license-evidence-20261018/`(로컬)에 있다. 아래 인용은 모두 2026-10-18 원문 페이지에서 그대로 옮겼다.
+
+| # | 증거 | 원문 인용 | 링크 | 사본·캡처 |
+|---|---|---|---|---|
+| 1 | A.X 4.0 Light LICENSE 파일(SKT) | "Built with Qwen 2.5 — original model by Alibaba Cloud, licensed under the Apache License 2.0." / "all files in this repository (including modified model weights and tokenizer files) are distributed under the terms of the Apache License, Version 2.0" | [LICENSE](https://huggingface.co/skt/A.X-4.0-Light/blob/main/LICENSE) · [raw](https://huggingface.co/skt/A.X-4.0-Light/raw/main/LICENSE) | `A.X-4.0-Light-LICENSE.txt` · 캡처 01 |
+| 2 | 모델 카드·저장소 태그(SKT) | README: "The `A.X 4.0 Light` model is licensed under `Apache License 2.0`." / 저장소 태그 `license:apache-2.0`(저장소 sha `ba21c20e…`, 2025-07-23) | [모델 카드](https://huggingface.co/skt/A.X-4.0-Light) · [저장소 정보 API](https://huggingface.co/api/models/skt/A.X-4.0-Light) | 캡처 02 |
+| 3 | 바탕 모델 Qwen2.5-7B LICENSE(Alibaba) | Apache License 2.0 전문, 끝에 "Copyright 2024 Alibaba Cloud / Licensed under the Apache License, Version 2.0" / 태그 `license:apache-2.0` | [LICENSE](https://huggingface.co/Qwen/Qwen2.5-7B/blob/main/LICENSE) · [API](https://huggingface.co/api/models/Qwen/Qwen2.5-7B) | `Qwen2.5-7B-LICENSE.txt` · 캡처 03 |
+| 4 | Apache 2.0 제2조(허락 범위) | "a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright license to reproduce, prepare Derivative Works of, publicly display, publicly perform, sublicense, and distribute the Work and such Derivative Works" — 상업·비상업 구분 없음 | [apache.org](https://www.apache.org/licenses/LICENSE-2.0) | 1·3의 사본에 포함 |
+| 5 | **대조: A.X 4.0 표준 모델(72B)은 다르다** | LICENSE가 "Qwen LICENSE AGREEMENT Release Date: September 19, 2024"이고 "4. Restrictions: If you are commercially using the Materials, and your product or service has more than 100 million monthly active users, you shall request a license from us." 저장소 태그 `license:other` | [72B LICENSE](https://huggingface.co/skt/A.X-4.0/blob/main/LICENSE) · [API](https://huggingface.co/api/models/skt/A.X-4.0) | `A.X-4.0-72B-LICENSE-발췌.txt` · 캡처 04 |
+| 6 | SKT 공식 발표(뉴스룸, 2025-07-03) "SK텔레콤, 에이닷 엑스 4.0 지식형 모델 오픈소스로 공개" | "허깅페이스(Hugging Face)를 통해 A.X 4.0의 표준 모델과 경량 모델 2종을 공개했다" / "표준 모델은 720억 개(72B), 경량 모델은 70억 개(7B)의 매개변수" / "오픈소스 모델인 Qwen2.5에 방대한 한국어 데이터를 추가로 학습" | [news.sktelecom.com/213534](https://news.sktelecom.com/213534) | 캡처 06 |
+| 7 | SKT 공식 발표(뉴스룸, 2025-07-29) | "해당 모델들은 학술 연구나 상업 이용 등에 자유롭게 활용 가능하다"(그날 공개한 A.X Encoder·A.X 4.0 VL Light에 대한 문장. VL Light는 "70억 개(7B) 매개변수의 A.X 4.0 Light 모델을 기반으로 개발") | [news.sktelecom.com/214055](https://news.sktelecom.com/214055) | 캡처 05 |
+| 8 | 언론 보도의 '상용화 제한'(바이라인네트워크, 2025-07-03) | "이 모델을 이용한 상용화는 제한된다. 알리바바의 큐원 모델 라이선스에 따라 월 1억 이상 사용자를 대상으로 상용 제품이나 서비스를 제공할 경우 알리바바로부터 별도 라이선스를 확보해야 한다." — 기사는 72B·7B를 구분하지 않았지만, 이 조항은 72B의 Qwen LICENSE(5번)에만 있고 7B Light의 Apache 2.0에는 없다 | [byline.network](https://byline.network/2025/07/3-280/) | — |
+| 9 | 제3자 보존본(Wayback Machine) | A.X 4.0 Light LICENSE 페이지 2025-11-19 스냅샷 | [web.archive.org](http://web.archive.org/web/20251119053057/https://huggingface.co/skt/A.X-4.0-Light/blob/main/LICENSE) | — |
+
+**발표 한 줄**: A.X 4.0 Light는 SKT가 Apache 2.0으로 공개한 모델이고 바탕 모델 Qwen2.5-7B도 Apache 2.0이라, 학교 공식 서비스·상업 이용·학습·학습한 모델 인계가 모두 허용된다. 같은 A.X 4.0이라도 72B 표준 모델은 Qwen 라이선스(월 1억 사용자 조항)라 다르다 — 우리는 7B Light를 쓴다.
+
+**지킬 것 한 줄**: 학교에 넘길 때 LICENSE 사본·Qwen 2.5 고지(NOTICE)·수정 표시를 함께 넘기고, SKT 상표·로고는 쓰지 않는다. 틀린 답의 책임은 운영 쪽에 있다(보증 없음).
 
 ## 1. 결론
 
