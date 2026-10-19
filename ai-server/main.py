@@ -219,6 +219,11 @@ _progress_lock = Lock()
 _kiwi_lock = Lock()
 _bm25_index_lock = Lock()
 _table_fact_cache_lock = Lock()
+# 임베딩 요청을 한 줄로 세워, 질문 임베딩 직전에 Ollama가 마지막으로 계산한 글을 알 수 있게 한다(_embed_query).
+_embedding_lock = Lock()
+_last_embedded_text: str | None = None
+# Ollama 입력 캐시를 비울 때 보내는 짧은 글. 질문의 첫 글자와 다른 것을 고른다.
+EMBEDDING_CACHE_RESET_TEXTS = ("∎", "∴")
 _kiwi_analyzer = None
 _bm25_sparse_index = None
 _table_fact_cache = None
@@ -1652,18 +1657,50 @@ def _preview_text(text: str, limit: int = 360) -> str:
     return f"{stripped[:limit].rstrip()}..."
 
 
-def _embed_texts(texts: list[str]) -> tuple[list[list[float]], dict]:
-    """
-    Ollama embed API로 batch embedding을 수행하고 duration metadata를 함께 반환한다.
-    LangChain wrapper가 숨기는 total/load/prompt timing을 로그 분석에 사용한다.
-    """
+def _ollama_embed(texts: list[str]) -> dict:
+    # Ollama embed API를 그대로 부른다. 부르는 쪽이 _embedding_lock을 잡고 있어야 한다.
     response = ollama_client.embed(
         model=OLLAMA_EMBEDDING_MODEL,
         input=texts,
         options=_ollama_embedding_options(),
         keep_alive=OLLAMA_KEEP_ALIVE,
     )
-    response_data = response.model_dump()
+    return response.model_dump()
+
+
+def _embed_texts(texts: list[str]) -> tuple[list[list[float]], dict]:
+    """
+    Ollama embed API로 batch embedding을 수행하고 duration metadata를 함께 반환한다.
+    LangChain wrapper가 숨기는 total/load/prompt timing을 로그 분석에 사용한다.
+    """
+    global _last_embedded_text
+    with _embedding_lock:
+        response_data = _ollama_embed(texts)
+        # 여러 글을 한 번에 보내면 Ollama가 마지막에 계산한 글을 알 수 없으므로 '모름'으로 둔다.
+        _last_embedded_text = texts[0] if len(texts) == 1 else None
+    return response_data["embeddings"], response_data
+
+
+def _query_needs_cache_reset(previous_text: str | None, question: str) -> bool:
+    # 직전 글을 모르거나 첫 글자가 같으면 앞부분 토큰이 겹칠 수 있다. 첫 글자가 다르면 첫 토큰부터 달라 재사용이 없다.
+    return previous_text is None or previous_text[:1] == question[:1]
+
+
+def _embed_query(question: str) -> tuple[list[list[float]], dict]:
+    """
+    질문 하나를 임베딩한다. 직전에 임베딩한 글과 앞부분이 겹칠 수 있으면 짧은 글로 Ollama 입력 캐시를 먼저 비운다.
+
+    Ollama는 바로 앞 입력과 같은 글이나 앞부분이 겹치는 글을 받으면 앞 계산을 다시 써서 벡터가 조금 달라진다
+    (2026-10-20 실측: 같은 질문을 바로 다시 보내면 cos 거리 0.0003, 거리가 거의 같은 후보의 순서가 바뀜).
+    캐시를 비운 뒤 계산한 벡터는 앞 요청·순서·Ollama 재시작과 무관하게 같았다.
+    """
+    global _last_embedded_text
+    with _embedding_lock:
+        if _query_needs_cache_reset(_last_embedded_text, question):
+            reset_text = next(text for text in EMBEDDING_CACHE_RESET_TEXTS if text[:1] != question[:1])
+            _ollama_embed([reset_text])
+        response_data = _ollama_embed([question])
+        _last_embedded_text = question
     return response_data["embeddings"], response_data
 
 
@@ -5679,7 +5716,7 @@ def _trace_query_retrieval(
     analysis = _analyze_query(question)
 
     embedding_start = time.perf_counter()
-    question_vectors, embed_metadata = _embed_texts([question])
+    question_vectors, embed_metadata = _embed_query(question)
     question_vector = question_vectors[0]
     embedding_elapsed = time.perf_counter() - embedding_start
     ollama_total = _seconds_from_nanos(embed_metadata.get("total_duration"))
@@ -5970,7 +6007,7 @@ def _prepare_query(
     prepare_start = time.perf_counter()
     analysis = _analyze_query(question)
     embedding_start = time.perf_counter()
-    question_vectors, embed_metadata = _embed_texts([question])
+    question_vectors, embed_metadata = _embed_query(question)
     question_vector = question_vectors[0]
     embedding_elapsed = time.perf_counter() - embedding_start
     ollama_total = _seconds_from_nanos(embed_metadata.get("total_duration"))
