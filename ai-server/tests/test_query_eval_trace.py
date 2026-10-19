@@ -127,7 +127,8 @@ def test_prepare_query_orders_candidates_by_rank_fusion(fake_retrieval, monkeypa
     stages: dict = {}
     prompt, sources, _ = main._prepare_query("가나대학 기숙사 신청 언제예요?", 5, None, stages)
     assert [entry["chunk_id"] for entry in stages["final"]] == ["12_3", "11_0"]
-    assert set(stages) == set(STAGES) | {"context", "prompt"}
+    assert set(stages) == set(STAGES) | {"context", "prompt", "rerank"}
+    assert stages["rerank"]["enabled"] is False and stages["rerank"]["used"] is False  # 기본은 재순위 꺼짐
     assert prompt and sources[0]["document_id"] == "12"
     assert "[우선 표 근거 사용 규칙]" not in prompt and "[우선 질의 근거 사용 규칙]" not in prompt
 
@@ -188,3 +189,83 @@ def test_query_request_has_no_retrieval_mode_switch(monkeypatch):
     body = TestClient(main.app).post("/query", json={"question": "가나대학 전형료 얼마예요?", "retrieval_mode": "rules",
                                                        "include_eval_trace": True}).json()
     assert body["eval_trace"]["answer_path"] == "llm"
+
+
+# 재순위(M2 3단계, #174): 순위 융합 후보 앞 몇 개를 재순위 서버(TEI /rerank) 점수순으로 다시 세운다(가나대학 합성 데이터).
+class FakeRerankResponse:
+    def __init__(self, items):
+        self.items = items
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.items
+
+
+@pytest.fixture
+def reranker(monkeypatch):
+    """재순위 서버를 켜고 httpx.post를 가짜로 바꾼다. scores[i]는 후보 i의 점수, error를 주면 그 예외를 낸다."""
+    state = {"scores": [], "error": None, "requests": []}
+    monkeypatch.setattr(main, "RERANKER_URL", "http://reranker.test")
+    monkeypatch.setattr(main, "RERANK_CANDIDATES", 3)
+
+    def post(url, json=None, timeout=None):
+        state["requests"].append((url, json))
+        if state["error"]:
+            raise state["error"]
+        return FakeRerankResponse([{"index": i, "score": s} for i, s in enumerate(state["scores"])])
+
+    monkeypatch.setattr(main.httpx, "post", post)
+    return state
+
+
+def test_rerank_reorders_head_and_keeps_tail(reranker):
+    reranker["scores"] = [0.1, 0.9, 0.5]
+    docs, metas, ids = ["가", "나", "다", "라"], [{}, {}, {}, {}], ["a", "b", "c", "d"]
+    (new_docs, _, new_ids), info = main._rerank_candidates("가나대학 기숙사 신청 언제예요?", docs, metas, ids)
+    assert new_ids == ["b", "c", "a", "d"] and new_docs == ["나", "다", "가", "라"]  # 앞 3개만 점수순, 넷째는 그대로
+    assert info["used"] and info["candidates"] == 3 and info["scores"] == {"a": 0.1, "b": 0.9, "c": 0.5}
+    url, body = reranker["requests"][0]
+    assert url == "http://reranker.test/rerank" and body["texts"] == ["가", "나", "다"]
+
+
+def test_rerank_is_off_without_url(reranker, monkeypatch):
+    monkeypatch.setattr(main, "RERANKER_URL", "")
+    (_, _, new_ids), info = main._rerank_candidates("질문", ["가", "나"], [{}, {}], ["a", "b"])
+    assert new_ids == ["a", "b"] and info["enabled"] is False and reranker["requests"] == []
+
+
+@pytest.mark.parametrize("problem", ["error", "missing_index"])
+def test_rerank_keeps_fused_order_when_server_fails(reranker, problem):
+    if problem == "error":
+        reranker["error"] = main.httpx.ConnectError("재순위 서버 꺼짐")
+    else:
+        reranker["scores"] = [0.9, 0.1]  # 후보 3개인데 점수 2개
+    (_, _, new_ids), info = main._rerank_candidates("질문", ["가", "나", "다"], [{}, {}, {}], ["a", "b", "c"])
+    assert new_ids == ["a", "b", "c"] and info["used"] is False and info["error"]
+
+
+def test_prepare_query_records_fused_and_reranked_orders(fake_retrieval, reranker):
+    # 순위 융합은 전형료 청크(11_0)를 앞에 두지만, 재순위가 기숙사 청크(12_3)를 더 높게 매기면 근거 순서가 바뀐다
+    reranker["scores"] = [0.2, 0.8]
+    stages: dict = {}
+    prompt, sources, metrics = main._prepare_query("가나대학 기숙사 신청 언제예요?", 5, None, stages)
+    assert [e["chunk_id"] for e in stages["expanded"]] == ["11_0", "12_3"]  # 순위 융합 순서
+    assert [(e["chunk_id"], e["rerank_score"]) for e in stages["reranked"]] == [("12_3", 0.8), ("11_0", 0.2)]
+    assert [e["chunk_id"] for e in stages["final"]] == ["12_3", "11_0"]
+    assert sources[0]["document_id"] == "12" and metrics["rerank_used"] is True
+    assert stages["rerank"]["used"] is True and "scores" not in stages["rerank"]
+
+
+def test_rag_trace_shows_fused_order_and_reranked_final(fake_retrieval, reranker, monkeypatch):
+    reranker["scores"] = [0.2, 0.8]
+    question = "가나대학 기숙사 신청 언제예요?"
+    stages: dict = {}
+    main._prepare_query(question, 5, None, stages)
+    trace = main._trace_query_retrieval(question, 5, None, False, 0)
+    assert [c["chunk_id"] for c in trace["stages"]["expanded_candidates"]] == ["11_0", "12_3"]
+    final = trace["stages"]["final_candidates"]
+    assert [c["chunk_id"] for c in final] == [e["chunk_id"] for e in stages["final"]] == ["12_3", "11_0"]
+    assert final[0]["rerank_score"] == 0.8 and trace["rerank"]["used"] is True
+    assert trace["final_context"] == stages["context"]

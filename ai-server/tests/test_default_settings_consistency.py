@@ -44,3 +44,13 @@ def test_generation_context_is_the_same_everywhere():
     values = {"ai-server main.py": main.OLLAMA_NUM_CTX, ".env.example": env_example("OLLAMA_NUM_CTX"),
               "compose": compose_default("OLLAMA_NUM_CTX")}
     assert len(set(values.values())) == 1, values
+
+
+def test_rerank_candidates_default_is_the_same_everywhere():
+    # 재순위 후보 수(M2 3단계 ③에서 고른 20개)는 AI 서버·compose·환경 예시에 있다
+    values = {
+        "ai-server main.py": main.RERANK_CANDIDATES,
+        ".env.example": env_example("AI_RERANK_CANDIDATES"),
+        "compose": compose_default("AI_RERANK_CANDIDATES"),
+    }
+    assert len(set(values.values())) == 1, values

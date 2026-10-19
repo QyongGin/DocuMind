@@ -39,3 +39,31 @@ services:
     environment:
       OLLAMA_HOST: http://ollama:11434
     command: ["pull", "${OLLAMA_LLM_MODEL:-gemma4:12b-it-qat}"]
+
+  # 재순위 서버(M2 3단계, #174). Hugging Face TEI가 POST /rerank로 순위 융합 후보를 다시 매긴다.
+  # 기본은 꺼짐: 켜려면 compose 명령에 --profile reranker 를 붙이고 .env에 AI_RERANKER_URL=http://reranker:80 을 적는다.
+  # AI 서버는 이 서버에 의존하지 않는다(응답이 없으면 순위 융합 순서로 답한다).
+  # 이미지 태그는 GPU 세대마다 다르다(RTX 40 계열 89-1.9, A10·A10G 86-1.9). 모델은 리비전을 고정해 같은 점수를 재현한다.
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:${RERANKER_IMAGE_TAG:-89-1.9}
+    profiles: ["reranker"]
+    restart: unless-stopped
+    command:
+      - "--model-id"
+      - "${RERANKER_MODEL_ID:-BAAI/bge-reranker-v2-m3}"
+      - "--revision"
+      - "${RERANKER_MODEL_REVISION:-953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e}"
+    expose:
+      - "80"
+    volumes:
+      - reranker_data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  reranker_data:
