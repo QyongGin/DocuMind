@@ -8,6 +8,11 @@
 | `A.X-4.0-Light-LICENSE.txt` | https://huggingface.co/skt/A.X-4.0-Light/raw/main/LICENSE | sha ba21c20ea1b31ded1ec3e2fb432335077dc4be98 · 파일 커밋 c0e88ae · license:apache-2.0 | `2ff4faae2ca80534b4f5a79cc3caafb3a26e2e0a7267bf7a01c662a5e8a56dbe` | 13,012 B |
 | `Qwen2.5-7B-LICENSE.txt` | https://huggingface.co/Qwen/Qwen2.5-7B/raw/main/LICENSE | license:apache-2.0 · lastModified 2024-09-25 | `c156170b718ec29139d3653d40ed1986fd92fb7e0959b5c71f3c48f62e6636f4` | 11,344 B |
 
+## 원문 대조 (2026-10-20)
+
+- 같은 주소의 raw 파일을 다시 받아 사본과 비교했다. A.X 4.0 Light LICENSE(raw SHA-256 `0d4b6e74abfb37024fba6f841f6b637d5570c3bf00d2dd2c3181dda4b313ae46`, 13,019 B)는 줄 끝 공백 8곳과 마지막 줄바꿈만 다르고 글자는 같다. Qwen2.5-7B LICENSE(raw `832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e`)는 마지막 줄바꿈만 다르다. 사본은 브라우저 본문 추출이라 줄 끝 공백이 빠졌다.
+- A.X 4.0 Light 저장소 커밋은 그대로 `ba21c20ea1b3`(2026-10-01 변환 때와 같음), 모델 카드 `license: apache-2.0`, `config.json`의 `max_position_embeddings`는 16384. A.X 4.0(72B)은 여전히 `license: other`(Qwen LICENSE AGREEMENT, 월 1억 사용자 조항).
+
 ## 화면 캡처 (로컬 `outputs/ax-license-evidence-20261018/`, 커밋하지 않음)
 
 - `01-ax-4.0-light-LICENSE-page.png` (300 KB)
