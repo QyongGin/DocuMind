@@ -106,9 +106,10 @@ def _env_float(name: str, default: float = 0.0, minimum: float = 0.0) -> float:
 # 로컬: OLLAMA_BASE_URL 미설정 시 localhost 사용
 # Docker: OLLAMA_BASE_URL=http://ollama:11434
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-# 생성 모델. 기본은 M2 검색 실험에서 답을 만드는 모델 Gemma 4 12B 4비트 QAT판(ADR-0031, Apache 2.0).
-# 이전 기본값 EXAONE 3.5 7.8B는 연구용(비상업) 라이선스라 기준점 비교에만 쓴다.
-OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "gemma4:12b-it-qat")
+# 생성 모델. 기본은 A.X 4.0 Light 4비트판(ADR-0034, Apache 2.0). Ollama 공개 목록에 없어
+# deploy/models/README.md 절차로 공식 원본을 변환해 이 이름으로 등록한다(ADR-0036).
+# Gemma 4 12B(gemma4:12b-it-qat)는 비교 기준, EXAONE 3.5는 연구용 라이선스라 기준점 비교에만 쓴다.
+OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "ax40light:q4km")
 # 환경변수로 임베딩 모델명 분기. VRAM이 작은 서버에서는 qwen3-embedding:4b를 우선 사용한다.
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:4b")
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
