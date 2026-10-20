@@ -4330,13 +4330,9 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
 
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
-    has_structured_evidence = bool(fact_text or evidence_facts)
-    if relevant_excerpt and has_structured_evidence:
-        # [#110 실험1b] 구조화 근거(표 검색 정보 또는 질문 의도 추출 정보)가 하나라도 있으면
-        # 중복·노이즈인 원문 전체 덤프(전체 내용)를 빼고 발췌만 남겨 7.8B 모델이 답을 놓치지 않게 한다.
-        # 구조화 근거가 답을 실제로 담고 있는지는 확인하지 않으므로, 답이 원문에만 있으면 놓칠 수 있다.
-        # 구조화 근거가 없으면 답이 원문에만 있을 수 있어(실험1에서 '53' 회귀) 전체 내용을 유지한다.
-        return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}"
+    # 원문 전체(전체 내용)는 늘 넣는다(M2 4단계). 예전에는 표 검색 정보나 질문 의도 추출 정보가 있으면
+    # 원문을 빼고 발췌만 남겼는데(#110 실험1b, 7.8B 모델용), 발췌는 질문 낱말 근처 줄만 고르므로
+    # 떨어진 줄의 답(기한·문의처 등)이 프롬프트에서 사라졌다(개발셋 5문항, 청크-임베딩-평가-20261020.md).
     if relevant_excerpt:
         return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n질문 관련 발췌:\n{relevant_excerpt}\n전체 내용:\n{doc.strip()}"
     return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n전체 내용:\n{doc.strip()}"
