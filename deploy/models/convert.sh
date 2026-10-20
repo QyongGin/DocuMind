@@ -27,7 +27,8 @@ if docker run --rm -v "$VOLUME":/work --entrypoint test "$LLAMA_CPP_IMAGE" -e "/
   exit 1
 fi
 
-docker run --rm -i -v "$VOLUME":/work -e NAME -e HF_REPO -e HF_REVISION -e QUANT \
+docker run --rm -i -v "$VOLUME":/work \
+  -e NAME="$NAME" -e HF_REPO="$HF_REPO" -e HF_REVISION="$HF_REVISION" -e QUANT="$QUANT" \
   --entrypoint bash "$LLAMA_CPP_IMAGE" -s <<'INNER'
 set -euo pipefail
 out=/work/$NAME
