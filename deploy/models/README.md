@@ -11,7 +11,7 @@
 
 | Ollama 이름 | 용도 | 원본 | 원본 커밋 | 변환 도구 | 양자화·크기 | 파일 SHA256 | 라이선스 | 채팅 틀 | 등록 |
 |---|---|---|---|---|---|---|---|---|---|
-| `ax40light:q4km` | 운영 생성 모델(기본값) | Hugging Face `skt/A.X-4.0-Light` | `ba21c20ea1b31ded1ec3e2fb432335077dc4be98` | llama.cpp build 11312(커밋 `0c1e57098`), 이미지 `full-b11312` | Q4_K_M, 4,435,826,528바이트 | `a1681e9b6de543835c7130cfc3673813bc5dc724f64ada8fb60d37cb2999f35b` | Apache 2.0(원본 LICENSE, Qwen 2.5 고지 포함) | `ax40light/Modelfile.tmpl` | 2026-10-01 |
+| `ax40light:q4km` | 운영 생성 모델(기본값) | Hugging Face `skt/A.X-4.0-Light` | `ba21c20ea1b31ded1ec3e2fb432335077dc4be98` | llama.cpp build 11312(커밋 `0c1e57098`), 이미지 `full-b11312` | Q4_K_M, 4,435,826,528바이트 | `a1681e9b6de543835c7130cfc3673813bc5dc724f64ada8fb60d37cb2999f35b` | Apache 2.0(원본 LICENSE, Qwen 2.5 고지 포함) | `ax40light/Modelfile.tmpl` | 2026-10-01(2026-10-20 이 스크립트로 다시 만들어 같은 SHA256 확인) |
 
 ### 공개 목록에서 내려받는 모델
 
