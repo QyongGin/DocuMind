@@ -2,6 +2,8 @@
 
 검색 개수(상위 k)는 백엔드·프론트·AI 서버가 각자 기본값을 갖는다. 백엔드가 AI 서버에 늘 값을 보내므로
 한 곳만 바뀌면 화면·백엔드·AI 서버가 서로 다른 개수로 동작한다. 생성 문맥도 compose·환경 예시·AI 서버에 있다.
+모델 이름은 AI 서버·compose·환경 예시와 데스크탑 모델 준비 단계(ADR-0036)에 있다. 준비 단계만 다른 이름이면
+AI 서버가 등록되지 않은 모델을 부른다.
 """
 import re
 from pathlib import Path
@@ -21,6 +23,20 @@ def env_example(name: str) -> int:
 
 def compose_default(name: str) -> int:
     return int(re.search(rf"\$\{{{name}:-(\d+)\}}", read("docker-compose.yml")).group(1))
+
+
+def env_example_text(name: str) -> str:
+    return re.search(rf"^{name}=(\S+)$", read(".env.example"), re.M).group(1)
+
+
+def compose_text_defaults(path: str, name: str) -> list[str]:
+    # 같은 파일에 같은 기본값이 여러 번 나오면 모두 본다
+    return re.findall(rf"\$\{{{name}:-([^}}]+)\}}", read(path))
+
+
+def main_py_default(name: str) -> str:
+    # 실행 환경의 환경값과 무관하게 코드에 적힌 기본값을 읽는다
+    return re.search(rf'os\.getenv\("{name}", "([^"]+)"\)', read("ai-server/main.py")).group(1)
 
 
 def test_default_top_k_is_the_same_everywhere():
@@ -54,3 +70,14 @@ def test_rerank_candidates_default_is_the_same_everywhere():
         "compose": compose_default("AI_RERANK_CANDIDATES"),
     }
     assert len(set(values.values())) == 1, values
+
+
+def test_model_names_are_the_same_everywhere():
+    for name in ("OLLAMA_LLM_MODEL", "OLLAMA_EMBEDDING_MODEL"):
+        compose = compose_text_defaults("docker-compose.yml", name)
+        gpu = compose_text_defaults("docker-compose.gpu.yml", name)
+        assert compose and gpu, (name, compose, gpu)
+        values = {"ai-server main.py": main_py_default(name), ".env.example": env_example_text(name)}
+        values.update({f"compose {i}": v for i, v in enumerate(compose)})
+        values.update({f"compose gpu {i}": v for i, v in enumerate(gpu)})
+        assert len(set(values.values())) == 1, (name, values)

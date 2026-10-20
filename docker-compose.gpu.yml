@@ -3,6 +3,26 @@
 # 사용법: docker compose -f docker-compose.yml -f docker-compose.gpu.yml --env-file .env up --build -d
 # 맥북 Docker Desktop에서는 NVIDIA GPU passthrough가 안 되므로 사용하지 않는다.
 
+# 모델 준비 단계(ADR-0036): 이미 등록된 모델은 내려받지 않는다. 없을 때만 Ollama 공개 목록에서 내려받는다.
+# 공개 목록에 없는 모델(A.X 4.0 Light, 학습한 모델)은 deploy/models/README.md 절차로 먼저 등록한다.
+# 이미 있는 모델을 다시 받지 않으므로 공개 목록의 같은 이름이 새 판으로 바뀌어도 조용히 바뀌지 않는다.
+x-ollama-model-prep: &ollama-model-prep
+  image: ollama/ollama:latest
+  depends_on:
+    ollama:
+      condition: service_healthy
+  entrypoint: ["/bin/sh", "-c"]
+  command:
+    - |
+      if ollama show "$$MODEL" > /dev/null 2>&1; then
+        echo "등록돼 있음, 내려받지 않음: $$MODEL"
+      elif ollama pull "$$MODEL"; then
+        echo "내려받음: $$MODEL"
+      else
+        echo "모델을 준비하지 못함: $$MODEL — 공개 목록에 없는 모델이면 deploy/models/README.md 절차로 먼저 등록한다" >&2
+        exit 1
+      fi
+
 services:
   ai-server:
     depends_on:
@@ -23,22 +43,16 @@ services:
               capabilities: [gpu]
 
   ollama-embedding-model:
-    image: ollama/ollama:latest
-    depends_on:
-      ollama:
-        condition: service_healthy
+    <<: *ollama-model-prep
     environment:
       OLLAMA_HOST: http://ollama:11434
-    command: ["pull", "${OLLAMA_EMBEDDING_MODEL:-qwen3-embedding:4b}"]
+      MODEL: ${OLLAMA_EMBEDDING_MODEL:-qwen3-embedding:4b}
 
   ollama-llm-model:
-    image: ollama/ollama:latest
-    depends_on:
-      ollama:
-        condition: service_healthy
+    <<: *ollama-model-prep
     environment:
       OLLAMA_HOST: http://ollama:11434
-    command: ["pull", "${OLLAMA_LLM_MODEL:-gemma4:12b-it-qat}"]
+      MODEL: ${OLLAMA_LLM_MODEL:-ax40light:q4km}
 
   # 재순위 서버(M2 3단계, #174). Hugging Face TEI가 POST /rerank로 순위 융합 후보를 다시 매긴다.
   # 기본은 꺼짐: 켜려면 compose 명령에 --profile reranker 를 붙이고 .env에 AI_RERANKER_URL=http://reranker:80 을 적는다.
