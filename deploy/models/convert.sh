@@ -48,7 +48,7 @@ python3 /app/convert_hf_to_gguf.py "$out/hf" --outtype bf16 --outfile "$out/$NAM
 rm -rf "$out/hf"
 /app/llama-quantize "$out/$NAME-bf16.gguf" "$out/$NAME-$QUANT.gguf" "$QUANT" < /dev/null
 rm -f "$out/$NAME-bf16.gguf"
-/app/llama-quantize --version > "$out/LLAMA_CPP_VERSION" 2>&1 < /dev/null || true
+{ /app/llama-cli --version 2>&1 < /dev/null || true; } | grep -E "^(version|built with)" > "$out/LLAMA_CPP_VERSION" || true
 cd "$out" && sha256sum "$NAME-$QUANT.gguf" > SHA256SUMS
 ls -la "$out"
 INNER
