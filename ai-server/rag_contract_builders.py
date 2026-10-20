@@ -137,11 +137,11 @@ def build_retrieval_chunk(
     """Create a RetrievalChunk preview without changing stored index text."""
     section_path = section_node.path if section_node else ()
     trusted_section = bool(section_node and section_path_quality(section_path) == "ok")
-    retrieval_text = _compose_retrieval_text(
-        section_path if trusted_section else (),
-        parsed_block.text,
-    )
+    document_title = document_title_from_source(parsed_block.metadata.get("source"))
+    header = compose_retrieval_header(document_title, section_path if trusted_section else ())
+    retrieval_text = "\n".join(part for part in (header, parsed_block.text.strip()) if part)
     index = parsed_block.reading_order if retrieval_index is None else retrieval_index
+    prefixes = [name for name, used in (("title", bool(document_title)), ("section", trusted_section)) if used]
 
     return RetrievalChunk(
         retrieval_chunk_id=_contract_id(parsed_block.document_id, "retrieval", index or 0),
@@ -149,9 +149,35 @@ def build_retrieval_chunk(
         retrieval_text=retrieval_text,
         source_block_ids=(source_block.source_block_id,),
         section_ids=(section_node.section_id,) if section_node and trusted_section else (),
-        strategy="section_prefixed_raw" if trusted_section else "raw",
+        strategy=f"{'_'.join(prefixes)}_prefixed_raw" if prefixes else "raw",
         chunk_role=str(parsed_block.metadata.get("chunk_role") or "raw"),
     )
+
+
+def document_title_from_source(source: object) -> str:
+    """Return the document title used in retrieval headers: the upload file name without its extension.
+
+    Upload file names are made from the document ledger title (corpus upload), so the stem is the
+    document title. Returns an empty string when there is no file name.
+    """
+    name = re.split(r"[\\/]", str(source or "").strip())[-1]
+    return _DOCUMENT_EXTENSION_PATTERN.sub("", name).strip()
+
+
+def compose_retrieval_header(document_title: str, section_path: Sequence[str]) -> str:
+    """Return the header lines put before chunk text for embedding, BM25 and reranking.
+
+    The first line is the document title and the second the section path. Leading section
+    components that repeat the document title are dropped so the title is not written twice.
+    """
+    title = re.sub(r"\s+", " ", str(document_title or "")).strip()
+    sections = [str(component).strip() for component in section_path if str(component).strip()]
+    while title and sections and _same_header_text(sections[0], title):
+        sections.pop(0)
+    lines = [title] if title else []
+    if sections:
+        lines.append(" > ".join(sections))
+    return "\n".join(lines)
 
 
 def build_table_cell_fact(
@@ -363,18 +389,8 @@ def _section_id(document_id: str | int, path: tuple[str, ...]) -> str:
     return f"doc-{document_id}:section-{path_digest}"
 
 
-def _compose_retrieval_text(section_path: Sequence[str], raw_text: str) -> str:
-    sections = [
-        str(component).strip()
-        for component in section_path
-        if str(component).strip()
-    ]
-    text_parts = []
-    if sections:
-        text_parts.append(" > ".join(sections))
-    if raw_text.strip():
-        text_parts.append(raw_text.strip())
-    return "\n".join(text_parts)
+def _same_header_text(left: str, right: str) -> bool:
+    return re.sub(r"\s+", "", left) == re.sub(r"\s+", "", right)
 
 
 def _page_label_from_span(page_span: PageSpan | None) -> str:
@@ -459,6 +475,7 @@ _SECTION_PATH_COMPONENT_BLOCKING_WARNINGS = {
     "numeric_value_section_component",
     "table_markup_section_component",
 }
+_DOCUMENT_EXTENSION_PATTERN = re.compile(r"\.(pdf|docx|pptx|xlsx|hwpx?|html?)$", re.IGNORECASE)
 _MONEY_VALUE_PATTERN = re.compile(r"\d[\d,]*(?:\.\d+)?\s*(?P<scale>천|만|억|조)?\s*원")
 _COUNT_VALUE_PATTERN = re.compile(r"\d[\d,]*\s*명")
 _DATE_VALUE_PATTERN = re.compile(r"\d{4}[.-]\d{1,2}(?:[.-]\d{1,2})?")

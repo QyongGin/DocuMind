@@ -29,6 +29,9 @@ from rag_contract_builders import (
     build_source_citation,
     build_source_reference,
     build_table_cell_fact,
+    compose_retrieval_header,
+    document_title_from_source,
+    header_path_from_metadata,
     section_path_component_is_suspect,
     section_path_quality,
     section_path_warnings,
@@ -188,6 +191,7 @@ DOCUMENT_COLLECTION_NAME = "documents"
 SOURCE_BLOCK_COLLECTION_NAME = "source_blocks"
 RETRIEVAL_CHUNK_COLLECTION_NAME = "retrieval_chunks"
 OPENDATALOADER_JSON_TABLE_FACT_SOURCE = "opendataloader_json"
+OPENDATALOADER_JSON_ROW_FACT_SOURCE = "opendataloader_json_row"
 OPENDATALOADER_JSON_PARENT_CHUNK_INDEX_OFFSET = 1_000_000
 OPENDATALOADER_JSON_RUNTIME_TABLE_FACT_METADATA_KEYS = (
     "document_id",
@@ -1822,16 +1826,38 @@ def _build_opendataloader_source_block_document(
     return Document(page_content=source_block.raw_text, metadata=metadata)
 
 
+def _table_fact_caption(table_fact: TableFact) -> str:
+    """표 사실 문장의 표 이름: 표 제목, 없으면 문서 제목 경로, 둘 다 없으면 '문서 표'."""
+    return table_fact.caption or " > ".join(table_fact.header_path) or "문서 표"
+
+
+def _table_fact_row_path(table_fact: TableFact) -> str:
+    """표 사실 문장의 행 이름: 행을 유일하게 가리는 머리 칸 경로(없으면 첫 칸)."""
+    return " > ".join(table_fact.row_header_path) if table_fact.row_header_path else table_fact.row_label
+
+
 def _format_table_fact_index_text(table_fact: TableFact) -> str:
-    """Typed TableFact를 기존 lexical table_fact 검색이 읽을 수 있는 문장으로 만든다."""
-    caption = table_fact.caption or " > ".join(table_fact.header_path) or "문서 표"
-    row_path = " > ".join(table_fact.row_header_path) if table_fact.row_header_path else table_fact.row_label
+    """Typed TableFact를 기존 lexical table_fact 검색이 읽을 수 있는 문장으로 만든다.
+
+    행 이름은 같은 표 안에서 행을 유일하게 가리는 머리 칸 경로다(_assign_unique_table_row_paths).
+    """
     column_path = " > ".join(table_fact.column_path) if table_fact.column_path else table_fact.column_label
+    return (
+        f"{_table_fact_caption(table_fact)}: {_table_fact_row_path(table_fact)} "
+        f"행 정보는 {column_path}={table_fact.value}이다."
+    )
+
+
+def _format_table_row_index_text(row_facts: list[TableFact]) -> str:
+    """한 행의 칸 사실들을 '표 이름: 행 경로 행 정보는 열=값; 열=값이다.' 한 문장으로 만든다."""
+    first = row_facts[0]
     pairs = []
-    if row_path and row_path != table_fact.row_label:
-        pairs.append(f"행 경로={row_path}")
-    pairs.append(f"{column_path}={table_fact.value}")
-    return f"{caption}: {table_fact.row_label} 행 정보는 {'; '.join(pairs)}이다."
+    for table_fact in row_facts:
+        column_path = " > ".join(table_fact.column_path) if table_fact.column_path else table_fact.column_label
+        pairs.append(f"{column_path}={table_fact.value}")
+    return _truncate_table_fact(
+        f"{_table_fact_caption(first)}: {_table_fact_row_path(first)} 행 정보는 {'; '.join(pairs)}이다."
+    )
 
 
 def _build_opendataloader_table_fact_document(
@@ -1988,6 +2014,170 @@ def _preserve_opendataloader_repeated_row_headers(
     return normalized
 
 
+def _collapse_repeated_words(text: str) -> str:
+    """병합 칸 글이 단어째 되풀이된 것('기계공학과 기계공학과 …')을 한 번으로 줄인다."""
+    words = str(text or "").split()
+    if len(words) > 1 and len(set(words)) == 1:
+        return words[0]
+    return str(text or "").strip()
+
+
+def _table_key(table_fact: TableFact) -> tuple[str, str]:
+    """같은 원문 표를 가리키는 key."""
+    return (str(table_fact.table_id), str(table_fact.source_block_id))
+
+
+def _unique_row_paths(rows: dict[int, list[TableFact]]) -> dict[int, tuple[str, ...]]:
+    """한 표의 행마다, 같은 표의 다른 행과 겹치지 않는 머리 칸 경로를 만든다.
+
+    출발은 지금의 행 경로(묶음 행·첫 칸)다. 경로가 같은 행이 둘 이상이면, 그 행들을 서로 가르는 가장 왼쪽 열의 값을
+    경로 끝에 붙인다. 가를 수 있는 행이 남지 않을 때까지 되풀이한다(값이 모든 열에서 같은 행은 가를 필요가 없다).
+    특정 표·학과 이름을 보지 않는 구조 규칙이다.
+    """
+    values = {
+        row_index: {
+            fact.column_index if fact.column_index is not None else position: _collapse_repeated_words(fact.value)
+            for position, fact in enumerate(row_facts)
+        }
+        for row_index, row_facts in rows.items()
+    }
+    paths: dict[int, list[str]] = {}
+    for row_index, row_facts in rows.items():
+        path: list[str] = []
+        for component in row_facts[0].row_header_path or (row_facts[0].row_label,):
+            cleaned = _collapse_repeated_words(component)
+            if cleaned and cleaned not in path:
+                path.append(cleaned)
+        paths[row_index] = path
+
+    columns = sorted({column for row_values in values.values() for column in row_values})
+    while True:
+        groups: dict[tuple[str, ...], list[int]] = {}
+        for row_index, path in paths.items():
+            groups.setdefault(tuple(path), []).append(row_index)
+        extended = False
+        for row_indexes in groups.values():
+            if len(row_indexes) < 2:
+                continue
+            for column in columns:
+                column_values = {row_index: values[row_index].get(column, "") for row_index in row_indexes}
+                candidate = {
+                    row_index: paths[row_index] + ([value] if value and value not in paths[row_index] else [])
+                    for row_index, value in column_values.items()
+                }
+                if len({tuple(path) for path in candidate.values()}) > 1:
+                    paths.update(candidate)
+                    extended = True
+                    break
+        if not extended:
+            break
+    return {row_index: tuple(path) for row_index, path in paths.items()}
+
+
+def _distinct_table_captions(
+    table_facts: list[TableFact],
+    page_by_source_block_id: dict[str, int],
+) -> dict[tuple[str, str], str]:
+    """한 문서에서 표 이름이 같은 표가 둘 이상이면 표 이름 뒤에 쪽 번호(같은 쪽이면 몇 번째 표)를 붙인다."""
+    first_fact_by_table: dict[tuple[str, str], TableFact] = {}
+    for table_fact in table_facts:
+        first_fact_by_table.setdefault(_table_key(table_fact), table_fact)
+    tables_by_caption: dict[str, list[tuple[str, str]]] = {}
+    for key, table_fact in first_fact_by_table.items():
+        tables_by_caption.setdefault(_table_fact_caption(table_fact), []).append(key)
+
+    captions: dict[tuple[str, str], str] = {}
+    for caption, keys in tables_by_caption.items():
+        if len(keys) < 2:
+            continue
+        keys_by_page: dict[int | None, list[tuple[str, str]]] = {}
+        for key in sorted(keys):
+            keys_by_page.setdefault(page_by_source_block_id.get(key[1]), []).append(key)
+        for page, page_keys in keys_by_page.items():
+            for order, key in enumerate(page_keys, start=1):
+                place = f"{page}쪽 표" if page is not None else "표"
+                if len(page_keys) > 1:
+                    place = f"{place} {order}"
+                captions[key] = f"{caption} ({place})"
+    return captions
+
+
+def _assign_unique_table_row_paths(
+    table_facts: list[TableFact],
+    page_by_source_block_id: dict[str, int] | None = None,
+) -> list[TableFact]:
+    """칸 사실의 행 경로를 같은 표 안에서 유일하게, 표 이름을 같은 문서 안에서 유일하게 만든다(M2 5단계).
+
+    같은 표·같은 행 이름·같은 열에 값이 여럿이면 어느 행의 값인지 알 수 없다(병합 칸 '생활비' 아래 장학금 여러 줄 등).
+    """
+    if not table_facts:
+        return []
+    rows_by_table: dict[tuple[str, str], dict[int, list[TableFact]]] = {}
+    for table_fact in table_facts:
+        if table_fact.row_index is None:
+            continue
+        rows_by_table.setdefault(_table_key(table_fact), {}).setdefault(table_fact.row_index, []).append(table_fact)
+    path_by_row: dict[tuple[str, str, int], tuple[str, ...]] = {}
+    for key, rows in rows_by_table.items():
+        for row_index, path in _unique_row_paths(rows).items():
+            path_by_row[(*key, row_index)] = path
+    captions = _distinct_table_captions(table_facts, page_by_source_block_id or {})
+
+    normalized: list[TableFact] = []
+    for table_fact in table_facts:
+        key = _table_key(table_fact)
+        updates: dict = {}
+        path = path_by_row.get((*key, table_fact.row_index)) if table_fact.row_index is not None else None
+        if path:
+            updates["row_header_path"] = path
+        if key in captions:
+            updates["caption"] = captions[key]
+        normalized.append(replace(table_fact, **updates) if updates else table_fact)
+    return normalized
+
+
+def _build_opendataloader_row_fact_documents(
+    table_facts: list[TableFact],
+    source_docs_by_id: dict[str, Document],
+) -> list[Document]:
+    """칸 사실이 둘 이상인 표 행마다 행 전체를 한 문장으로 만든 표 사실 문서를 만든다(M2 5단계).
+
+    행 문장은 칸 사실처럼 typed metadata를 두지 않고 마크다운 표의 행 사실과 같은 글 표 사실로 다룬다.
+    """
+    rows: dict[tuple[str, str, int], list[TableFact]] = {}
+    for table_fact in table_facts:
+        if table_fact.row_index is None or table_fact.source_block_id not in source_docs_by_id:
+            continue
+        rows.setdefault((*_table_key(table_fact), table_fact.row_index), []).append(table_fact)
+
+    documents: list[Document] = []
+    for row_number, row_facts in enumerate(rows.values()):
+        if len(row_facts) < 2:
+            continue
+        row_facts = sorted(row_facts, key=_opendataloader_fact_column_sort_key)
+        first = row_facts[0]
+        source_metadata = source_docs_by_id[first.source_block_id].metadata
+        metadata = dict(source_metadata)
+        metadata.update(_table_fact_header_metadata(first.header_path))
+        metadata.update({
+            "chunk_role": "table_fact",
+            "parent_chunk_id": source_metadata["source_parent_chunk_id"],
+            "parent_chunk_index": source_metadata["source_parent_chunk_index"],
+            "parent_content": source_docs_by_id[first.source_block_id].page_content,
+            "fact_index": row_number,
+            "table_fact_lookup_id": f"{source_metadata['document_id']}_odl_row_{row_number}",
+            "table_fact_source": OPENDATALOADER_JSON_ROW_FACT_SOURCE,
+            "table_fact_type": "row",
+            "table_fact_table_id": first.table_id,
+            "table_fact_row_header_path": _metadata_json_array(first.row_header_path),
+            "table_fact_source_block_index": _opendataloader_source_index(first.source_block_id),
+        })
+        _set_optional_metadata(metadata, "table_fact_row_index", first.row_index)
+        _set_optional_metadata(metadata, "table_fact_caption", first.caption)
+        documents.append(Document(page_content=_format_table_row_index_text(row_facts), metadata=metadata))
+    return documents
+
+
 def _build_opendataloader_json_index_artifacts(
     json_docs: list[Document],
     filename: str,
@@ -2017,6 +2207,12 @@ def _build_opendataloader_json_index_artifacts(
         table_facts.extend(result.table_facts)
 
     table_facts = _preserve_opendataloader_repeated_row_headers(table_facts)
+    page_by_source_block_id = {
+        source_block_id: source_block.page_span.start
+        for source_block_id, source_block in source_blocks_by_id.items()
+        if source_block.page_span is not None
+    }
+    table_facts = _assign_unique_table_row_paths(table_facts, page_by_source_block_id)
     required_source_ids = {table_fact.source_block_id for table_fact in table_facts}
     source_docs_by_id = {
         source_block_id: _build_opendataloader_source_block_document(
@@ -2040,6 +2236,7 @@ def _build_opendataloader_json_index_artifacts(
                 source_doc,
             )
         )
+    table_fact_docs.extend(_build_opendataloader_row_fact_documents(table_facts, source_docs_by_id))
 
     return OpenDataLoaderJsonIndexArtifacts(
         source_docs=list(source_docs_by_id.values()),
@@ -3412,9 +3609,22 @@ def _invalidate_query_caches() -> None:
     _invalidate_table_fact_cache()
 
 
+def _build_bm25_document_text(document: str, metadata: dict) -> str:
+    """BM25 채점 글: 검색용 청크와 같은 머리말(문서 제목 + header 경로)에 header 경로를 한 번 더 붙인 본문.
+
+    header 경로를 두 번 넣어 가중하던 방식은 그대로 두고, 그중 한 번을 문서 제목이 붙은 머리말로 바꾼다.
+    """
+    title = document_title_from_source(metadata.get("source"))
+    if not title:
+        return _build_sparse_search_text(document, metadata)
+    header = compose_retrieval_header(title, header_path_from_metadata(metadata))
+    header_path = _format_header_path(metadata)
+    return "\n".join(part for part in (header, header_path, document) if part)
+
+
 def _build_sparse_index_record(chunk_id: str, document: str, metadata: dict) -> SparseIndexRecord:
     """raw chunk 하나를 BM25 index record로 변환한다."""
-    tokens = _tokenize_sparse_search(_build_sparse_search_text(document, metadata))
+    tokens = _tokenize_sparse_search(_build_bm25_document_text(document, metadata))
     frequencies: dict[str, int] = {}
     for token in tokens:
         frequencies[token] = frequencies.get(token, 0) + 1
@@ -5933,7 +6143,7 @@ def _rerank_candidates(
     head = min(RERANK_CANDIDATES, len(docs))
     if not RERANKER_URL or head < 2:
         return (docs, metadatas, ids), info
-    texts = [str(doc or "").replace("\x00", "")[:RERANK_DOC_CHARS] for doc in docs[:head]]
+    texts = [_rerank_document_text(doc, meta)[:RERANK_DOC_CHARS] for doc, meta in zip(docs[:head], metadatas[:head])]
     started = time.perf_counter()
     try:
         response = httpx.post(
@@ -5954,6 +6164,17 @@ def _rerank_candidates(
                 scores={str(ids[index]): scores[index] for index in range(head)})
     logger.info("[rerank] candidates=%s elapsed=%.3fs", head, info["elapsed"])
     return ([docs[i] for i in order], [metadatas[i] for i in order], [ids[i] for i in order]), info
+
+
+def _rerank_document_text(doc: str, meta: dict | None) -> str:
+    """재순위 서버에 보낼 글: 검색용 청크와 같은 머리말(문서 제목 + 믿을 수 있는 제목 경로)을 본문 앞에 붙인다."""
+    meta = meta or {}
+    section_path = header_path_from_metadata(meta)
+    if section_path_quality(section_path) != "ok":
+        section_path = ()
+    header = compose_retrieval_header(document_title_from_source(meta.get("source")), section_path)
+    body = str(doc or "").replace("\x00", "")
+    return f"{header}\n{body}" if header else body
 
 
 def _record_eval_stage(

@@ -270,7 +270,7 @@ def main() -> None:
     support_docs = [
         doc
         for doc in rowspan_artifacts.table_fact_docs
-        if doc.metadata["table_fact_column_label"] == "지원자격"
+        if doc.metadata.get("table_fact_column_label") == "지원자격"
     ]
     assert len(support_docs) == 2
     support_by_row = {
@@ -282,7 +282,11 @@ def main() -> None:
         "지역전형",
         "유형Ⅰ",
     ]
-    assert "행 경로=지역전형 > 유형Ⅰ" in support_by_row["유형Ⅰ"].page_content
+    assert "지역전형 > 유형Ⅰ 행 정보는 지원자격=" in support_by_row["유형Ⅰ"].page_content
+    # 칸 사실이 둘 이상인 행은 행 전체 문장도 색인한다(M2 5단계)
+    row_docs = [doc for doc in rowspan_artifacts.table_fact_docs if doc.metadata.get("table_fact_type") == "row"]
+    assert len(row_docs) == 2
+    assert any("지역전형 > 유형Ⅰ 행 정보는 유형=유형Ⅰ; 지원자격=" in doc.page_content for doc in row_docs)
 
     rowspan_expanded_docs, rowspan_expanded_metadatas, _ = _expand_table_fact_results(
         [doc.page_content for doc in support_docs],
@@ -291,8 +295,8 @@ def main() -> None:
     )
     assert len(rowspan_expanded_docs) == 1
     rowspan_facts = _get_matched_table_facts(rowspan_expanded_metadatas[0])
-    assert any("행 경로=지역전형 > 유형Ⅰ; 지원자격=" in fact for fact in rowspan_facts)
-    assert any("행 경로=지역전형 > 유형Ⅱ; 지원자격=" in fact for fact in rowspan_facts)
+    assert any("지역전형 > 유형Ⅰ 행 정보는 지원자격=" in fact for fact in rowspan_facts)
+    assert any("지역전형 > 유형Ⅱ 행 정보는 지원자격=" in fact for fact in rowspan_facts)
 
     _check_bm25_limit_uses_raw_records()
 
