@@ -28,6 +28,7 @@ STAGES = ("vector", "bm25", "table_fact", "expanded", "final")
 def fake_retrieval(monkeypatch):
     """임베딩·Chroma·BM25·표 사실 조회만 가짜로 바꾸고, 그 뒤 단계(순위 융합·펼치기·문맥)는 실제 코드를 탄다."""
     monkeypatch.setattr(main, "_embed_texts", lambda texts: ([[0.1, 0.2]], {}))
+    monkeypatch.setattr(main, "_embed_query", lambda question: ([[0.1, 0.2]], {}))
     monkeypatch.setattr(
         main,
         "_query_vector_results",

@@ -13,7 +13,7 @@
 
 | 확인 | 방법 |
 |---|---|
-| 테스트 | 바뀐 모듈의 테스트 실행 (ai-server: `ai-server/venv/bin/python -m pytest -q`) |
+| 테스트 | 바뀐 모듈의 테스트 실행 (ai-server: `OLLAMA_BASE_URL=http://127.0.0.1:9 ai-server/venv/bin/python -m pytest -q` — 맥북에 Ollama가 떠 있으면 가짜로 바꾸지 않은 호출이 진짜 Ollama로 가서 통과해 버린다. CI처럼 닿지 않게 하고 돌린다) |
 | CI | PR을 올리면 GitHub Actions가 바뀐 모듈의 테스트를 다시 돌린다(ADR-0024). 맥북에서 통과해도 의존성 목록 누락·커밋하지 않은 파일은 CI에서 드러난다 |
 | 공백 오류 | `git diff --check origin/develop...HEAD` |
 | AI 서명 | `git log origin/develop..HEAD --format=%B \| grep -c 'Co-Authored-By'` 결과가 0 |
