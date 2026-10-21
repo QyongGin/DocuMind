@@ -13,7 +13,7 @@ from typing import Callable
 from . import checks, clients, prompts
 from .plan import KINDS
 
-STEPS = ("plan", "questions", "attached", "targets", "checked")
+STEPS = ("plan", "questions", "attached", "targets", "checked", "judged", "human")
 QUESTION_OPTIONS = {"temperature": 0.7, "num_ctx": 4096, "num_predict": 400}
 TARGET_OPTIONS = {"temperature": 0.2, "num_ctx": 12288, "num_predict": 700}
 
@@ -155,6 +155,12 @@ def status(batch_dir: Path) -> dict:
         counter["target"] += bool(record.get("target_ga"))
         counter["keep"] += bool((record.get("keep") or {}).get("ga"))
     return {kind: dict(counter) for kind, counter in by_kind.items()}
+
+
+def verdicts(batch_dir: Path) -> dict[str, str]:
+    """예시마다 최종 판정: 사람 판정이 있으면 사람, 없으면 Claude(ADR-0037). 판정 전이면 빠진다."""
+    return {record["id"]: record.get("human") or record["verdict"] for record in merged(batch_dir)
+            if record.get("human") or record.get("verdict")}
 
 
 def export(batch_dir: Path, out_file: Path, shape: str = "ga", verdicts: dict[str, str] | None = None) -> int:

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>학습 예시 표본 판정</title>
+<style>
+:root{--bg:#fbfaf7;--card:#fff;--ink:#1d1d1b;--sub:#5f5e5a;--line:#e1e0d9;--ok:#0f6e56;--okbg:#e1f5ee;--no:#a32d2d;--nobg:#fcebeb;--hi:#faeeda}
+@media (prefers-color-scheme:dark){:root{--bg:#1a1a19;--card:#232321;--ink:#f0efec;--sub:#c3c2b7;--line:#383835;--ok:#5dcaa5;--okbg:#08362b;--no:#f09595;--nobg:#4a1b1b;--hi:#4a3305}}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
+main{max-width:860px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 16px}
+.meta{color:var(--sub);font-size:13px;margin-bottom:6px}
+.q{font-size:17px;font-weight:600;margin:4px 0 10px}
+.label{font-size:13px;color:var(--sub);margin:12px 0 4px}
+.target{white-space:pre-wrap;border-left:3px solid var(--line);padding:4px 0 4px 12px}
+details{border:1px solid var(--line);border-radius:8px;margin:6px 0;padding:6px 10px}
+details pre{white-space:pre-wrap;font:13px/1.55 ui-monospace,Menlo,monospace;margin:6px 0 0}
+summary{cursor:pointer;font-size:13px}
+.cited summary{font-weight:600}
+.choose{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:6px 14px;cursor:pointer}
+button.on.pass{background:var(--okbg);color:var(--ok);border-color:var(--ok)}
+button.on.fail{background:var(--nobg);color:var(--no);border-color:var(--no)}
+input.memo{flex:1;min-width:200px;font:inherit;border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--card);color:var(--ink)}
+.claude{display:none;margin-top:10px;padding:8px 12px;border-radius:8px;background:var(--hi);font-size:14px}
+.claude.show{display:block}
+.agree{font-weight:600}
+footer{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+mark{background:var(--hi);color:inherit}
+</style>
+</head>
+<body>
+<main>
+<h1 style="font-size:20px;font-weight:600">학습 예시 표본 판정</h1>
+<p class="meta">예시마다 질문·목표 답·챗봇이 받은 근거를 보고 <b>통과</b>(챗봇이 이 답을 배워도 됨) 또는 <b>탈락</b>을 고른다. Claude 판정은 고른 뒤에 보인다. 다 끝나면 아래 단추로 판정 기록을 내려받아 채팅에 알려 준다.</p>
+<div id="list"></div>
+</main>
+<footer><span id="count"></span><button id="save">판정 기록 내려받기</button></footer>
+<script>
+const D=/*__DATA__*/null;
+const KEY="trainset-review-"+D.batch;
+let state={};
+try{state=JSON.parse(localStorage.getItem(KEY)||"{}")}catch(e){state={}}
+const started=Date.now();
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){}}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c])}
+function marked(text,values){let html=esc(text);for(const v of values){if(v.length<2)continue;html=html.split(esc(v)).join("<mark>"+esc(v)+"</mark>")}return html}
+function render(){
+  const list=document.getElementById("list");list.innerHTML="";
+  D.examples.forEach((x,i)=>{
+    const s=state[x.id]||{};
+    const card=document.createElement("div");card.className="card";
+    const blocks=x.blocks.map(b=>`<details class="${b.cited?"cited":""}" ${b.cited?"open":""}><summary>[출처 ${b.n}]${b.cited?" — 목표 답이 쓴 근거":""}</summary><pre>${marked(b.text,x.values)}</pre></details>`).join("");
+    const agree=s.human?(s.human===x.claude.verdict?'<span class="agree" style="color:var(--ok)">일치</span>':'<span class="agree" style="color:var(--no)">어긋남</span>'):"";
+    card.innerHTML=`<div class="meta">${i+1} / ${D.examples.length} · ${esc(x.kind)} · 묻는 사람 ${esc(x.user)} · ${esc(x.id)}</div>
+<div class="q">${esc(x.question)}</div>
+<div class="label">목표 답(챗봇이 배울 답)</div><div class="target">${esc(x.target)}</div>
+${x.notes.length?`<div class="label">자동 검사 메모</div><div>${x.notes.map(esc).join("<br>")}</div>`:""}
+<div class="label">챗봇이 받은 근거 8개</div>${blocks}
+<div class="choose"><button class="pass ${s.human==="통과"?"on":""}" data-v="통과">통과</button><button class="fail ${s.human==="탈락"?"on":""}" data-v="탈락">탈락</button><input class="memo" placeholder="탈락이면 이유 한 줄" value="${esc(s.memo||"")}"></div>
+<div class="claude ${s.human?"show":""}">Claude 판정: <b>${esc(x.claude.verdict)}</b>${x.claude.category?" · "+esc(x.claude.category):""} — ${esc(x.claude.reason)} ${agree}</div>`;
+    card.querySelectorAll("button[data-v]").forEach(btn=>btn.onclick=()=>{state[x.id]={...(state[x.id]||{}),human:btn.dataset.v};persist();render()});
+    card.querySelector("input.memo").onchange=e=>{state[x.id]={...(state[x.id]||{}),memo:e.target.value};persist()};
+    list.appendChild(card);
+  });
+  const done=D.examples.filter(x=>state[x.id]&&state[x.id].human);
+  const differ=done.filter(x=>state[x.id].human!==x.claude.verdict).length;
+  document.getElementById("count").textContent=`판정 ${done.length} / ${D.examples.length} · Claude와 어긋남 ${differ}`;
+}
+document.getElementById("save").onclick=()=>{
+  const lines=D.examples.filter(x=>state[x.id]&&state[x.id].human).map(x=>JSON.stringify({id:x.id,human:state[x.id].human,memo:state[x.id].memo||"",claude:x.claude.verdict})).join("\n")+"\n";
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([lines],{type:"application/x-ndjson"}));
+  a.download=`판정기록-${D.batch}.jsonl`;a.click();
+};
+render();
+</script>
+</body>
+</html>

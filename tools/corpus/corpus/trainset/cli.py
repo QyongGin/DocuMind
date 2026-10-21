@@ -5,6 +5,9 @@
     attach     근거 붙이기: 데이터셋 AI 서버 /query(평가용 옵션)의 운영 프롬프트·근거 8개·학습 전 A.X 답
     targets    목표 답 초안(ADR-0039). --shapes ga,na면 인용형도
     check      자동 검사(ADR-0037)와 중복 표시
+    judge      Claude 판정(통과·탈락과 이유만, 저장소 밖 격리 폴더에서 `claude -p`)
+    review-html  사람 표본 화면(Claude 판정은 사람이 고른 뒤에 보임)
+    merge-review 화면이 내려받은 판정 기록을 합치고 Claude와 어긋난 수를 센다
     status     단계별·종류별 개수
     export     학습 파일(A.X 채팅 형식 JSONL)
 
@@ -16,11 +19,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import tempfile
 from pathlib import Path
 
 import requests
 
-from . import pipeline
+from . import judge, pipeline, review
 from .plan import ROUND1, dataset_documents, plan, scale
 
 DEFAULT_MODEL = "gemma4:12b-it-qat"
@@ -91,8 +95,43 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_judge(args) -> int:
+    batch_dir = _batch_dir(args)
+    todo = [record for record in pipeline.merged(batch_dir)
+            if (record.get("keep") or {}).get("ga") and record.get("verdict") is None]
+    todo = todo[: args.limit] if args.limit else todo
+    work = Path(args.work) if args.work else Path(tempfile.mkdtemp(prefix="trainset-judge-"))
+    print(f"판정할 예시 {len(todo)}개 · 작업 폴더 {work}")
+    results, failed = judge.run(todo, work, args.model, jobs=args.jobs)
+    pipeline.write(batch_dir, "judged", results)
+    for name, why in failed:
+        print(f"실패 {name}: {why}")
+    passed = sum(result["verdict"] == "통과" for result in results)
+    print(f"판정 {len(results)} · 통과 {passed} · 탈락 {len(results) - passed} · 실패한 작업 단위 {len(failed)}")
+    return 0 if not failed else 1
+
+
+def cmd_review_html(args) -> int:
+    batch_dir = _batch_dir(args)
+    chosen = review.sample(pipeline.merged(batch_dir), args.size, args.seed)
+    out = Path(args.out) if args.out else batch_dir / "review.html"
+    out.write_text(review.page(chosen, args.batch), encoding="utf-8")
+    print(f"표본 {len(chosen)}개 → {out}")
+    return 0
+
+
+def cmd_merge_review(args) -> int:
+    batch_dir = _batch_dir(args)
+    human = review.read_record(Path(args.file))
+    pipeline.write(batch_dir, "human", [{"id": item_id, **entry} for item_id, entry in human.items()])
+    print(json.dumps(review.agreement(pipeline.merged(batch_dir), human), ensure_ascii=False, indent=1))
+    return 0
+
+
 def cmd_export(args) -> int:
     verdicts = json.loads(Path(args.verdicts).read_text(encoding="utf-8")) if args.verdicts else None
+    if args.use_judge:
+        verdicts = pipeline.verdicts(_batch_dir(args))
     kept = pipeline.export(_batch_dir(args), Path(args.out), args.shape, verdicts)
     print(f"학습 예시 {kept}개 → {args.out}")
     return 0
@@ -136,10 +175,28 @@ def add_parser(commands) -> None:
     checking.add_argument("--shapes", default="ga")
     checking.set_defaults(func=cmd_check)
 
+    judging = with_batch("judge", "Claude 판정")
+    judging.add_argument("--model", default=judge.DEFAULT_MODEL)
+    judging.add_argument("--jobs", type=int, default=2)
+    judging.add_argument("--limit", type=int, help="판정할 예시 수(첫 묶음 40)")
+    judging.add_argument("--work", help="작업 폴더(저장소 밖). 없으면 임시 폴더")
+    judging.set_defaults(func=cmd_judge)
+
+    reviewing = with_batch("review-html", "사람 표본 화면")
+    reviewing.add_argument("--size", type=int, default=30)
+    reviewing.add_argument("--seed", type=int, default=20261021)
+    reviewing.add_argument("--out", help="화면 파일(기본: 묶음 폴더의 review.html)")
+    reviewing.set_defaults(func=cmd_review_html)
+
+    merging = with_batch("merge-review", "판정 기록 합치기")
+    merging.add_argument("file", help="화면이 내려받은 판정기록-<묶음>.jsonl")
+    merging.set_defaults(func=cmd_merge_review)
+
     with_batch("status", "단계별·종류별 개수").set_defaults(func=cmd_status)
 
     exporting = with_batch("export", "학습 파일 내보내기")
     exporting.add_argument("--out", required=True)
     exporting.add_argument("--shape", default="ga")
     exporting.add_argument("--verdicts", help="판정 JSON({예시 번호: '통과'|'탈락'}). 주면 통과만")
+    exporting.add_argument("--use-judge", action="store_true", help="묶음의 판정(사람 > Claude)으로 통과만")
     exporting.set_defaults(func=cmd_export)
