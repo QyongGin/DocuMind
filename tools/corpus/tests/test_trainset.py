@@ -309,8 +309,10 @@ def test_boilerplate_lines_found_across_documents_and_removed():
     assert found == {CONSENT}
     assert draft_text(f"본문 줄\n  {CONSENT}  ", found) == "본문 줄"
     assert boilerplate_lines(chunks, min_docs=6) == set()
-    header = "| 구분 | 등록 기간 | 금액 |"
-    with_tables = {n: [chunk(0, f"{header}\n##### 구비서류 안내\n짧은 줄 02-000-0000")] for n in range(6)}
+    header = "| 구분 | 신청 기간 | 장학 금액 | 비고 |"  # 20자 넘는 표 머리줄
+    heading = "##### 장학금 신청 구비서류 안내 및 유의사항"  # 20자 넘는 제목 줄
+    assert min(len(header), len(heading)) >= 20
+    with_tables = {n: [chunk(0, f"{header}\n{heading}\n짧은 줄 02-000-0000")] for n in range(6)}
     assert boilerplate_lines(with_tables, min_docs=5) == set()  # 표 줄·제목 줄·짧은 줄은 남긴다
 
 
