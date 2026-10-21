@@ -27,6 +27,7 @@ import requests
 from . import extract, pii, upload
 from .collect import TARGETS, Collector, counts_dict, remeasure
 from .evalset import cli as evalset_cli
+from .trainset import cli as trainset_cli
 from .ledger import Ledger
 from .polite import KST, PoliteSession, Stop
 
@@ -245,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
     up.set_defaults(func=cmd_upload)
 
     evalset_cli.add_parser(commands, DEFAULT_EVALSET)
+    trainset_cli.add_parser(commands)
 
     args = parser.parse_args(argv)
     if getattr(args, "interval", 2.0) < 2.0:
