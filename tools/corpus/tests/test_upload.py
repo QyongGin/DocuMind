@@ -110,6 +110,9 @@ def test_dataset_keeps_one_version_per_group(ledger, tmp_path):
              # 유효한 판이 있는 묶음은 그 판만
              row("fee/2024", index_status="보관", group_id="공지:등록금납부안내", posted_at="2024-02-01"),
              row("fee/2026", group_id="공지:등록금납부안내", posted_at="2026-02-01"),
+             # 게시일이 없는 유효한 안내 페이지도 게시일이 있는 보관 판보다 앞선다
+             row("page/2019", index_status="보관", group_id="페이지:학과소개", posted_at="2019-03-01"),
+             row("page/now", group_id="페이지:학과소개", posted_at=None),
              # 유효한 판이 없는 묶음은 게시일이 가장 늦은 보관 판(같은 날 글과 첨부는 함께)
              row("fest/2023", index_status="보관", group_id="공지:축제안내", posted_at="2023-05-01"),
              row("fest/2025", index_status="보관", group_id="공지:축제안내", posted_at="2025-05-01"),
@@ -122,9 +125,9 @@ def test_dataset_keeps_one_version_per_group(ledger, tmp_path):
              row("eval/1", split="평가", group_id="공지:평가"))
 
     assert [r["doc_id"] for r in upload.select_rows(ledger.con, "dataset")] == [
-        "fee/2026", "fest/2025", "fest/2025-a1", "old/2"]
+        "fee/2026", "fest/2025", "fest/2025-a1", "old/2", "page/now"]
     # 서비스 대상은 묶음과 상관없이 유효한 판 전부
-    assert [r["doc_id"] for r in upload.select_rows(ledger.con, "service")] == ["eval/1", "fee/2026"]
+    assert [r["doc_id"] for r in upload.select_rows(ledger.con, "service")] == ["eval/1", "fee/2026", "page/now"]
 
 
 def test_upload_waits_records_and_resumes(ledger, tmp_path):
