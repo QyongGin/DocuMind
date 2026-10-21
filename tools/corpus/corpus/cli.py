@@ -235,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     up = commands.add_parser("upload", help="대장 행을 서비스 백엔드로 올리기(비밀번호는 실행 때 입력)")
     up.add_argument("--base-url", required=True, help="챗봇 화면 주소(예: http://데스크탑이름). /api로 백엔드를 부른다")
     up.add_argument("--set", choices=sorted(upload.SELECTIONS), required=True,
-                    help="service: 서비스 색인(색인 행) / dataset: 데이터셋용 색인(학습 몫)")
+                    help="service: 서비스 색인(색인 행) / dataset: 데이터셋용 색인(학습 몫, 묶음마다 한 판)")
     up.add_argument("--username", default="admin", help="관리자 아이디(기본 admin)")
     up.add_argument("--formats", help="쉼표로 형식 고르기(예: hwp,html). 표본 시험용")
     up.add_argument("--limit", type=int, help="이번에 올릴 최대 문서 수. 표본 시험용")

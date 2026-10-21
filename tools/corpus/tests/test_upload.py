@@ -105,6 +105,28 @@ def test_select_rows_by_target(ledger, tmp_path):
     assert upload.select_rows(ledger.con, "service", ["html"]) == []
 
 
+def test_dataset_keeps_one_version_per_group(ledger, tmp_path):
+    add_rows(ledger, tmp_path,
+             # 유효한 판이 있는 묶음은 그 판만
+             row("fee/2024", index_status="보관", group_id="공지:등록금납부안내", posted_at="2024-02-01"),
+             row("fee/2026", group_id="공지:등록금납부안내", posted_at="2026-02-01"),
+             # 유효한 판이 없는 묶음은 게시일이 가장 늦은 보관 판(같은 날 글과 첨부는 함께)
+             row("fest/2023", index_status="보관", group_id="공지:축제안내", posted_at="2023-05-01"),
+             row("fest/2025", index_status="보관", group_id="공지:축제안내", posted_at="2025-05-01"),
+             row("fest/2025-a1", index_status="보관", group_id="공지:축제안내", posted_at="2025-05-01"),
+             # 게시일이 없는 판은 게시일이 있는 판에 진다
+             row("old/1", index_status="보관", group_id="공지:옛안내", posted_at=None),
+             row("old/2", index_status="보관", group_id="공지:옛안내", posted_at="2020-01-01"),
+             # 내용 중복으로 제외된 행과 평가 몫은 넣지 않는다
+             row("dup/1", index_status="제외", group_id="공지:중복"),
+             row("eval/1", split="평가", group_id="공지:평가"))
+
+    assert [r["doc_id"] for r in upload.select_rows(ledger.con, "dataset")] == [
+        "fee/2026", "fest/2025", "fest/2025-a1", "old/2"]
+    # 서비스 대상은 묶음과 상관없이 유효한 판 전부
+    assert [r["doc_id"] for r in upload.select_rows(ledger.con, "service")] == ["eval/1", "fee/2026"]
+
+
 def test_upload_waits_records_and_resumes(ledger, tmp_path):
     add_rows(ledger, tmp_path, row("a/1", topic="입시"), row("a/2", title="일정표.hwp"))
     backend = FakeBackend()
