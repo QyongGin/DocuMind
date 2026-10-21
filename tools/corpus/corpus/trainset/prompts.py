@@ -30,7 +30,9 @@ STYLE_RULES = {
 def question_prompt(item: dict) -> str:
     """질문 초안 지시문. 엉뚱한 근거 종류는 글 없이 만든다."""
     kind = item["kind"]
-    texts = "\n\n".join(f"[글 {number}]\n{chunk['content'].strip()}" for number, chunk in enumerate(item["chunks"], 1))
+    # 상투문을 뺀 글(draft_text)을 준다 — 없으면(옛 계획) 청크 글 그대로
+    texts = "\n\n".join(f"[글 {number}]\n{(chunk.get('draft_text') or chunk['content']).strip()}"
+                         for number, chunk in enumerate(item["chunks"], 1))
     source = f"문서 제목: {item.get('title') or '-'}\n\n{texts}" if texts else "(글 없음)"
     users = "재학생, 예비 입학생·지원자, 교직원, 외국인, 업체"
     hint_rule = ("'답 근거'에는 질문의 답이 되는 부분을 글에서 그대로 옮긴다."
@@ -40,10 +42,11 @@ def question_prompt(item: dict) -> str:
     return f"""너는 대학 안내 챗봇의 학습 데이터를 만든다. 아래 학교 문서 글을 읽고, 챗봇 사용자가 물을 만한 질문 하나를 만든다.
 
 [만들 질문]
-- {KIND_RULES[kind]}
-- 묻는 사람: {item['user']}. 이 사람이 이 글을 물을 일이 없으면 {users} 중 물을 만한 사람으로 바꾸고 '묻는 사람'에 적는다.
+- {KIND_RULES[kind]} 이 종류를 반드시 지킨다.
+- 묻는 사람: {item['user']}. 이 사람으로 쓴다. 이 사람이 이 글을 물을 일이 전혀 없을 때만 {users} 중 물을 만한 사람으로 바꾸고 '묻는 사람'에 적는다.
 - 말투: {STYLE_RULES[item['style']]}
-- 실제 사람이 챗봇 입력창에 쓰듯 쓴다. '이 글', '위 문서', 문서 제목을 그대로 옮긴 말은 쓰지 않는다.
+- 질문만 읽어도 무엇에 대한 질문인지 알 수 있게, 글에 나온 대상(행사·전형·장학금·프로그램·학과 이름 등)을 질문에 넣는다. '이 전형', '이 대회'처럼 가리키는 말만 쓰지 않는다.
+- 실제 사람이 챗봇 입력창에 쓰듯 쓴다. '이 글', '위 문서', 문서 제목을 통째로 옮긴 말은 쓰지 않는다.
 - {hint_rule}
 - 글로 이 종류의 질문을 만들 수 없으면 '가능'을 false로 한다.
 

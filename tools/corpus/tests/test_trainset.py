@@ -6,7 +6,8 @@ import random
 import pytest
 
 from corpus.trainset import checks, clients, pipeline, prompts
-from corpus.trainset.plan import KINDS, ROUND1, dataset_documents, is_table_chunk, pick_chunks, plan, scale
+from corpus.trainset.plan import (KINDS, ROUND1, boilerplate_lines, dataset_documents, draft_text, is_table_chunk,
+                                  pick_chunks, plan, scale)
 
 TABLE = "\n".join([
     "|구분|등록 기간|금액|",
@@ -296,3 +297,36 @@ def test_pipeline_resumes_and_exports(tmp_path):
     assert lines[0]["messages"][1]["role"] == "assistant" and lines[0]["meta"]["drafter"] == "gemma"
     assert pipeline.export(batch, out, verdicts={"r1-0001": "통과", "r1-0002": "탈락"}) == 1
     assert pipeline.status(batch)["fact"]["keep"] == 1
+
+
+CONSENT = "수집한 개인정보는 행사 종료 후 1년간 보관하며 이후 파기합니다."
+
+
+def test_boilerplate_lines_found_across_documents_and_removed():
+    chunks = {number: [chunk(0, f"가나대학 {number}번 행사 안내 본문이다.\n{CONSENT}")] for number in range(5)}
+    chunks[9] = [chunk(0, "가나대학 기숙사 안내 본문이다.")]
+    found = boilerplate_lines(chunks, min_docs=5)
+    assert found == {CONSENT}
+    assert draft_text(f"본문 줄\n  {CONSENT}  ", found) == "본문 줄"
+    assert boilerplate_lines(chunks, min_docs=6) == set()
+
+
+def test_pick_chunks_measures_length_without_boilerplate():
+    rng = random.Random(1)
+    mostly_consent = chunk(0, "가나대학 짧은 안내.\n" + "\n".join([CONSENT] * 8))
+    assert pick_chunks(KINDS["fact"], [mostly_consent], rng) is not None  # 상투문을 모르면 길어 보인다
+    assert pick_chunks(KINDS["fact"], [mostly_consent], rng, {CONSENT}) is None
+
+
+def test_plan_gives_drafter_text_without_boilerplate():
+    def with_consent(document_id):
+        return [chunk(0, TEXT + "\n" + CONSENT), chunk(1, TEXT + "\n" + CONSENT)]
+    items = plan(documents(), {"fact": 1}, with_consent, "r1", seed=3, boilerplate={CONSENT})
+    assert CONSENT in items[0]["chunks"][0]["content"] and CONSENT not in items[0]["chunks"][0]["draft_text"]
+    assert CONSENT not in prompts.question_prompt(items[0])
+
+
+def test_question_prompt_asks_for_named_subject_and_keeps_user():
+    text = prompts.question_prompt({"kind": "fact", "user": "교직원", "style": "정중체", "title": "가나대학 안내",
+                                    "chunks": [chunk(0)]})
+    assert "대상(행사·전형·장학금·프로그램·학과 이름 등)" in text and "전혀 없을 때만" in text and "반드시 지킨다" in text

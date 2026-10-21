@@ -25,13 +25,36 @@ from pathlib import Path
 import requests
 
 from . import judge, pipeline, review
-from .plan import ROUND1, dataset_documents, plan, scale
+from .plan import ROUND1, boilerplate_lines, dataset_documents, plan, scale
 
 DEFAULT_MODEL = "gemma4:12b-it-qat"
 
 
 def _batch_dir(args) -> Path:
     return Path(args.root).parent / "train" / args.batch
+
+
+def load_chunks(documents: list[dict], ai_url: str, cache: Path) -> dict[int, list[dict]]:
+    """데이터셋용 색인의 문서별 청크(AI 서버 /documents/{id}/chunks). 한 번 받으면 묶음 폴더 밖 캐시 파일에 두고 다시 쓴다.
+    색인을 다시 만들면 캐시 파일을 지운다."""
+    chunks: dict[int, list[dict]] = {}
+    if cache.exists():
+        for line in cache.read_text(encoding="utf-8").splitlines():
+            entry = json.loads(line)
+            chunks[int(entry["document_id"])] = entry["chunks"]
+    session = requests.Session()
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    with cache.open("a", encoding="utf-8") as out:
+        for document in documents:
+            if document["document_id"] in chunks:
+                continue
+            response = session.get(f"{ai_url.rstrip('/')}/documents/{document['document_id']}/chunks", timeout=120)
+            response.raise_for_status()
+            chunks[document["document_id"]] = [{key: chunk.get(key) for key in ("id", "chunk_index", "content")}
+                                               for chunk in response.json().get("chunks") or []]
+            out.write(json.dumps({"document_id": document["document_id"], "chunks": chunks[document["document_id"]]},
+                                 ensure_ascii=False) + "\n")
+    return chunks
 
 
 def cmd_plan(args) -> int:
@@ -46,15 +69,12 @@ def cmd_plan(args) -> int:
         if other:
             skip |= {item["group_id"] for item in pipeline.read(Path(args.root).parent / "train" / other, "plan").values()
                      if item.get("group_id")}
-    session = requests.Session()
-
-    def fetch_chunks(document_id: int) -> list[dict]:
-        response = session.get(f"{args.ai_url.rstrip('/')}/documents/{document_id}/chunks", timeout=120)
-        response.raise_for_status()
-        return response.json().get("chunks") or []
-
+    chunks = load_chunks(documents, args.ai_url, Path(args.root).parent / "train" / args.chunk_cache)
+    boilerplate = boilerplate_lines(chunks)
+    print(f"문서 {len(documents)} · 청크를 받은 문서 {len(chunks)} · 상투문 줄 {len(boilerplate)}")
     quotas = scale(ROUND1, args.size)
-    items = plan(documents, quotas, fetch_chunks, args.batch, args.seed, skip)
+    items = plan(documents, quotas, lambda document_id: chunks.get(document_id, []), args.batch, args.seed, skip,
+                 boilerplate)
     pipeline.write(batch_dir, "plan", items, mode="w")
     made = {}
     for item in items:
@@ -151,6 +171,8 @@ def add_parser(commands) -> None:
     planning.add_argument("--seed", type=int, default=20261021)
     planning.add_argument("--ai-url", default="http://localhost:18100", help="데이터셋 AI 서버 주소(SSH 터널)")
     planning.add_argument("--skip-batches", help="쉼표로 묶음 이름: 그 묶음에서 쓴 문서 묶음은 고르지 않는다")
+    planning.add_argument("--chunk-cache", default="chunks-dataset.jsonl",
+                          help="문서별 청크 캐시 파일 이름(Assets/train/ 아래). 데이터셋 색인을 다시 만들면 지운다")
     planning.set_defaults(func=cmd_plan)
 
     questions = with_batch("questions", "질문 초안")
