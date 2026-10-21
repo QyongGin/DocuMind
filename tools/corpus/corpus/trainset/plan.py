@@ -42,7 +42,7 @@ STYLES = ("짧은 구어체", "정중체", "상황 설명형", "쉬운 한국어
 MIN_CHUNK_CHARS = 200
 TABLE_MIN_ROWS = 3
 BOILERPLATE_MIN_DOCS = 5  # 이만큼 넘는 문서에 같은 줄이 있으면 상투문
-BOILERPLATE_MIN_CHARS = 10  # 이보다 짧은 줄(표 구분선·번호 등)은 상투문으로 세지 않는다
+BOILERPLATE_MIN_CHARS = 20  # 이보다 짧은 줄(연락처 한 줄·번호 등)은 상투문으로 세지 않는다
 
 
 def scale(quotas: dict[str, int], total: int) -> dict[str, int]:
@@ -76,7 +76,8 @@ def boilerplate_lines(chunks_by_document: dict[int, list[dict]], min_docs: int =
     for chunks in chunks_by_document.values():
         lines = {_line_key(line) for chunk in chunks for line in str(chunk.get("content") or "").splitlines()}
         for line in lines:
-            if len(line) >= BOILERPLATE_MIN_CHARS:
+            # 표 줄(머리줄이 표의 뜻을 정함)과 제목 줄(맥락)은 되풀이돼도 남긴다 — 문장 줄만 상투문으로 센다
+            if len(line) >= BOILERPLATE_MIN_CHARS and not line.startswith(("|", "#")):
                 documents_with[line] += 1
     return {line for line, count in documents_with.items() if count >= min_docs}
 
