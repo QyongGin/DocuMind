@@ -33,8 +33,8 @@ def test_parse_output_requires_every_example_with_known_verdict():
         judge.parse_output(envelope([{"id": "a", "verdict": "통과"}]), ["a", "b"])  # b가 빠짐
     with pytest.raises(judge.JudgeError):
         judge.parse_output(envelope([{"id": "a", "verdict": "아마도"}]), ["a"])  # 정해진 값이 아님
-    with pytest.raises(judge.JudgeError):
-        judge.parse_output(envelope([], is_error=True), ["a"])
+    with pytest.raises(judge.JudgeError):  # 판정이 다 있어도 Claude Code가 오류라고 하면 쓰지 않는다
+        judge.parse_output(envelope([{"id": "a", "verdict": "통과"}], is_error=True), ["a"])
 
 
 def test_run_judges_in_isolated_packets(tmp_path):
