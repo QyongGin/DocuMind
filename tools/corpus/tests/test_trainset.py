@@ -259,7 +259,7 @@ def test_pipeline_resumes_and_exports(tmp_path):
             offtopic = "(글 없음)" in body["prompt"]
             return {"response": json.dumps({"질문": "내일 가나시 날씨 어때?" if offtopic else "휴학 언제까지 신청해?",
                                             "답 근거": "" if offtopic else "8월 18일부터 8월 29일까지",
-                                            "묻는 사람": "재학생", "가능": True})}
+                                            "묻는 사람": "외국인 유학생" if offtopic else "재학생", "가능": True})}
         # 답 근거를 함께 받은 목표 답 지시문(답 종류)이면 답을, 아니면(거절 종류) 거절 문장을 돌려준다
         answerable = "[질문을 만든 글에서 답이 되는 부분]" in body["prompt"]
         return {"response": record()["target_ga"] if answerable else prompts.REFUSAL}
@@ -297,6 +297,7 @@ def test_pipeline_resumes_and_exports(tmp_path):
     assert lines[0]["messages"][1]["role"] == "assistant" and lines[0]["meta"]["drafter"] == "gemma"
     assert pipeline.export(batch, out, verdicts={"r1-0001": "통과", "r1-0002": "탈락"}) == 1
     assert pipeline.status(batch)["fact"]["keep"] == 1
+    assert {record["id"]: record["user_actual"] for record in pipeline.merged(batch)} == {"r1-0001": "재학생", "r1-0002": "외국인"}
 
 
 CONSENT = "수집한 개인정보는 행사 종료 후 1년간 보관하며 이후 파기합니다."
