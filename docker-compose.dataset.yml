@@ -14,6 +14,10 @@ services:
   ai-server:
     ports:
       - "127.0.0.1:${DATASET_AI_PORT:-18100}:8000"
+  # 학습 예시 초안 모델(ADR-0040)을 맥북의 `corpus trainset`이 부른다
+  ollama:
+    ports:
+      - "127.0.0.1:${DATASET_OLLAMA_PORT:-11535}:11434"
 
 volumes:
   # 모델은 서비스 스택이 받아 둔 볼륨을 그대로 쓴다(A.X 등록·임베딩 모델을 다시 받지 않음)
