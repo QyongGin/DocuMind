@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import checks, clients, prompts
-from .plan import KINDS, ROUND1, scale
+from .plan import KINDS, ROUND1, USERS, scale
 
 STEPS = ("plan", "questions", "attached", "targets", "checked", "judged", "human")
 QUESTION_OPTIONS = {"temperature": 0.7, "num_ctx": 4096, "num_predict": 400}
@@ -55,6 +55,21 @@ def merged(batch_dir: Path) -> list[dict]:
     return records
 
 
+USER_WORDS = {"예비 입학생·지원자": ("입학", "지원", "수험", "학부모"), "재학생": ("재학", "학생"),
+              "교직원": ("교직원", "직원", "교수", "강사"), "외국인": ("외국",), "업체": ("업체", "기업", "회사")}
+
+
+def user_category(text: str, planned: str) -> str:
+    """초안 모델이 적은 '묻는 사람'을 사용자 범주(USERS) 하나로 맞춘다. 범주 이름의 낱말로 가르고, 못 가르면 계획한 범주."""
+    text = str(text or "").strip()
+    if text in USERS:
+        return text
+    for category in ("외국인", "업체", "교직원", "예비 입학생·지원자", "재학생"):  # 더 좁은 범주를 먼저 본다
+        if any(word in text for word in USER_WORDS[category]):
+            return category
+    return planned
+
+
 def _todo(batch_dir: Path, step: str, ready: Callable[[dict], bool], limit: int | None) -> list[dict]:
     done = {item_id for item_id, record in read(batch_dir, step).items() if "error" not in record}
     todo = [record for record in merged(batch_dir) if record["id"] not in done and ready(record)]
@@ -72,7 +87,7 @@ def run_questions(batch_dir: Path, session, ollama_url: str, model: str, limit: 
             data = clients.parse_json(out["text"])
             result = {"id": record["id"], "question": str(data.get("질문") or "").strip(),
                       "hint": str(data.get("답 근거") or "").strip(),
-                      "user_actual": str(data.get("묻는 사람") or record["user"]).strip(),
+                      "user_actual": user_category(data.get("묻는 사람"), record["user"]),
                       "possible": bool(data.get("가능", True)) and bool(str(data.get("질문") or "").strip()),
                       "drafter": {**QUESTION_OPTIONS, **out["generation"], "model": model}}
             counts["made" if result["possible"] else "impossible"] += 1

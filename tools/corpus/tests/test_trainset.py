@@ -335,3 +335,18 @@ def test_question_prompt_asks_for_named_subject_and_keeps_user():
     text = prompts.question_prompt({"kind": "fact", "user": "교직원", "style": "정중체", "title": "가나대학 안내",
                                     "chunks": [chunk(0)]})
     assert "대상(행사·전형·장학금·프로그램·학과 이름 등)" in text and "전혀 없을 때만" in text and "반드시 지킨다" in text
+
+
+def test_offtopic_prompt_does_not_invite_impossible():
+    offtopic = prompts.question_prompt({"kind": "refuse_offtopic", "user": "업체", "style": "정중체", "chunks": []})
+    assert "'가능'은 true로 둔다." in offtopic and "false로 한다" not in offtopic
+    fact = prompts.question_prompt({"kind": "fact", "user": "업체", "style": "정중체", "title": "가나", "chunks": [chunk(0)]})
+    assert "양식 문구뿐이어도 false" in fact and "질문 재료로 쓰지 않는다" in fact
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("지원자", "예비 입학생·지원자"), ("예비 입학생", "예비 입학생·지원자"), ("재학생", "재학생"),
+    ("외국인 유학생", "외국인"), ("협력 기업 담당자", "업체"), ("교수", "교직원"), ("", "교직원"), ("누군가", "교직원"),
+])
+def test_user_category(text, expected):
+    assert pipeline.user_category(text, "교직원") == expected
