@@ -111,3 +111,18 @@ def test_export_prefers_human_over_claude(tmp_path):
     pipeline.write(batch, "human", [{"id": "b", "human": "탈락", "memo": "값 틀림"}])
     assert pipeline.verdicts(batch) == {"a": "통과", "b": "탈락"}
     assert pipeline.export(batch, tmp_path / "out.jsonl", verdicts=pipeline.verdicts(batch)) == 1
+
+
+def test_pick_for_judge_keeps_kind_ratio():
+    records = []
+    for kind, count in (("fact", 20), ("table", 2), ("refuse_guide", 20)):
+        records += [{"id": f"{kind}-{n}", "kind": kind, "keep": {"ga": True}} for n in range(count)]
+    records.append({"id": "dropped", "kind": "fact", "keep": {"ga": False}})
+    records.append({"id": "done", "kind": "fact", "keep": {"ga": True}, "verdict": "통과"})
+    chosen = pipeline.pick_for_judge(records, 40)
+    kinds = [record["kind"] for record in chosen]
+    # 40개 비율로 사실 7 · 표 7 · 거절 + 확인처 8 — 표가 2개뿐이라 남은 자리는 다른 종류로 채움
+    assert len(chosen) == 40 and kinds.count("table") == 2 and "dropped" not in kinds and "done" not in [r["id"] for r in chosen]
+    small = [record["kind"] for record in pipeline.pick_for_judge(records, 10)]
+    # 10개 비율로 사실 2 · 표 2 · 거절 + 확인처 2, 없는 종류의 자리(4)는 계획 순서대로 남은 예시(사실)로 채움
+    assert len(small) == 10 and small.count("table") == 2 and small.count("refuse_guide") == 2 and small.count("fact") == 6

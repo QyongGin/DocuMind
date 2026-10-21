@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import checks, clients, prompts
-from .plan import KINDS
+from .plan import KINDS, ROUND1, scale
 
 STEPS = ("plan", "questions", "attached", "targets", "checked", "judged", "human")
 QUESTION_OPTIONS = {"temperature": 0.7, "num_ctx": 4096, "num_predict": 400}
@@ -141,6 +141,23 @@ def run_checks(batch_dir: Path, shapes: tuple[str, ...] = ("ga",)) -> Counter:
         results.append(result)
     write(batch_dir, "checked", results, mode="w")
     return counts
+
+
+def pick_for_judge(records: list[dict], size: int) -> list[dict]:
+    """판정할 예시를 종류별 개수(1회차 비율)를 지켜 고른다. 자동 검사를 통과하고 아직 판정 전인 예시에서 계획 순서대로.
+    한 종류가 모자라면 남은 자리는 다른 종류의 남은 예시로 채운다."""
+    ready = [record for record in records if (record.get("keep") or {}).get("ga") and record.get("verdict") is None]
+    quotas = scale(ROUND1, size)
+    chosen = []
+    for kind, count in quotas.items():
+        chosen += [record for record in ready if record["kind"] == kind][:count]
+    for record in ready:
+        if len(chosen) >= size:
+            break
+        if record not in chosen:
+            chosen.append(record)
+    order = {record["id"]: number for number, record in enumerate(records)}
+    return sorted(chosen[:size], key=lambda record: order[record["id"]])
 
 
 def status(batch_dir: Path) -> dict:

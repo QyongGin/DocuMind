@@ -97,9 +97,9 @@ def cmd_status(args) -> int:
 
 def cmd_judge(args) -> int:
     batch_dir = _batch_dir(args)
-    todo = [record for record in pipeline.merged(batch_dir)
-            if (record.get("keep") or {}).get("ga") and record.get("verdict") is None]
-    todo = todo[: args.limit] if args.limit else todo
+    records = pipeline.merged(batch_dir)
+    todo = (pipeline.pick_for_judge(records, args.limit) if args.limit else
+            [record for record in records if (record.get("keep") or {}).get("ga") and record.get("verdict") is None])
     work = Path(args.work) if args.work else Path(tempfile.mkdtemp(prefix="trainset-judge-"))
     print(f"판정할 예시 {len(todo)}개 · 작업 폴더 {work}")
     results, failed = judge.run(todo, work, args.model, jobs=args.jobs)
@@ -178,7 +178,7 @@ def add_parser(commands) -> None:
     judging = with_batch("judge", "Claude 판정")
     judging.add_argument("--model", default=judge.DEFAULT_MODEL)
     judging.add_argument("--jobs", type=int, default=2)
-    judging.add_argument("--limit", type=int, help="판정할 예시 수(첫 묶음 40)")
+    judging.add_argument("--limit", type=int, help="판정할 예시 수(첫 묶음 40). 주면 종류별 개수(1회차 비율)를 지켜 고른다")
     judging.add_argument("--work", help="작업 폴더(저장소 밖). 없으면 임시 폴더")
     judging.set_defaults(func=cmd_judge)
 
