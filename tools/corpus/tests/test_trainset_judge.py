@@ -82,7 +82,7 @@ def test_page_embeds_examples_and_hides_nothing_needed():
     assert data["batch"] == "r1-first" and example["claude"]["verdict"] == "통과"
     assert [block["cited"] for block in example["blocks"]] == [True, False]
     assert {"8월", "29일"} <= set(example["values"]) and "1" not in example["values"]  # 출처 번호는 칠하지 않음
-    assert "</script>\n[출처" not in html  # 데이터 속 닫는 태그가 화면을 깨지 않게
+    assert html.count("</script>") == 1  # 데이터 속 닫는 태그가 화면의 스크립트를 끊지 않게(본래 닫는 태그 하나만)
 
 
 def test_merge_review_counts_disagreements(tmp_path):
