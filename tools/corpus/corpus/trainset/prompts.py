@@ -39,6 +39,10 @@ def question_prompt(item: dict) -> str:
                  if kind not in ("refuse_guide", "refuse_offtopic") else "'답 근거'는 빈 글로 둔다.")
     if kind == "partial":
         hint_rule = "'답 근거'에는 두 가지 중 글에 답이 있는 쪽의 답이 되는 부분을 글에서 그대로 옮긴다."
+    # 글 없이 만드는 종류에는 '글로 만들 수 없으면 false' 규칙을 주지 않는다(첫 시험에서 6개 중 5개를 false로 냄)
+    possible_rule = ("'가능'은 true로 둔다." if kind == "refuse_offtopic" else
+                     "글로 이 종류의 질문을 만들 수 없으면 '가능'을 false로 한다. 글이 개인정보 수집·이용 동의, 서명란, "
+                     "서식 작성 안내 같은 양식 문구뿐이어도 false로 한다.")
     return f"""너는 대학 안내 챗봇의 학습 데이터를 만든다. 아래 학교 문서 글을 읽고, 챗봇 사용자가 물을 만한 질문 하나를 만든다.
 
 [만들 질문]
@@ -47,8 +51,9 @@ def question_prompt(item: dict) -> str:
 - 말투: {STYLE_RULES[item['style']]}
 - 질문만 읽어도 무엇에 대한 질문인지 알 수 있게, 글에 나온 대상(행사·전형·장학금·프로그램·학과 이름 등)을 질문에 넣는다. '이 전형', '이 대회'처럼 가리키는 말만 쓰지 않는다.
 - 실제 사람이 챗봇 입력창에 쓰듯 쓴다. '이 글', '위 문서', 문서 제목을 통째로 옮긴 말은 쓰지 않는다.
+- 글 가운데 개인정보 수집·이용 동의, 서명란, 서식 작성 안내 같은 양식 문구는 질문 재료로 쓰지 않는다.
 - {hint_rule}
-- 글로 이 종류의 질문을 만들 수 없으면 '가능'을 false로 한다.
+- {possible_rule}
 
 [학교 문서 글]
 {source}
