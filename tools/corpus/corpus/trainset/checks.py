@@ -20,6 +20,7 @@ MOBILE = re.compile(r"(?<!\d)01[016789]-?\d{3,4}-?\d{4}(?!\d)")
 BLOCK_HEAD = re.compile(r"^\[출처 (\d+)\]\s*$", re.M)
 TABLE_FACT = re.compile(r"^\s*\d+\.\s*(?P<table>[^:\n]+):\s*(?P<row>.+?) 행 정보는 (?P<rest>.+?)이다\.?\s*$", re.M)
 MIN_OVERLAP = 0.6
+MIN_QUESTION_CHARS = 5  # 글자·숫자만 셈. 2026-10-21 첫 묶음에서 초안 모델이 질문을 "..."로 낸 적이 있다
 
 
 def evidence_blocks(prompt: str) -> dict[int, str]:
@@ -113,6 +114,7 @@ def check(record: dict, shape: str = "ga") -> dict:
     def put(name: str, ok: bool, why: str = "") -> None:
         results[name] = {"ok": ok, "why": "" if ok else why}
 
+    put("질문", len(re.sub(r"[\W_]", "", question)) >= MIN_QUESTION_CHARS, "질문이 비었거나 너무 짧음")
     ok, why = shape_check(kind, target, shape)
     put("모양", ok, why)
     cited = {int(number) for number in CITE.findall(target)}

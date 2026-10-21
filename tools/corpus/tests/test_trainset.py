@@ -187,6 +187,7 @@ def test_good_answer_passes_all_checks():
     ({"hint": "9월 1일부터 9월 5일까지"}, "지워진 정답"),  # 답 근거가 프롬프트에 없음(발췌 규칙이 지움)
     ({"retrieved": [{"document_id": "9", "chunk_index": 0}]}, "왕복 검색"),
     ({"question": "휴학 언제까지? 내 번호 010-1234-5678"}, "개인정보"),
+    ({"question": "..."}, "질문"),
 ])
 def test_each_check_catches_its_error(extra, name):
     result = checks.check(record(**extra))
