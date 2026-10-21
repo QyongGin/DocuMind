@@ -217,6 +217,10 @@ def test_refusal_shapes():
     assert "모양" in failed(wrong)
     no_number = checks.check(record(kind="refuse_guide", target_ga=f"{prompts.REFUSAL} 학사지원팀에 문의하세요."))
     assert "모양" in failed(no_number)
+    # 운영 거절 문장이 아닌 거절(번호를 붙였거나 짧아도) — 채점기가 거절로 못 알아볼 수 있는 말투를 가르치지 않는다
+    other_words = checks.check(record(kind="refuse_guide", target_ga="확인이 어렵습니다. 학사지원팀(02-000-0000)에 문의하세요. [출처 1]"))
+    assert failed(other_words) == ["모양"]
+    assert failed(checks.check(record(kind="refuse_offtopic", target_ga="모르겠습니다."))) == ["모양"]
 
 
 def test_partial_needs_answer_and_refusal():
