@@ -3,6 +3,8 @@
 - 묶음은 주제·형식별로 고르게 돌려 고르고, 한 묶음에서 예시 하나만 만든다.
 - 종류에 맞는 청크가 없는 묶음(표 값인데 표가 없음 등)은 건너뛰고 다음 묶음을 본다.
 - 사용자 범주와 말투는 예시 순서대로 돌린다. 초안 모델이 그 문서를 물을 만하지 않다고 보면 다른 범주를 고를 수 있다.
+- 여러 문서에 되풀이되는 줄(개인정보 수집 동의 같은 상투문)은 빼고 청크 길이를 재고, 초안 모델에도 뺀 글을 준다.
+  2026-10-21 첫 시험 묶음에서 질문 34개 중 5개가 상투문에서 나왔다. 낱말 조건문이 아니라 '몇 문서에 나오나'로 가른다.
 """
 
 from __future__ import annotations
@@ -39,6 +41,8 @@ USERS = ("재학생", "예비 입학생·지원자", "교직원", "외국인", "
 STYLES = ("짧은 구어체", "정중체", "상황 설명형", "쉬운 한국어")
 MIN_CHUNK_CHARS = 200
 TABLE_MIN_ROWS = 3
+BOILERPLATE_MIN_DOCS = 5  # 이만큼 넘는 문서에 같은 줄이 있으면 상투문
+BOILERPLATE_MIN_CHARS = 10  # 이보다 짧은 줄(표 구분선·번호 등)은 상투문으로 세지 않는다
 
 
 def scale(quotas: dict[str, int], total: int) -> dict[str, int]:
@@ -62,16 +66,37 @@ def dataset_documents(con: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def _line_key(line: str) -> str:
+    return " ".join(line.split())
+
+
+def boilerplate_lines(chunks_by_document: dict[int, list[dict]], min_docs: int = BOILERPLATE_MIN_DOCS) -> set[str]:
+    """여러 문서(min_docs 이상)에 되풀이되는 줄. 같은 문서 안에서 되풀이되는 것은 한 번으로 센다."""
+    documents_with: dict[str, int] = defaultdict(int)
+    for chunks in chunks_by_document.values():
+        lines = {_line_key(line) for chunk in chunks for line in str(chunk.get("content") or "").splitlines()}
+        for line in lines:
+            if len(line) >= BOILERPLATE_MIN_CHARS:
+                documents_with[line] += 1
+    return {line for line, count in documents_with.items() if count >= min_docs}
+
+
+def draft_text(text: str, boilerplate: set[str]) -> str:
+    """상투문 줄을 뺀 글. 초안 모델에 주고, 청크 길이도 이것으로 잰다."""
+    return "\n".join(line for line in str(text).splitlines() if _line_key(line) not in boilerplate).strip()
+
+
 def is_table_chunk(text: str) -> bool:
     """마크다운 표 줄('|'로 시작)이 몇 줄 이상 있는 청크."""
     return sum(1 for line in text.splitlines() if line.lstrip().startswith("|")) >= TABLE_MIN_ROWS
 
 
-def pick_chunks(kind: Kind, chunks: list[dict], rng: random.Random) -> list[dict] | None:
-    """종류에 맞는 청크를 고른다. 여러 근거는 같은 문서의 이웃한 청크 둘. 맞는 청크가 없으면 None."""
-    usable = [chunk for chunk in chunks if len(str(chunk.get("content") or "").strip()) >= MIN_CHUNK_CHARS]
+def pick_chunks(kind: Kind, chunks: list[dict], rng: random.Random, boilerplate: set[str] = frozenset()) -> list[dict] | None:
+    """종류에 맞는 청크를 고른다. 여러 근거는 같은 문서의 이웃한 청크 둘. 맞는 청크가 없으면 None.
+    길이는 상투문을 뺀 글로 잰다."""
+    usable = [chunk for chunk in chunks if len(draft_text(chunk.get("content") or "", boilerplate)) >= MIN_CHUNK_CHARS]
     if kind.table:
-        usable = [chunk for chunk in usable if is_table_chunk(str(chunk["content"]))]
+        usable = [chunk for chunk in usable if is_table_chunk(draft_text(chunk["content"], boilerplate))]
     if kind.chunks == 2:
         ordered = sorted(usable, key=lambda chunk: int(chunk.get("chunk_index") or 0))
         pairs = [(first, second) for first, second in zip(ordered, ordered[1:])
@@ -103,8 +128,9 @@ def ordered_groups(documents: list[dict], rng: random.Random, skip: set[str] = f
 
 
 def plan(documents: list[dict], quotas: dict[str, int], fetch_chunks: Callable[[int], list[dict]], batch: str,
-         seed: int, skip_groups: set[str] = frozenset()) -> list[dict]:
-    """예시 종류별 개수만큼 묶음과 청크를 고른다. fetch_chunks(문서 번호)는 그 문서의 청크 목록을 돌려준다."""
+         seed: int, skip_groups: set[str] = frozenset(), boilerplate: set[str] = frozenset()) -> list[dict]:
+    """예시 종류별 개수만큼 묶음과 청크를 고른다. fetch_chunks(문서 번호)는 그 문서의 청크 목록을 돌려준다.
+    boilerplate는 상투문 줄(boilerplate_lines)."""
     rng = random.Random(seed)
     sequence = [name for name, count in quotas.items() for _ in range(count)]
     rng.shuffle(sequence)
@@ -127,13 +153,14 @@ def plan(documents: list[dict], quotas: dict[str, int], fetch_chunks: Callable[[
             for document in rng.sample(members, len(members)):
                 if document["document_id"] not in cache:
                     cache[document["document_id"]] = fetch_chunks(document["document_id"])
-                chunks = pick_chunks(kind, cache[document["document_id"]], rng)
+                chunks = pick_chunks(kind, cache[document["document_id"]], rng, boilerplate)
                 if chunks:
                     used.add(group_id)
                     item.update(group_id=group_id, ledger_id=document["doc_id"], document_id=document["document_id"],
                                 title=document.get("title"), topic=document.get("topic"), format=document.get("format"),
                                 chunks=[{"id": chunk.get("id"), "chunk_index": chunk.get("chunk_index"),
-                                         "content": chunk["content"]} for chunk in chunks])
+                                         "content": chunk["content"],
+                                         "draft_text": draft_text(chunk["content"], boilerplate)} for chunk in chunks])
                     break
             if item["chunks"]:
                 break
