@@ -90,13 +90,13 @@ def painted(text, marks):
 
 
 def test_highlight_pairs_answer_and_evidence_by_sentence():
-    blocks = {1: "휴학 신청 기간은 8월 18일부터 8월 29일까지이다.\n문의는 학사지원팀 02-000-0000.",
+    blocks = {1: "가나대학 휴학 신청 기간은 8월 18일부터 8월 29일까지이다.\n문의는 학사지원팀 02-000-0000.",
               2: "1. 등록금: 신입생 행 정보는 금액=1,200,000원이다."}
     target = "가나대학 휴학은 8월 29일까지 신청합니다. 문의는 학사지원팀(02-000-0000)입니다.\n[출처 1]"
     marks = review.highlight(target, "가나대학 휴학 언제까지 신청해?", blocks)
     answer = painted(target, marks["target"])
     assert ("8월 29일까지", "c0") in answer and ("02-000-0000", "c1") in answer  # 문장마다 다른 색
-    assert all("가나대학" not in text for text, _ in answer)  # 질문을 되풀이한 말은 칠하지 않음
+    assert all("가나대학" not in text for text, _ in answer)  # 근거에 있어도 질문을 되풀이한 말은 칠하지 않음
     assert all("출처" not in text for text, _ in answer)
     evidence = painted(blocks[1], marks["blocks"][1])
     assert ("8월 29일까지", "c0") in evidence and ("02-000-0000", "c1") in evidence
@@ -111,12 +111,12 @@ def test_highlight_marks_sentence_missing_from_evidence_but_not_refusal():
 
 
 def test_highlight_skips_generic_endings_and_falls_back_to_restated_words():
-    blocks = {1: "어학 장학금 대상: OPIc IM 등급, TOEIC 700점. 신청은 학생지원팀에 하면 됩니다."}
+    blocks = {1: "어학 장학금 대상: OPIc IM 등급, TOEIC 700점. 학생지원팀에 신청할 수 있습니다."}
     target = "OPIc IM 등급이면 어학 장학금을 받을 수 있습니다.\n[출처 1]"
     marks = review.highlight(target, "OPIc IM 등급이면 어학 장학금 받을 수 있어?", blocks)
     answer = painted(target, marks["target"])
     assert ("OPIc IM 등급", "c0") in answer  # 새 글이 없는 '네' 답은 되풀이한 글이라도 칠한다
-    assert all(text not in ("있습니다.", "습니다.") for text, _ in answer)
+    assert all("있습니다" not in text for text, _ in answer)  # 근거에 있어도 말끝만인 글은 칠하지 않음
 
 
 def test_highlight_underlines_question_words_when_target_only_refuses():
@@ -132,10 +132,9 @@ def test_highlight_underlines_question_words_when_target_only_refuses():
 
 
 def test_highlight_splits_evidence_marks_at_line_breaks():
-    blocks = {1: "|구분|금액|\n|신입생|1,200,000원|"}
-    marks = review.highlight("신입생 등록금은 1,200,000원입니다.", "등록금 얼마?", blocks)
-    assert all("\n" not in blocks[1][start:end] for start, end, _ in marks["blocks"][1])
-    assert ("1,200,000원", "c0") in painted(blocks[1], marks["blocks"][1])
+    blocks = {1: "휴학 신청 기간은\n8월 29일까지이다."}
+    marks = review.highlight("휴학 신청 기간은 8월 29일까지입니다.", "휴학 언제까지?", blocks)
+    assert painted(blocks[1], marks["blocks"][1]) == [("휴학 신청 기간은", "c0"), ("8월 29일까지", "c0")]
 
 
 def test_merge_review_counts_disagreements(tmp_path):
