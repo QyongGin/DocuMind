@@ -143,8 +143,12 @@ def run_checks(batch_dir: Path, shapes: tuple[str, ...] = ("ga",)) -> Counter:
     duplicate_of = checks.duplicates(records)
     results, counts = [], Counter()
     for record in records:
-        result = {"id": record["id"], "duplicate_of": duplicate_of.get(record["id"]),
+        # 종류는 계획이 아니라 받은 근거로 정해 덮어쓴다(ADR-0041). 계획은 kind_planned에 남겨 다시 돌려도 같은 결과가 나오게 한다
+        planned = record.get("kind_planned") or record["kind"]
+        kind, _ = checks.decide_kind(record)
+        result = {"id": record["id"], "kind": kind, "kind_planned": planned, "duplicate_of": duplicate_of.get(record["id"]),
                   "result": {shape: checks.check(record, shape) for shape in shapes if record.get(f"target_{shape}")}}
+        counts["종류 바꿈"] += kind != planned
         # 모양마다 따로 남긴다: 중복이 아니고 그 모양의 자동 검사를 모두 통과
         result["keep"] = {shape: result["duplicate_of"] is None and not shape_result["drop"]
                           for shape, shape_result in result["result"].items()}
@@ -176,7 +180,7 @@ def pick_for_judge(records: list[dict], size: int) -> list[dict]:
 
 
 def status(batch_dir: Path) -> dict:
-    """단계별 개수와 종류별 통과 수."""
+    """단계별 개수와 종류별 통과 수. 종류는 자동 검사 뒤에는 받은 근거로 정한 종류다(ADR-0041)."""
     records = merged(batch_dir)
     by_kind: dict[str, Counter] = {}
     for record in records:
@@ -186,6 +190,7 @@ def status(batch_dir: Path) -> dict:
         counter["attached"] += bool(record.get("prompt"))
         counter["target"] += bool(record.get("target_ga"))
         counter["keep"] += bool((record.get("keep") or {}).get("ga"))
+        counter["종류 바꿈"] += bool(record.get("kind_planned")) and record["kind"] != record["kind_planned"]
     return {kind: dict(counter) for kind, counter in by_kind.items()}
 
 
@@ -211,7 +216,7 @@ def export(batch_dir: Path, out_file: Path, shape: str = "ga", verdicts: dict[st
                 "id": record["id"],
                 "messages": [{"role": "user", "content": record["prompt"]},
                              {"role": "assistant", "content": record[f"target_{shape}"]}],
-                "meta": {key: record.get(key) for key in ("kind", "user_actual", "style", "ledger_id", "group_id")}
+                "meta": {key: record.get(key) for key in ("kind", "kind_planned", "user_actual", "style", "ledger_id", "group_id")}
                         | {"drafter": (record.get("drafter") or {}).get("model"), "shape": shape},
             }, ensure_ascii=False) + "\n")
             kept += 1
