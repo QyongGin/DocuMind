@@ -3,6 +3,7 @@
     plan       묶음 고르기: 종류별 개수(1회차 비율을 --size로 줄이거나 늘림)만큼 데이터셋용 색인의 청크를 고른다
     questions  질문 초안(초안 모델, ADR-0040)
     attach     근거 붙이기: 데이터셋 AI 서버 /query(평가용 옵션)의 운영 프롬프트·근거 8개·학습 전 A.X 답
+    probe      학습 전 A.X 답을 같은 프롬프트로 여러 번(표본 추출) 받아 아는 정도를 잰다(ADR-0042)
     targets    목표 답 초안(ADR-0039). --shapes ga,na면 인용형도
     check      자동 검사(ADR-0037)와 중복 표시
     judge      Claude 판정(통과·탈락과 이유만, 저장소 밖 격리 폴더에서 `claude -p`)
@@ -96,6 +97,13 @@ def cmd_attach(args) -> int:
     return 0 if not counts.get("error") else 1
 
 
+def cmd_probe(args) -> int:
+    counts = pipeline.run_probe(_batch_dir(args), requests.Session(), args.ollama_url, args.samples, args.temperature,
+                                args.limit)
+    print(dict(counts))
+    return 0 if not counts.get("error") else 1
+
+
 def cmd_targets(args) -> int:
     shapes = tuple(shape for shape in args.shapes.split(",") if shape)
     counts = pipeline.run_targets(_batch_dir(args), requests.Session(), args.ollama_url, args.model, shapes, args.limit)
@@ -185,6 +193,13 @@ def add_parser(commands) -> None:
     attaching.add_argument("--ai-url", default="http://localhost:18100")
     attaching.add_argument("--limit", type=int)
     attaching.set_defaults(func=cmd_attach)
+
+    probing = with_batch("probe", "학습 전 A.X 답 여러 번 받기(아는 정도, ADR-0042)")
+    probing.add_argument("--ollama-url", default="http://localhost:11535")
+    probing.add_argument("--samples", type=int, default=pipeline.PROBE_SAMPLES)
+    probing.add_argument("--temperature", type=float, default=pipeline.PROBE_TEMPERATURE)
+    probing.add_argument("--limit", type=int)
+    probing.set_defaults(func=cmd_probe)
 
     targets = with_batch("targets", "목표 답 초안")
     targets.add_argument("--ollama-url", default="http://localhost:11535")

@@ -42,8 +42,9 @@ def fetch_chunks(document_id):
 
 def test_scale_keeps_round1_ratio():
     assert scale(ROUND1, 200) == ROUND1
-    assert scale(ROUND1, 40) == {"fact": 7, "procedure": 6, "table": 7, "multi": 4, "partial": 4,
-                                 "refuse_guide": 8, "refuse_offtopic": 4}
+    assert scale(ROUND1, 40) == {"fact": 8, "procedure": 7, "table": 8, "multi": 5, "partial": 4,
+                                 "refuse_guide": 6, "refuse_offtopic": 2}
+    assert (ROUND1["refuse_guide"] + ROUND1["refuse_offtopic"]) / sum(ROUND1.values()) == 0.2  # 거절 20%(ADR-0043)
     assert sum(scale(ROUND1, 60).values()) == 60
 
 
@@ -370,7 +371,20 @@ def test_plan_gives_drafter_text_without_boilerplate():
 def test_question_prompt_asks_for_named_subject_and_keeps_user():
     text = prompts.question_prompt({"kind": "fact", "user": "교직원", "style": "정중체", "title": "가나대학 안내",
                                     "chunks": [chunk(0)]})
-    assert "대상(행사·전형·장학금·프로그램·학과 이름 등)" in text and "전혀 없을 때만" in text and "반드시 지킨다" in text
+    assert "대상(행사·전형·장학금·프로그램·학과 등)" in text and "전혀 없을 때만" in text and "반드시 지킨다" in text
+    assert "공식 명칭 전체" in text  # 문서 용어를 베끼지 않고 평소 부르는 이름으로(ADR-0044)
+
+
+def test_styles_rotate_independently_of_users():
+    from corpus.trainset.plan import STYLES, USERS
+    pairs = {(USERS[(n - 1) % len(USERS)], STYLES[((n - 1) // len(USERS)) % len(STYLES)]) for n in range(1, 26)}
+    assert len(pairs) == len(USERS) * len(STYLES)  # 25개면 사용자·말투 짝이 모두 한 번씩
+    assert {"짧은 구어", "검색어형"} <= set(STYLES) and all(style in prompts.STYLE_RULES for style in STYLES)
+
+
+def test_target_prompt_lists_guidance_candidates_from_evidence():
+    text = prompts.target_prompt({"kind": "fact"}, PROMPT, "8월 18일부터 8월 29일까지")
+    assert "[근거에 있는 안내 후보]" in text and "- [출처 1]" in text and "02-000-0000" in text.split("\n[챗봇이 받는 입력]\n")[0]  # 후보는 입력 앞(지시문 안)에
 
 
 def test_offtopic_prompt_does_not_invite_impossible():
@@ -386,3 +400,38 @@ def test_offtopic_prompt_does_not_invite_impossible():
 ])
 def test_user_category(text, expected):
     assert pipeline.user_category(text, "교직원") == expected
+
+
+def test_probe_score_counts_ax_answers_against_target():
+    good = "8월 29일까지 신청하면 됩니다."
+    scored = checks.probe_score(record(ax_answer=good, ax_samples=[good, "9월 5일까지입니다.", prompts.REFUSAL]), "fact")
+    assert (scored["n"], scored["decided"], scored["correct"]) == (4, 4, 2)
+    assert scored["wrong"] == ["9월 5일까지입니다.", prompts.REFUSAL]  # 틀린 답은 선호 학습의 '나쁜 답' 후보
+    refusal = checks.probe_score(record(kind="refuse_guide", target_ga=prompts.REFUSAL, ax_answer=good,
+                                        ax_samples=[prompts.REFUSAL, "확인이 어렵습니다."]), "refuse_guide")
+    assert (refusal["decided"], refusal["correct"]) == (3, 2)
+    no_values = checks.probe_score(record(target_ga="학사지원팀에서 받습니다.\n[출처 1]", ax_answer="학사지원팀"), "fact")
+    assert (no_values["n"], no_values["decided"]) == (1, 0)  # 값이 없으면 규칙으로 가르지 않는다
+
+
+def test_check_notes_missing_contact_from_cited_evidence():
+    missing = checks.check(record(target_ga="8월 29일까지 신청하면 됩니다.\n[출처 1]"))
+    assert not missing["drop"] and any("02-000-0000" in note for note in missing["judge_notes"])
+    given = checks.check(record())  # 기본 목표 답은 학사지원팀 번호를 말한다
+    assert not any("연락처" in note for note in given["judge_notes"])
+
+
+def test_run_probe_samples_ax_with_production_settings(tmp_path):
+    batch = tmp_path / "r1"
+    pipeline.write(batch, "plan", [{"id": "r1-0001", "kind": "fact"}], mode="w")
+    pipeline.write(batch, "questions", [{"id": "r1-0001", "question": "휴학 언제까지?", "possible": True}])
+    pipeline.write(batch, "attached", [{"id": "r1-0001", "prompt": PROMPT,
+                                        "runtime": {"llm_model": "ax40light:q4km", "num_ctx": 12288, "num_predict": 512}}])
+    session = FakeSession({"response": "8월 29일까지입니다."})
+    assert pipeline.run_probe(batch, session, "http://o", samples=3, log=lambda line: None) == {"probed": 1}
+    bodies = [body for _, body in session.sent]
+    assert len(bodies) == 3 and {body["model"] for body in bodies} == {"ax40light:q4km"}
+    assert {(body["options"]["num_ctx"], body["options"]["temperature"]) for body in bodies} == {(12288, 0.7)}
+    assert bodies[0]["prompt"] == PROMPT  # 운영 프롬프트 그대로
+    assert pipeline.merged(batch)[0]["ax_samples"] == ["8월 29일까지입니다."] * 3
+    assert pipeline.run_probe(batch, session, "http://o", samples=3, log=lambda line: None) == {}  # 끝난 것은 건너뜀

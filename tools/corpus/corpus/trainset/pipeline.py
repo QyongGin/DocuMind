@@ -13,7 +13,7 @@ from typing import Callable
 from . import checks, clients, prompts
 from .plan import KINDS, ROUND1, USERS, scale
 
-STEPS = ("plan", "questions", "attached", "targets", "checked", "judged", "human")
+STEPS = ("plan", "questions", "attached", "probes", "targets", "checked", "judged", "human")
 QUESTION_OPTIONS = {"temperature": 0.7, "num_ctx": 4096, "num_predict": 400}
 TARGET_OPTIONS = {"temperature": 0.2, "num_ctx": 12288, "num_predict": 700}
 
@@ -115,6 +115,35 @@ def run_attach(batch_dir: Path, session, ai_url: str, limit: int | None = None,
     return counts
 
 
+# 학습 전 A.X를 같은 운영 프롬프트로 여러 번 답하게 해 예시마다 아는 정도를 잰다(ADR-0042).
+# 운영 설정은 temperature 0이라 같은 답만 나와, 표본 추출로 받는다. 0.7은 판단값이다(높으면 엉뚱한 답, 낮으면 같은 답이 많음)
+PROBE_SAMPLES = 4
+PROBE_TEMPERATURE = 0.7
+
+
+def run_probe(batch_dir: Path, session, ollama_url: str, samples: int = PROBE_SAMPLES,
+              temperature: float = PROBE_TEMPERATURE, limit: int | None = None,
+              log: Callable[[str], None] = print) -> Counter:
+    """학습 전 A.X 답을 운영 프롬프트로 여러 번 받는다. 모델·문맥 길이·답 길이는 근거를 붙일 때 AI 서버가 알려 준 운영값을 쓴다."""
+    counts = Counter()
+    for record in _todo(batch_dir, "probes", lambda r: bool(r.get("prompt")), limit):
+        runtime = record.get("runtime") or {}
+        model = runtime.get("llm_model") or "ax40light:q4km"
+        options = {"temperature": temperature, "num_ctx": runtime.get("num_ctx") or 12288,
+                   "num_predict": runtime.get("num_predict") or 512}
+        try:
+            outs = [clients.generate(session, ollama_url, model, record["prompt"], **options) for _ in range(samples)]
+            result = {"id": record["id"], "ax_samples": [out["text"].strip() for out in outs],
+                      "probe_generation": {"model": model, **options, "samples": samples}}
+            counts["probed"] += 1
+        except (ValueError, KeyError, OSError) as error:
+            result = {"id": record["id"], "error": str(error)}
+            counts["error"] += 1
+        write(batch_dir, "probes", [result])
+        log(f"A.X 표본 {record['id']}: {'실패 ' + result['error'] if 'error' in result else len(result['ax_samples'])}")
+    return counts
+
+
 def run_targets(batch_dir: Path, session, ollama_url: str, model: str, shapes: tuple[str, ...] = ("ga",),
                 limit: int | None = None, log: Callable[[str], None] = print) -> Counter:
     """목표 답 초안. 답이 있는 종류에만 답 근거를 함께 준다(거절 종류는 근거만 보고 거절해야 한다)."""
@@ -147,7 +176,8 @@ def run_checks(batch_dir: Path, shapes: tuple[str, ...] = ("ga",)) -> Counter:
         planned = record.get("kind_planned") or record["kind"]
         kind, _ = checks.decide_kind(record)
         result = {"id": record["id"], "kind": kind, "kind_planned": planned, "duplicate_of": duplicate_of.get(record["id"]),
-                  "result": {shape: checks.check(record, shape) for shape in shapes if record.get(f"target_{shape}")}}
+                  "result": {shape: checks.check(record, shape) for shape in shapes if record.get(f"target_{shape}")},
+                  "probe": checks.probe_score(record, kind)}
         counts["종류 바꿈"] += kind != planned
         # 모양마다 따로 남긴다: 중복이 아니고 그 모양의 자동 검사를 모두 통과
         result["keep"] = {shape: result["duplicate_of"] is None and not shape_result["drop"]

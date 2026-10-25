@@ -10,27 +10,16 @@ import re
 from collections import defaultdict
 
 from ..evalset.scoring import REFUSAL_PHRASES, _number_in_context, normalize, numbers_with_units
+from .evidence import PHONE, contacts, evidence_blocks, guidance_candidates  # noqa: F401 (review가 checks.evidence_blocks·PHONE을 씀)
 from .plan import KINDS
 from .prompts import REFUSAL
 
 CITE = re.compile(r"\[출처\s*(\d+)\]")
-PHONE = re.compile(r"(?<!\d)\d{2,4}-\d{3,4}-\d{4}(?!\d)")
 RESIDENT_NUMBER = re.compile(r"(?<!\d)\d{6}-[1-4]\d{6}(?!\d)")
 MOBILE = re.compile(r"(?<!\d)01[016789]-?\d{3,4}-?\d{4}(?!\d)")
-BLOCK_HEAD = re.compile(r"^\[출처 (\d+)\]\s*$", re.M)
 TABLE_FACT = re.compile(r"^\s*\d+\.\s*(?P<table>[^:\n]+):\s*(?P<row>.+?) 행 정보는 (?P<rest>.+?)이다\.?\s*$", re.M)
 MIN_OVERLAP = 0.6
 MIN_QUESTION_CHARS = 5  # 글자·숫자만 셈. 2026-10-21 첫 묶음에서 초안 모델이 질문을 "..."로 낸 적이 있다
-
-
-def evidence_blocks(prompt: str) -> dict[int, str]:
-    """프롬프트의 [검색 근거]를 [출처 N] 블록마다 나눈다."""
-    start = prompt.find("[검색 근거]")
-    end = prompt.find("[사용자 질문]", start + 1)
-    evidence = prompt[start:end] if start >= 0 else prompt
-    heads = list(BLOCK_HEAD.finditer(evidence))
-    return {int(head.group(1)): evidence[head.end(): heads[index + 1].start() if index + 1 < len(heads) else len(evidence)]
-            for index, head in enumerate(heads)}
 
 
 def table_facts(text: str) -> list[tuple[str, str, str, str]]:
@@ -215,6 +204,13 @@ def check(record: dict, shape: str = "ga") -> dict:
     both = f"{question}\n{target}"
     sensitive = RESIDENT_NUMBER.search(both) or MOBILE.search(both)
     put("개인정보", not sensitive, "주민등록번호·개인 휴대전화 형태")
+    if kind != "refuse_offtopic":
+        # 쓴 근거(쓴 번호가 없는 거절이면 근거 전체)에 연락처·사이트가 있는데 목표 답에 하나도 없으면 안내 빠짐을 의심한다.
+        # 질문한 일과 관계있는 안내인지는 규칙으로 가를 수 없어 떨어뜨리지 않고 Claude 판정에 메모로 넘긴다
+        source = "\n".join(blocks.get(number, "") for number in cited) if cited else "\n".join(blocks.values())
+        listed = sorted(contacts(source))
+        if listed and not contacts(target) & set(listed):
+            notes.append(f"근거에 연락처·사이트 {listed[:3]}가 있는데 목표 답에 없음 — 질문한 일과 관계있으면 안내 빠짐")
     if not answerable:
         ax_answer = record.get("ax_answer") or ""
         found = sorted(value for value in values(ax_answer, question) if value_in(value, context))
@@ -222,6 +218,36 @@ def check(record: dict, shape: str = "ga") -> dict:
             notes.append(f"학습 전 A.X가 근거의 값 {found}로 답함 — 근거에 답이 있는지 확인")
     return {"kind": kind, "checks": results, "drop": any(not result["ok"] for result in results.values()),
             "judge_notes": notes}
+
+
+def probe_score(record: dict, kind: str) -> dict:
+    """학습 전 A.X 답(운영 설정 1번 + 표본 추출)이 이 예시에서 맞는지 센다(ADR-0042, Meta Llama 3 §4.3.6의 knowledge probing).
+
+    규칙 채점이다. 거절 종류면 거절했으면 맞음. 답 종류면 거절하지 않고, 목표 답의 값(날짜·금액·연락처 등)을 하나 이상 말하고,
+    말한 값이 모두 근거에 있으면 맞음(평가 채점기의 '지어낸 값' 기준과 같다). 근거에 있는 다른 행·해의 값을 말한 경우는
+    못 가른다. 목표 답에 값이 없으면 '판단 못 함'으로 센다. 틀린 답은 2회차 선호 학습의 '나쁜 답' 후보로 남긴다.
+    """
+    answers = [answer for answer in [record.get("ax_answer"), *(record.get("ax_samples") or [])] if answer]
+    question = record.get("question") or ""
+    expected = values(record.get("target_ga") or "", question)
+    context = normalize("\n".join(evidence_blocks(record.get("prompt") or "").values()))
+    behavior = _behavior(kind)
+    correct, decided, wrong = 0, 0, []
+    for answer in answers:
+        refused = answer.strip().startswith(REFUSAL) or refusal_like(answer)
+        if behavior == "refuse":
+            ok = refused
+        elif not expected:
+            continue
+        else:
+            said = values(answer, question)
+            ok = bool(said & expected) and all(value_in(value, context) for value in said) and (
+                behavior == "partial" or not refused)
+        decided += 1
+        correct += ok
+        if not ok:
+            wrong.append(answer)
+    return {"n": len(answers), "decided": decided, "correct": correct, "wrong": wrong}
 
 
 def ambiguous_table(target: str, prompt: str) -> tuple[bool, str]:
