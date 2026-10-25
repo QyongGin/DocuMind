@@ -222,13 +222,47 @@ def test_refusal_shapes():
     # 운영 거절 문장이 아닌 거절(번호를 붙였거나 짧아도) — 채점기가 거절로 못 알아볼 수 있는 말투를 가르치지 않는다
     other_words = checks.check(record(kind="refuse_guide", target_ga="확인이 어렵습니다. 학사지원팀(02-000-0000)에 문의하세요. [출처 1]"))
     assert failed(other_words) == ["모양"]
-    assert failed(checks.check(record(kind="refuse_offtopic", target_ga="모르겠습니다."))) == ["모양"]
+    dont_know = checks.check(record(kind="refuse_offtopic", target_ga="모르겠습니다."))
+    assert "모양" in failed(dont_know) and dont_know["drop"]  # 거절 말투라 답 예시로 바뀌지 않고 모양에서 떨어진다
 
 
 def test_partial_needs_answer_and_refusal():
     target = f"휴학 신청은 8월 29일까지입니다. 휴학 비용은 {prompts.REFUSAL}\n[출처 1]"
     assert failed(checks.check(record(kind="partial", target_ga=target))) == []
-    assert "모양" in failed(checks.check(record(kind="partial")))
+    # 일부만 있음 계획인데 받은 근거로 다 답했으면 답 예시로 바뀐다(ADR-0041)
+    whole = checks.check(record(kind="partial"))
+    assert whole["kind"] == "fact" and failed(whole) == [] and whole["judge_notes"]
+
+
+def test_kind_follows_received_evidence_not_plan():
+    # 거절 계획인데 받은 근거에 답이 있어 답했다 — 근거 번호가 둘이면 여러 근거 합치기
+    answered = checks.check(record(kind="refuse_guide", hint="", target_ga="8월 29일까지 신청하면 됩니다.\n[출처 1][출처 2]"))
+    assert answered["kind"] == "multi" and not answered["drop"] and "계획 refuse_guide" in answered["judge_notes"][0]
+    # 값이 없는 말글 답은 글자 겹침으로 가르지 않고 Claude 판정에 확인 메모를 넘긴다
+    words = checks.check(record(kind="refuse_guide", hint="", target_ga="학사지원팀에서 휴학을 신청받습니다.\n[출처 1]"))
+    assert words["kind"] == "fact" and "출처 번호 대조" not in words["checks"]
+    assert any("값이 없는 답" in note for note in words["judge_notes"])
+    # 답 계획인데 질문 재료 청크가 검색됐고 답 근거도 남았는데 거절했다 — 목표 답이 틀린 것이라 바꾸지 않고 떨어뜨린다
+    wrong_refusal = checks.check(record(kind="fact", target_ga=f"{prompts.REFUSAL}\n[출처 1]"))
+    assert wrong_refusal["kind"] == "fact" and "모양" in failed(wrong_refusal)
+    # 질문 재료 청크가 검색되지 않아 받은 근거에 답이 없으면 거절 예시로 바뀐다
+    missed = checks.check(record(kind="fact", target_ga=f"{prompts.REFUSAL}\n[출처 1]",
+                                 retrieved=[{"document_id": "9", "chunk_index": 0}]))
+    assert missed["kind"] == "refuse_guide" and not missed["drop"]
+
+
+def test_run_checks_keeps_planned_kind_and_gives_same_result_twice(tmp_path):
+    batch = tmp_path / "r1"
+    base = record(id="r1-0001", kind="refuse_guide", hint="", target_ga="8월 29일까지 신청하면 됩니다.\n[출처 1]")
+    pipeline.write(batch, "plan", [{key: base[key] for key in ("id", "kind", "document_id", "chunks")}], mode="w")
+    pipeline.write(batch, "questions", [{"id": "r1-0001", "question": base["question"], "hint": "", "possible": True}])
+    pipeline.write(batch, "attached", [{"id": "r1-0001", "prompt": base["prompt"], "retrieved": base["retrieved"]}])
+    pipeline.write(batch, "targets", [{"id": "r1-0001", "target_ga": base["target_ga"]}])
+    for _ in range(2):
+        counts = pipeline.run_checks(batch)
+        merged = pipeline.merged(batch)[0]
+        assert (merged["kind"], merged["kind_planned"], counts["종류 바꿈"]) == ("fact", "refuse_guide", 1)
+    assert pipeline.status(batch)["fact"]["종류 바꿈"] == 1
 
 
 def test_refusal_example_flags_ax_answer_with_evidence_values():
