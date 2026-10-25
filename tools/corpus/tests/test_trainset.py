@@ -376,9 +376,9 @@ def test_question_prompt_asks_for_named_subject_and_keeps_user():
 
 
 def test_styles_rotate_independently_of_users():
-    from corpus.trainset.plan import STYLES, USERS
-    pairs = {(USERS[(n - 1) % len(USERS)], STYLES[((n - 1) // len(USERS)) % len(STYLES)]) for n in range(1, 26)}
-    assert len(pairs) == len(USERS) * len(STYLES)  # 25개면 사용자·말투 짝이 모두 한 번씩
+    from corpus.trainset.plan import STYLES, USERS, plan
+    items = plan([], {"refuse_offtopic": 25}, lambda document_id: [], "r1", seed=1)  # 글 없는 종류라 문서가 필요 없다
+    assert len({(item["user"], item["style"]) for item in items}) == len(USERS) * len(STYLES)  # 25개면 짝이 모두 한 번씩
     assert {"짧은 구어", "검색어형"} <= set(STYLES) and all(style in prompts.STYLE_RULES for style in STYLES)
 
 
