@@ -6,9 +6,13 @@
 
 from __future__ import annotations
 
-from .evidence import evidence_blocks, guidance_candidates
+from .evidence import MAX_FIX_LINE_CHARS, evidence_blocks, guidance_candidates
 
 REFUSAL = "제공된 문서에서는 확인할 수 없습니다."
+# 모호한 질문에 답하는 규칙(ADR-0045). 목표 답 지시문과 판정 지침(judge)이 이 문장을 함께 쓴다
+AMBIGUOUS_RULE = ("질문에 학년도·학기가 없고 근거에 같은 안내가 여러 해 있으면 가장 최근 것 하나로 답하고 그 기준"
+                  "(예: '2026학년도 2학기 기준')을 밝힌다. 질문의 이름이 근거의 여러 대상에 맞으면 질문에 가장 맞는 대상 "
+                  "하나로 답하고 그 대상의 이름을 밝힌다.")
 
 KIND_RULES = {
     "fact": "답이 글에 그대로 적힌 값 하나(날짜·기간·금액·인원·연락처·장소 등)인 질문을 만든다.",
@@ -72,7 +76,7 @@ SHAPE_RULES = {
 3. 마지막 줄에 답에 쓴 근거 번호를 [출처 N] 형식으로 쓴다. 여럿이면 [출처 1][출처 3]처럼 붙여 쓴다.
 4. 근거에 답이 없으면 '{REFUSAL}'로 시작한다. 근거에 이 일을 맡은 부서·연락처·사이트가 있을 때만 이어서 알려 주고 그 근거 번호를 쓴다. 없으면 그 문장 하나만 쓴다.
 5. 질문의 일부만 근거에 있으면 있는 것을 먼저 답하고, 없는 것은 '(없는 것)은 {REFUSAL}'라고 쓴 뒤 마지막 줄에 근거 번호를 쓴다.""",
-    # 나: 근거 줄 인용 → 결론(RAFT 방식, 1회차 비교용)
+    # 나: 근거 줄 인용 → 결론(인용형, 1회차 비교용)
     "na": f"""1. 첫 줄은 '근거:'로 시작하고, 답에 쓰는 근거 글을 [출처 N] 번호와 함께 큰따옴표 안에 그대로 옮긴다(한두 줄).
 2. 다음 줄은 '답:'으로 시작해 결론을 쓰고, 근거에 있는 신청 방법·기한·문의처·사이트를 이어서 쓴 뒤 마지막에 [출처 N]을 쓴다. 아래 [근거에 있는 안내 후보]에서 질문한 일과 관계있는 것을 찾는다.
 3. 근거에 답이 없으면 '근거: 없음' 다음 줄에 '답: {REFUSAL}'를 쓴다. 근거에 부서·연락처가 있을 때만 이어서 알려 주고 번호를 쓴다.
@@ -93,8 +97,25 @@ def target_prompt(item: dict, prompt: str, hint: str, shape: str = "ga") -> str:
 [모범 답 규칙]
 {SHAPE_RULES[shape]}
 6. 일반 조언, 추측, 근거에 없는 날짜·숫자·연락처를 쓰지 않는다. 표 값은 질문의 행 이름과 열 이름에 맞는 값만 쓴다.
+7. {AMBIGUOUS_RULE}
 {hint_part}{guide_part}
 [챗봇이 받는 입력]
 {prompt}
 
-모범 답 글만 쓴다."""
+{TARGET_END}"""
+
+
+TARGET_END = "모범 답 글만 쓴다."
+
+
+def guidance_fix_prompt(task: str, draft: str, missing: list[tuple[int, str, list[str]]]) -> str:
+    """목표 답이 쓴 근거의 안내 줄을 빠뜨렸을 때 한 번 다시 쓰게 하는 지시문(ADR-0046). task는 처음 준 목표 답 지시문이다.
+    자동 검사 결과만 돌려준다 — Claude 판정 이유는 Gemma에 주지 않는다(ADR-0010·0040)."""
+    problems = "\n".join(f"- [출처 {number}] \"{line[:MAX_FIX_LINE_CHARS]}\"의 {', '.join(lost)}이(가) 답에 없음"
+                         for number, line, lost in missing)
+    return (task.rsplit(TARGET_END, 1)[0]
+            + f"[먼저 쓴 답]\n{draft}\n\n[검사 결과]\n{problems}\n\n"
+              "먼저 쓴 답의 결론과 출처 번호는 그대로 두고, 검사 결과의 안내(방법·기한·문의처·사이트)를 질문이 묻지 않았어도 "
+              "결론 다음 문장에 자연스러운 문장으로 넣어 다시 쓴다. 근거 줄을 목록으로 붙여 넣지 않는다. "
+              "링크·전화번호·이메일·날짜는 글자 그대로 쓰고, 새로 쓴 안내의 근거 번호도 마지막 줄에 더한다.\n\n"
+            + TARGET_END)
