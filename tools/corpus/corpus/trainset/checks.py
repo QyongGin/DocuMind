@@ -10,11 +10,10 @@ import re
 from collections import defaultdict
 
 from ..evalset.scoring import REFUSAL_PHRASES, _number_in_context, normalize, numbers_with_units
-from .evidence import PHONE, contacts, evidence_blocks, guidance_candidates  # noqa: F401 (review가 checks.evidence_blocks·PHONE을 씀)
+from .evidence import CITE, PHONE, evidence_blocks, missing_guidance  # noqa: F401 (review가 checks.evidence_blocks·PHONE을 씀)
 from .plan import KINDS
 from .prompts import REFUSAL
 
-CITE = re.compile(r"\[출처\s*(\d+)\]")
 RESIDENT_NUMBER = re.compile(r"(?<!\d)\d{6}-[1-4]\d{6}(?!\d)")
 MOBILE = re.compile(r"(?<!\d)01[016789]-?\d{3,4}-?\d{4}(?!\d)")
 TABLE_FACT = re.compile(r"^\s*\d+\.\s*(?P<table>[^:\n]+):\s*(?P<row>.+?) 행 정보는 (?P<rest>.+?)이다\.?\s*$", re.M)
@@ -205,12 +204,12 @@ def check(record: dict, shape: str = "ga") -> dict:
     sensitive = RESIDENT_NUMBER.search(both) or MOBILE.search(both)
     put("개인정보", not sensitive, "주민등록번호·개인 휴대전화 형태")
     if kind != "refuse_offtopic":
-        # 쓴 근거(쓴 번호가 없는 거절이면 근거 전체)에 연락처·사이트가 있는데 목표 답에 하나도 없으면 안내 빠짐을 의심한다.
+        # 목표 답 단계에서 한 번 다시 쓴 뒤에도 쓴 근거의 안내 줄(연락처·사이트·기간)이 빠졌으면 안내 빠짐을 의심한다(ADR-0046).
         # 질문한 일과 관계있는 안내인지는 규칙으로 가를 수 없어 떨어뜨리지 않고 Claude 판정에 메모로 넘긴다
-        source = "\n".join(blocks.get(number, "") for number in cited) if cited else "\n".join(blocks.values())
-        listed = sorted(contacts(source))
-        if listed and not contacts(target) & set(listed):
-            notes.append(f"근거에 연락처·사이트 {listed[:3]}가 있는데 목표 답에 없음 — 질문한 일과 관계있으면 안내 빠짐")
+        left = missing_guidance(target, prompt, refusal=answer_body(target, shape).startswith(REFUSAL))
+        if left:
+            listed = [f"[출처 {number}] {', '.join(lost)}" for number, _, lost in left[:3]]
+            notes.append(f"근거의 안내 {listed}가 목표 답에 없음 — 질문한 일과 관계있으면 안내 빠짐")
     if not answerable:
         ax_answer = record.get("ax_answer") or ""
         found = sorted(value for value in values(ax_answer, question) if value_in(value, context))

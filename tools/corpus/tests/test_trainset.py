@@ -435,3 +435,69 @@ def test_run_probe_samples_ax_with_production_settings(tmp_path):
     assert bodies[0]["prompt"] == PROMPT  # 운영 프롬프트 그대로
     assert pipeline.merged(batch)[0]["ax_samples"] == ["8월 29일까지입니다."] * 3
     assert pipeline.run_probe(batch, session, "http://o", samples=3, log=lambda line: None) == {}  # 끝난 것은 건너뜀
+
+
+def test_missing_guidance_compares_cited_lines_regardless_of_date_format():
+    from corpus.trainset import evidence
+    complete = "2026. 8. 18. ~ 8. 29.까지 신청합니다. 문의 02-000-0000\n[출처 1]"
+    assert evidence.missing_guidance(complete, PROMPT) == []
+    lost = evidence.missing_guidance("8월 29일까지 신청하면 됩니다.\n[출처 1]", PROMPT)
+    assert [(number, values) for number, _, values in lost] == [(1, ["02-000-0000", "8월 18일"])]
+    # 거절 답은 확인처(연락처·사이트)만 본다
+    refusal = evidence.missing_guidance(prompts.REFUSAL + "\n[출처 1]", PROMPT, refusal=True)
+    assert [values for _, _, values in refusal] == [["02-000-0000"]]
+
+
+def test_missing_guidance_skips_uncited_evidence_and_revision_dates():
+    from corpus.trainset import evidence
+    prompt = ("[검색 근거]\n[출처 1]\n문서: 가나대학 학칙.pdf\n전체 내용:\n"
+              "학생은 사유 발생일로부터 7일 이내에 출석인정원을 낸다. <개정 2019.11.25.>\n\n"
+              "[출처 2]\n문서: 가나대학 학사 안내.html\n전체 내용:\n문의: 가나대학 학사팀 02-111-1111\n\n[사용자 질문]\n출석 인정?")
+    assert evidence.missing_guidance("7일 이내에 출석인정원을 내야 합니다.\n[출처 1]", prompt) == []  # 개정일·출처 2는 안 봄
+    assert [values for _, _, values in evidence.missing_guidance("출석인정원을 내야 합니다.\n[출처 1]", prompt)] == [["7일"]]
+
+
+def test_run_targets_rewrites_once_when_cited_guidance_is_missing(tmp_path):
+    batch = tmp_path / "r1"
+    prompts_by_id = {"r1-0001": PROMPT, "r1-0002": PROMPT.replace("휴학 언제까지 신청해?", "휴학 문의처랑 기간?"),
+                     "r1-0003": PROMPT.replace("휴학 언제까지 신청해?", "가나시 내일 날씨?")}
+    kinds = {"r1-0001": "fact", "r1-0002": "fact", "r1-0003": "refuse_offtopic"}
+    pipeline.write(batch, "plan", [{"id": item_id, "kind": kind, "chunks": []} for item_id, kind in kinds.items()], mode="w")
+    pipeline.write(batch, "questions", [{"id": item_id, "question": "q", "hint": "8월 29일까지", "possible": True}
+                                        for item_id in kinds])
+    pipeline.write(batch, "attached", [{"id": item_id, "prompt": prompt} for item_id, prompt in prompts_by_id.items()])
+    full, partial = record()["target_ga"], "8월 29일까지 신청하면 됩니다.\n[출처 1]"
+
+    def ollama(body):
+        if "[검사 결과]" in body["prompt"]:
+            return {"response": full}
+        if "가나시 내일 날씨?" in body["prompt"]:
+            return {"response": prompts.REFUSAL}
+        return {"response": full if "휴학 문의처랑 기간?" in body["prompt"] else partial}
+
+    session = FakeSession(ollama)
+    counts = pipeline.run_targets(batch, session, "http://o", "gemma", log=lambda line: None)
+    assert counts["made"] == 3 and counts["guidance_fix"] == 1 and len(session.sent) == 4
+    targets = pipeline.read(batch, "targets")
+    fixed = targets["r1-0001"]
+    assert fixed["target_ga"] == full
+    assert fixed["target_generation"]["ga"]["guidance_fix"]["draft"] == partial
+    assert fixed["target_generation"]["ga"]["guidance_fix"]["missing"] == ["[출처 1] 02-000-0000, 8월 18일"]
+    fix_prompt = session.sent[1][1]["prompt"]
+    assert "[먼저 쓴 답]\n" + partial in fix_prompt and "02-000-0000, 8월 18일" in fix_prompt
+    assert "근거 줄을 목록으로 붙여 넣지 않는다" in fix_prompt and fix_prompt.endswith(prompts.TARGET_END)
+    assert fix_prompt.count(PROMPT) == 1  # 챗봇 입력은 한 번만
+    assert "guidance_fix" not in targets["r1-0002"]["target_generation"]["ga"]  # 이미 다 쓴 답은 다시 쓰지 않음
+    assert "guidance_fix" not in targets["r1-0003"]["target_generation"]["ga"]  # 엉뚱한 근거 종류는 확인처를 붙이지 않음
+
+
+def test_ambiguous_rule_shared_by_target_prompt_and_judge_guide():
+    from corpus.trainset import judge
+    for shape in ("ga", "na"):
+        assert prompts.AMBIGUOUS_RULE in prompts.target_prompt({}, PROMPT, "", shape)
+    assert prompts.AMBIGUOUS_RULE in judge.PROMPT and judge.GUIDE_VERSION == "2026-10-26"
+
+
+def test_check_notes_missing_period_from_cited_evidence():
+    result = checks.check(record(target_ga="휴학은 8월 29일까지이며 문의는 학사지원팀(02-000-0000)입니다.\n[출처 1]"))
+    assert not result["drop"] and any("8월 18일" in note for note in result["judge_notes"])

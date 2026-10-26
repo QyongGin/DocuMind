@@ -10,7 +10,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Callable
 
-from . import checks, clients, prompts
+from . import checks, clients, evidence, prompts
 from .plan import KINDS, ROUND1, USERS, scale
 
 STEPS = ("plan", "questions", "attached", "probes", "targets", "checked", "judged", "human")
@@ -153,10 +153,24 @@ def run_targets(batch_dir: Path, session, ollama_url: str, model: str, shapes: t
         result = {"id": record["id"], "target_generation": {"model": model, **TARGET_OPTIONS}}
         try:
             for shape in shapes:
-                out = clients.generate(session, ollama_url, model, prompts.target_prompt(record, record["prompt"], hint, shape),
-                                       **TARGET_OPTIONS)
-                result[f"target_{shape}"] = out["text"].strip()
-                result["target_generation"][shape] = out["generation"]
+                task = prompts.target_prompt(record, record["prompt"], hint, shape)
+                out = clients.generate(session, ollama_url, model, task, **TARGET_OPTIONS)
+                text, generation = out["text"].strip(), out["generation"]
+                # 답이 쓴 근거의 안내 줄이 빠졌으면 검사 결과를 주고 한 번 다시 쓴다(ADR-0046). 엉뚱한 근거 종류는
+                # 질문이 문서에서 오지 않아 근거의 확인처가 질문과 무관하다
+                planned = record.get("kind_planned") or record["kind"]
+                refusal = checks.answer_body(text, shape).startswith(prompts.REFUSAL)
+                missing = [] if planned == "refuse_offtopic" else evidence.missing_guidance(text, record["prompt"], refusal)
+                if missing:
+                    fixed = clients.generate(session, ollama_url, model, prompts.guidance_fix_prompt(task, text, missing),
+                                             **TARGET_OPTIONS)
+                    generation = {**generation, "guidance_fix": {
+                        "draft": text, "missing": [f"[출처 {number}] {', '.join(lost)}" for number, _, lost in missing],
+                        "generation": fixed["generation"]}}
+                    text = fixed["text"].strip()
+                    counts["guidance_fix"] += 1
+                result[f"target_{shape}"] = text
+                result["target_generation"][shape] = generation
             counts["made"] += 1
         except (ValueError, KeyError, OSError) as error:
             result = {"id": record["id"], "error": str(error)}
