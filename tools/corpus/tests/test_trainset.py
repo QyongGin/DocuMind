@@ -501,3 +501,54 @@ def test_ambiguous_rule_shared_by_target_prompt_and_judge_guide():
 def test_check_notes_missing_period_from_cited_evidence():
     result = checks.check(record(target_ga="휴학은 8월 29일까지이며 문의는 학사지원팀(02-000-0000)입니다.\n[출처 1]"))
     assert not result["drop"] and any("8월 18일" in note for note in result["judge_notes"])
+
+
+def test_fill_quotas_assigns_only_missing_kinds_weighted_by_yield():
+    from corpus.trainset.plan import fill_quotas
+    target = {"fact": 4, "table": 4, "refuse_guide": 2}
+    planned = {"fact": 4, "table": 4, "refuse_guide": 2}
+    # 표는 3개 모자라고 수율 1/4, 거절은 2개 모자라고 수율 0(바닥값 0.2) → 무게 12 대 10
+    quotas = fill_quotas(target, {"fact": 4, "table": 1}, planned, {"fact": 3, "table": 1}, 10)
+    assert quotas == {"table": 5, "refuse_guide": 5}
+    assert fill_quotas(target, target, planned, target, 10) == {}  # 다 채웠으면 새 묶음이 필요 없다
+
+
+def test_pick_round_balances_kinds_prefers_what_ax_misses_and_shares_ids_across_shapes(tmp_path):
+    def batch(name, rows):
+        folder = tmp_path / name
+        pipeline.write(folder, "plan", [{"id": row["id"], "kind": row["kind"]} for row in rows], mode="w")
+        pipeline.write(folder, "questions", [{"id": row["id"], "question": row["q"], "possible": True} for row in rows])
+        pipeline.write(folder, "attached", [{"id": row["id"], "prompt": PROMPT} for row in rows])
+        pipeline.write(folder, "targets", [{"id": row["id"], "target_ga": f"{row['id']} 가", "target_na": f"{row['id']} 나"}
+                                           for row in rows])
+        pipeline.write(folder, "checked", [{"id": row["id"], "kind": row["kind"], "keep": {"ga": True, "na": row.get("na", True)},
+                                            "probe": row.get("probe", {})} for row in rows])
+        pipeline.write(folder, "judged", [{"id": row["id"], "verdict": row["verdict"]} for row in rows])
+        pipeline.write(folder, "human", [{"id": row["id"], "human": row["human"]} for row in rows if "human" in row])
+        return folder
+
+    def probe(correct, decided):
+        return {"correct": correct, "decided": decided}
+
+    first = batch("a", [
+        {"id": "a1", "kind": "fact", "q": "가나대학 휴학 신청 기간이 언제인가요?", "verdict": "통과", "probe": probe(5, 5)},
+        {"id": "a2", "kind": "fact", "q": "가나대학 등록금 얼마야?", "verdict": "통과", "probe": probe(0, 5)},
+        {"id": "a3", "kind": "table", "q": "신입생 등록 기간 표", "verdict": "통과", "probe": probe(2, 4)},
+        {"id": "a4", "kind": "fact", "q": "가나대학 기숙사비?", "verdict": "탈락", "probe": probe(0, 5)},
+        {"id": "a5", "kind": "fact", "q": "가나대학 장학금 문의처", "verdict": "통과", "na": False, "probe": probe(0, 5)}])
+    second = batch("b", [
+        {"id": "b1", "kind": "fact", "q": "가나대학 휴학 신청 기간이 언제인가요?", "verdict": "통과", "probe": probe(0, 5)},
+        {"id": "b2", "kind": "refuse_guide", "q": "가나대학 셔틀버스 요금?", "verdict": "탈락", "human": "통과"},
+        {"id": "b3", "kind": "fact", "q": "가나대학 졸업 학점?", "verdict": "통과", "human": "탈락", "probe": probe(0, 5)}])
+    # 3개면 1회차 비율로 사실·표·절차 하나씩. 절차는 없어 남은 예시 중 아는 정도가 낮은 b2(모름 0.5)가 a1(다 맞힘)보다 먼저
+    # b1은 a1과 질문이 겹쳐 빠지고, a4는 탈락, a5는 모양 '나'가 자동 검사를 못 넘어, b3은 사람이 탈락으로 바꿔 빠진다
+    assert [record["id"] for record in pipeline.pick_round([first, second], 3)] == ["a2", "a3", "b2"]
+    manifest = pipeline.export_round([first, second], tmp_path / "round1", 3)
+    assert manifest["kinds"] == {"fact": 1, "table": 1, "refuse_guide": 1}
+    assert manifest["known"] == {"못 맞힘": 1, "가끔": 1, "모름": 1}
+    for shape in ("ga", "na"):
+        lines = [json.loads(line) for line in (tmp_path / "round1" / f"round-{shape}.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert [line["id"] for line in lines] == ["a2", "a3", "b2"]  # 두 모양에 같은 예시
+        assert lines[0]["messages"][1]["content"] == f"a2 {'가' if shape == 'ga' else '나'}"
+    passed, planned, planned_passed = pipeline.yields([first, second])
+    assert passed == {"fact": 4, "table": 1, "refuse_guide": 1} and planned["fact"] == 6

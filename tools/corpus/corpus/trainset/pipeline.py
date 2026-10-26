@@ -238,15 +238,92 @@ def status(batch_dir: Path) -> dict:
     return {kind: dict(counter) for kind, counter in by_kind.items()}
 
 
+def final_verdict(record: dict) -> str | None:
+    """예시의 최종 판정: 사람 판정이 있으면 사람, 없으면 Claude(ADR-0037). 판정 전이면 None."""
+    return record.get("human") or record.get("verdict")
+
+
 def verdicts(batch_dir: Path) -> dict[str, str]:
-    """예시마다 최종 판정: 사람 판정이 있으면 사람, 없으면 Claude(ADR-0037). 판정 전이면 빠진다."""
-    return {record["id"]: record.get("human") or record["verdict"] for record in merged(batch_dir)
-            if record.get("human") or record.get("verdict")}
+    """묶음의 예시별 최종 판정. 판정 전이면 빠진다."""
+    return {record["id"]: final_verdict(record) for record in merged(batch_dir) if final_verdict(record)}
+
+
+def yields(batch_dirs: list[Path]) -> tuple[Counter, Counter, Counter]:
+    """판정한 묶음들에서 종류별 통과 수(받은 근거로 정한 종류), 계획 수, 계획한 종류별 통과 수. 다음 묶음 계획(plan.fill_quotas)에 쓴다.
+    판정 전인 묶음을 넣으면 수율이 낮게 잡히므로 판정을 마친 묶음만 넣는다."""
+    passed, planned, planned_passed = Counter(), Counter(), Counter()
+    for batch_dir in batch_dirs:
+        for record in merged(batch_dir):
+            kind_planned = record.get("kind_planned") or record["kind"]
+            planned[kind_planned] += 1
+            if final_verdict(record) == "통과":
+                passed[record["kind"]] += 1
+                planned_passed[kind_planned] += 1
+    return passed, planned, planned_passed
+
+
+def known_rate(record: dict) -> float:
+    """학습 전 A.X가 여러 번 받은 답 중 맞힌 비율(ADR-0042). 값으로 하나도 가르지 못했으면 0.5(모름)."""
+    probe = record.get("probe") or {}
+    return probe["correct"] / probe["decided"] if probe.get("decided") else 0.5
+
+
+def pick_round(batch_dirs: list[Path], size: int, shapes: tuple[str, ...] = ("ga", "na")) -> list[dict]:
+    """1회차 학습 예시 고르기. 최종 판정 '통과'이고 모든 모양이 자동 검사를 통과한 예시에서 종류 비율(ROUND1)대로 고른다.
+    종류 안에서는 학습 전 A.X가 틀리던 예시를 먼저 넣고(ADR-0042 쓰임 ①), 모자란 종류의 자리는 남은 예시로 같은 순서로 채운다.
+    묶음을 넘어 질문이 겹치면 앞 묶음 것만 쓴다. 모든 모양에 같은 예시를 써서 모양 비교를 같은 문항 짝으로 한다(ADR-0039)."""
+    candidates = [record for batch_dir in batch_dirs for record in merged(batch_dir)
+                  if final_verdict(record) == "통과" and all((record.get("keep") or {}).get(shape) for shape in shapes)]
+    duplicate_of = checks.duplicates(candidates)
+    candidates = [record for record in candidates if record["id"] not in duplicate_of]
+    order = {record["id"]: number for number, record in enumerate(candidates)}
+
+    def priority(record: dict) -> tuple[float, int]:
+        return known_rate(record), order[record["id"]]
+
+    chosen = []
+    for kind, count in scale(ROUND1, size).items():
+        chosen += sorted((record for record in candidates if record["kind"] == kind), key=priority)[:count]
+    picked = {record["id"] for record in chosen}
+    chosen += sorted((record for record in candidates if record["id"] not in picked), key=priority)[:size - len(chosen)]
+    return sorted(chosen, key=lambda record: order[record["id"]])
+
+
+def training_line(record: dict, shape: str) -> dict:
+    """학습 파일 한 줄(A.X 채팅 형식): 사용자 = 운영 프롬프트, 답 = 목표 답. A.X는 시스템 메시지 없이 사용자 한 턴으로 답한다
+    (deploy/models 틀)."""
+    return {"id": record["id"],
+            "messages": [{"role": "user", "content": record["prompt"]},
+                         {"role": "assistant", "content": record[f"target_{shape}"]}],
+            "meta": {key: record.get(key) for key in ("kind", "kind_planned", "user_actual", "style", "ledger_id", "group_id")}
+                    | {"drafter": (record.get("drafter") or {}).get("model"), "shape": shape}}
+
+
+def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple[str, ...] = ("ga", "na")) -> dict:
+    """1회차 학습 파일: 모양마다 round-<모양>.jsonl(같은 예시), 고른 예시의 종류·A.X 아는 정도를 manifest.json에 남긴다."""
+    chosen = pick_round(batch_dirs, size, shapes)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for shape in shapes:
+        with (out_dir / f"round-{shape}.jsonl").open("w", encoding="utf-8") as out:
+            for record in chosen:
+                out.write(json.dumps(training_line(record, shape), ensure_ascii=False) + "\n")
+
+    def known(record: dict) -> str:
+        probe = record.get("probe") or {}
+        if not probe.get("decided"):
+            return "모름"
+        return "다 맞힘" if probe["correct"] == probe["decided"] else ("못 맞힘" if probe["correct"] == 0 else "가끔")
+
+    manifest = {"size": len(chosen), "batches": [Path(batch_dir).name for batch_dir in batch_dirs], "shapes": list(shapes),
+                "kinds": dict(Counter(record["kind"] for record in chosen)),
+                "known": dict(Counter(known(record) for record in chosen)), "ids": [record["id"] for record in chosen]}
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    return manifest
 
 
 def export(batch_dir: Path, out_file: Path, shape: str = "ga", verdicts: dict[str, str] | None = None) -> int:
-    """학습 파일(A.X 채팅 형식): 사용자 = 운영 프롬프트, 답 = 목표 답. 자동 검사 통과(중복 아님)이고,
-    판정(verdicts)을 주면 '통과'인 예시만. A.X는 시스템 메시지 없이 사용자 한 턴으로 답한다(deploy/models 틀)."""
+    """한 묶음의 학습 파일(training_line 형식). 자동 검사 통과(중복 아님)이고, 판정(verdicts)을 주면 '통과'인 예시만."""
     kept = 0
     out_file = Path(out_file)
     out_file.parent.mkdir(parents=True, exist_ok=True)
@@ -256,12 +333,6 @@ def export(batch_dir: Path, out_file: Path, shape: str = "ga", verdicts: dict[st
                 continue
             if verdicts is not None and verdicts.get(record["id"]) != "통과":
                 continue
-            out.write(json.dumps({
-                "id": record["id"],
-                "messages": [{"role": "user", "content": record["prompt"]},
-                             {"role": "assistant", "content": record[f"target_{shape}"]}],
-                "meta": {key: record.get(key) for key in ("kind", "kind_planned", "user_actual", "style", "ledger_id", "group_id")}
-                        | {"drafter": (record.get("drafter") or {}).get("model"), "shape": shape},
-            }, ensure_ascii=False) + "\n")
+            out.write(json.dumps(training_line(record, shape), ensure_ascii=False) + "\n")
             kept += 1
     return kept

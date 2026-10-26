@@ -58,6 +58,23 @@ def scale(quotas: dict[str, int], total: int) -> dict[str, int]:
     return result
 
 
+MIN_YIELD = 0.2  # 수율을 모르거나 아주 낮을 때 쓰는 바닥값(계획 5개에 통과 1개)
+
+
+def fill_quotas(target: dict[str, int], passed: dict[str, int], planned: dict[str, int], planned_passed: dict[str, int],
+                total: int) -> dict[str, int]:
+    """다음 묶음의 종류별 개수: 1회차 목표(target)에서 이미 통과한 수(passed, 받은 근거로 정한 종류)를 빼고 모자란 종류만
+    배정한다(ADR-0041 결정 6). 계획한 종류가 판정 통과로 이어진 비율(수율 = planned_passed / planned)이 낮은 종류는 그만큼
+    더 계획한다. 모자란 종류가 없으면 빈 사전."""
+    weights = {}
+    for name, goal in target.items():
+        lack = max(0, goal - passed.get(name, 0))
+        if lack:
+            rate = planned_passed.get(name, 0) / planned[name] if planned.get(name) else MIN_YIELD
+            weights[name] = lack / max(rate, MIN_YIELD)
+    return {name: count for name, count in scale(weights, total).items() if count} if weights else {}
+
+
 def dataset_documents(con: sqlite3.Connection) -> list[dict]:
     """데이터셋용 색인에 올라간 문서(대장 uploads 표의 대상 dataset)와 대장 정보."""
     con.row_factory = sqlite3.Row
