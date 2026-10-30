@@ -164,10 +164,12 @@ def run_targets(batch_dir: Path, session, ollama_url: str, model: str, shapes: t
     counts = Counter()
     for record in _todo(batch_dir, "targets", lambda r: bool(r.get("prompt")), limit):
         hint = record.get("hint") if KINDS[record["kind"]].answerable else ""
+        # 답 근거가 든 블록 번호는 코드가 짚어 준다(ADR-0048 결정 3) — 초안 모델이 번호를 찾다 틀리던 출처 번호 오류를 줄인다
+        sources = checks.hint_blocks(hint, record["prompt"]) if hint else []
         result = {"id": record["id"], "target_generation": {"model": model, **TARGET_OPTIONS}}
         try:
             for shape in shapes:
-                task = prompts.target_prompt(record, record["prompt"], hint, shape)
+                task = prompts.target_prompt(record, record["prompt"], hint, shape, hint_sources=sources)
                 out = clients.generate(session, ollama_url, model, task, **TARGET_OPTIONS)
                 text, generation = out["text"].strip(), out["generation"]
                 # 답이 쓴 근거의 안내 줄이 빠졌으면 검사 결과를 주고 한 번 다시 쓴다(ADR-0046). 엉뚱한 근거 종류는

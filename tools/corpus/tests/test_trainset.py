@@ -186,7 +186,8 @@ def test_good_answer_passes_all_checks():
     ({"target_ga": "8월 31일까지입니다.\n[출처 1]"}, "근거 대조"),  # 근거에 없는 날짜
     ({"target_ga": "8월 29일까지입니다.\n[출처 2]"}, "출처 번호 대조"),  # 값이 쓴 번호의 근거에 없음
     ({"hint": "9월 1일부터 9월 5일까지"}, "지워진 정답"),  # 답 근거가 프롬프트에 없음(발췌 규칙이 지움)
-    ({"retrieved": [{"document_id": "9", "chunk_index": 0}]}, "왕복 검색"),
+    # 질문을 만든 청크도 없고 답 근거가 든 블록도 없을 때만 왕복 검사가 떨어진다(ADR-0048 결정 3)
+    ({"retrieved": [{"document_id": "9", "chunk_index": 0}], "hint": "9월 1일부터 9월 5일까지"}, "왕복 검색"),
     ({"question": "휴학 언제까지? 내 번호 010-1234-5678"}, "개인정보"),
     ({"question": "..."}, "질문"),
 ])
@@ -552,3 +553,42 @@ def test_pick_round_balances_kinds_prefers_what_ax_misses_and_shares_ids_across_
         assert lines[0]["messages"][1]["content"] == f"a2 {'가' if shape == 'ga' else '나'}"
     passed, planned, planned_passed = pipeline.yields([first, second])
     assert passed == {"fact": 4, "table": 1, "refuse_guide": 1} and planned["fact"] == 6
+
+
+# ADR-0048 결정 3·4: 답 근거가 든 블록은 코드가 짚고, 왕복 검사는 그 블록 기준, 표 질문은 사용자 말로
+PROMPT_TWIN = PROMPT.replace("[사용자 질문]", """[출처 3]
+문서: 가나대학 휴학 안내(학사지원팀 게시판).html
+전체 내용:
+휴학 신청 마감은 8월 29일이다.
+
+[사용자 질문]""")
+
+
+def test_hint_blocks_finds_every_block_with_the_answer():
+    assert checks.hint_blocks("8월 18일부터 8월 29일까지", PROMPT_TWIN) == [1]  # 3번에는 8월 18일이 없다
+    assert checks.hint_blocks("휴학 신청 마감", PROMPT_TWIN) == [3]  # 값 없는 답 근거는 글자 겹침으로
+    assert checks.hint_blocks("", PROMPT_TWIN) == []
+
+
+def test_round_trip_passes_when_answer_comes_from_another_document():
+    # 질문을 만든 청크(7번 문서)가 근거 8개 밖이어도 답 근거가 1번 블록에 있으면 통과 — 학과마다 같은 페이지 같은 경우
+    result = checks.check(record(retrieved=[{"document_id": "9", "chunk_index": 0}]))
+    assert "왕복 검색" not in failed(result)
+
+
+def test_citing_another_block_with_the_same_value_is_fine():
+    # 답 근거가 든 블록은 1번이지만, 3번(같은 안내의 다른 글)에도 답의 값이 있으면 그 번호를 써도 된다.
+    # 코드가 짚은 번호를 꼭 쓰게 하자 공고·재공고를 인용한 정상 답이 떨어졌다(ADR-0048 결과)
+    target = "8월 29일까지 신청하면 됩니다.\n[출처 3]"
+    assert "출처 번호 대조" not in failed(checks.check(record(prompt=PROMPT_TWIN, target_ga=target)))
+
+
+def test_target_prompt_gives_code_found_source_number():
+    task = prompts.target_prompt({}, PROMPT_TWIN, "8월 18일부터 8월 29일까지", "ga", hint_sources=[1])
+    assert "이 부분은 [검색 근거]의 [출처 1]에 있다" in task and "몇 번에 있는지 찾아" not in task
+    assert "몇 번에 있는지 찾아" in prompts.target_prompt({}, PROMPT_TWIN, "8월 18일부터 8월 29일까지", "ga")
+
+
+def test_table_question_rule_asks_for_user_words_not_header_labels():
+    rule = prompts.KIND_RULES["table"]
+    assert "평소 쓰는 말" in rule and "칸 이름" in rule and "행 이름과 열 이름을 담는다" not in rule
