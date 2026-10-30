@@ -28,7 +28,7 @@ from pathlib import Path
 import requests
 
 from . import judge, pipeline, review, timeline
-from .plan import ROUND1, boilerplate_lines, dataset_documents, fill_quotas, plan, scale
+from .plan import ROUND1, boilerplate_lines, dataset_documents, document_family, fill_quotas, plan, scale
 
 DEFAULT_MODEL = "gemma4:12b-it-qat"
 
@@ -104,9 +104,11 @@ def cmd_questions(args) -> int:
 
 def cmd_attach(args) -> int:
     # 그날의 서비스 색인 모양으로 근거를 붙인다(ADR-0047). --no-timeline이면 데이터셋 색인 그대로(그 전 방식, 비교용)
-    dates = None if args.no_timeline else timeline.ledger_dates(sqlite3.connect(Path(args.root) / "ledger.sqlite"))
+    con = sqlite3.connect(Path(args.root) / "ledger.sqlite")
+    dates = None if args.no_timeline else timeline.ledger_dates(con)
+    # 답없음 예시의 확인처 블록을 가릴 문서 관계(재료 문서·같은 게시글·같은 묶음, ADR-0048 결정 2)
     counts = pipeline.run_attach(_batch_dir(args), requests.Session(), args.ai_url, args.limit, dates=dates,
-                                 today=date.today().isoformat())
+                                 today=date.today().isoformat(), family=document_family(con))
     print(dict(counts))
     return 0 if not counts.get("error") else 1
 

@@ -85,6 +85,12 @@ def dataset_documents(con: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def document_family(con: sqlite3.Connection) -> dict[str, tuple[str, str | None]]:
+    """문서마다 (게시글 번호, 묶음 번호). 첨부는 부모 게시글 번호를 쓴다. 답없음 예시의 확인처를 고를 근거 블록
+    (재료 문서·같은 게시글·같은 묶음)을 가릴 때 쓴다(ADR-0048 결정 2)."""
+    return {row[0]: (row[1] or row[0], row[2]) for row in con.execute("SELECT doc_id, parent_id, group_id FROM ledger")}
+
+
 def _line_key(line: str) -> str:
     return " ".join(line.split())
 

@@ -496,7 +496,9 @@ def test_ambiguous_rule_shared_by_target_prompt_and_judge_guide():
     from corpus.trainset import judge
     for shape in ("ga", "na"):
         assert prompts.AMBIGUOUS_RULE in prompts.target_prompt({}, PROMPT, "", shape)
-    assert prompts.AMBIGUOUS_RULE in judge.PROMPT and judge.GUIDE_VERSION == "2026-10-26"
+    assert prompts.AMBIGUOUS_RULE in judge.PROMPT and judge.GUIDE_VERSION == "2026-10-31"
+    # ADR-0047 결정 5: '가장 최근 근거로'가 아니라 '오늘 기준으로 유효한 근거로', 지난 학기뿐이면 밝히고 확인처
+    assert "오늘" in prompts.AMBIGUOUS_RULE and "지난 학기" in prompts.AMBIGUOUS_RULE and "가장 최근 것" not in prompts.AMBIGUOUS_RULE
 
 
 def test_check_notes_missing_period_from_cited_evidence():

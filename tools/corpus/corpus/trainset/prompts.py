@@ -6,24 +6,28 @@
 
 from __future__ import annotations
 
-from .evidence import MAX_FIX_LINE_CHARS, evidence_blocks, guidance_candidates
+from .evidence import CONTACT, MAX_FIX_LINE_CHARS, evidence_blocks, guidance_candidates
 
 REFUSAL = "제공된 문서에서는 확인할 수 없습니다."
-# 모호한 질문에 답하는 규칙(ADR-0045). 목표 답 지시문과 판정 지침(judge)이 이 문장을 함께 쓴다
-AMBIGUOUS_RULE = ("질문에 학년도·학기가 없고 근거에 같은 안내가 여러 해 있으면 가장 최근 것 하나로 답하고 그 기준"
-                  "(예: '2026학년도 2학기 기준')을 밝힌다. 질문의 이름이 근거의 여러 대상에 맞으면 질문에 가장 맞는 대상 "
-                  "하나로 답하고 그 대상의 이름을 밝힌다.")
+# 모호한 질문에 답하는 규칙(ADR-0045, 시점 문구는 ADR-0047 결정 5). 목표 답 지시문과 판정 지침(judge)이 이 문장을
+# 함께 쓴다. '가장 최근 근거로'는 학습 근거에 재료보다 뒤에 올라온 판이 들어오던 때의 문구라 '오늘 기준'으로 바꿨다
+AMBIGUOUS_RULE = ("질문에 학년도·학기가 없으면 오늘(입력 맨 위 '오늘' 줄, 없으면 근거의 가장 늦은 게시일) 기준으로 유효한 "
+                  "근거로 답하고 그 기준(예: '2026학년도 2학기 기준')을 밝힌다. 근거가 모두 오늘보다 지난 학기 것이면 그렇다고 "
+                  "밝히고 확인처를 안내한다. 질문의 이름이 근거의 여러 대상에 맞으면 질문에 가장 맞는 대상 하나로 답하고 그 대상의 "
+                  "이름을 밝힌다.")
 
+FACT_RULE = "답이 글에 그대로 적힌 값 하나(날짜·기간·금액·인원·연락처·장소 등)인 질문을 만든다."
 KIND_RULES = {
-    "fact": "답이 글에 그대로 적힌 값 하나(날짜·기간·금액·인원·연락처·장소 등)인 질문을 만든다.",
+    "fact": FACT_RULE,
     "procedure": "글에 적힌 신청·제출·처리 방법이나 절차를 묻는 질문을 만든다.",
     # 표 머리글·칸 이름을 옮기게 하던 문장("질문에 행 이름과 열 이름을 담는다")이 판정 지침 6과 부딪쳐 바꿨다(ADR-0048 결정 4)
     "table": ("글의 표에서 한 칸의 값을 묻는 질문을 만든다. 질문만 읽어도 어느 칸인지 하나로 정해지게 하되, 행과 열은 "
               "묻는 사람이 평소 쓰는 말로 가리킨다. 표 머리글·칸 이름·분류 이름을 그대로 옮기지 않는다."),
     "multi": "두 글을 모두 읽어야 답할 수 있는 질문을 만든다. 한 글만 읽으면 답이 모자라야 한다.",
     "partial": "두 가지를 함께 묻는 질문을 만든다. 하나는 글에 답이 있고, 다른 하나는 글에 답이 없어야 한다.",
-    "refuse_guide": "이 글과 같은 일을 다루지만 글에는 답이 없는 것을 묻는 질문을 만든다"
-                    "(예: 글에 기간만 있으면 비용이나 대상을 묻는다). 학교에 물을 만한 것이어야 한다.",
+    # 거절 + 확인처 예시는 답이 있는 질문으로 만들고, 근거를 붙일 때 답이 든 청크를 빼서 근거에 답이 없게 한다(ADR-0048 결정 2).
+    # 전에는 '글에 없는 것을 묻게' 해서, 다른 근거에 답이 있어도 초안 모델이 거절할지 판단해야 했다
+    "refuse_guide": FACT_RULE,
     "refuse_offtopic": "대학 안내 챗봇에 물을 만하지만 학교 안내 문서에는 답이 없을 질문을 만든다"
                        "(다른 학교, 개인 사정에 대한 판단, 학교 밖 정보 등). 사람 이름·연락처는 쓰지 않는다.",
 }
@@ -44,8 +48,9 @@ def question_prompt(item: dict) -> str:
                          for number, chunk in enumerate(item["chunks"], 1))
     source = f"문서 제목: {item.get('title') or '-'}\n\n{texts}" if texts else "(글 없음)"
     users = "재학생, 예비 입학생·지원자, 교직원, 외국인, 업체"
+    # 거절 + 확인처도 답 근거를 받는다 — 근거를 붙일 때 그 답이 든 청크를 뺀다(ADR-0048 결정 2)
     hint_rule = ("'답 근거'에는 질문의 답이 되는 부분을 글에서 그대로 옮긴다."
-                 if kind not in ("refuse_guide", "refuse_offtopic") else "'답 근거'는 빈 글로 둔다.")
+                 if kind != "refuse_offtopic" else "'답 근거'는 빈 글로 둔다.")
     if kind == "partial":
         hint_rule = "'답 근거'에는 두 가지 중 글에 답이 있는 쪽의 답이 되는 부분을 글에서 그대로 옮긴다."
     # 글 없이 만드는 종류에는 '글로 만들 수 없으면 false' 규칙을 주지 않는다(첫 시험에서 6개 중 5개를 false로 냄)
@@ -86,10 +91,18 @@ SHAPE_RULES = {
 }
 
 
-def target_prompt(item: dict, prompt: str, hint: str, shape: str = "ga", hint_sources: list[int] | None = None) -> str:
+def target_prompt(item: dict, prompt: str, hint: str, shape: str = "ga", hint_sources: list[int] | None = None,
+                  guidance_blocks: list[int] | None = None) -> str:
     """목표 답 초안 지시문. prompt는 학생 모델이 받는 운영 프롬프트 그대로다.
-    hint_sources는 코드가 짚은 답 근거 블록 번호다(ADR-0048 결정 3) — 있으면 초안 모델이 번호를 찾지 않고 그 번호를 쓴다."""
+    hint_sources는 코드가 짚은 답 근거 블록 번호다(ADR-0048 결정 3) — 있으면 초안 모델이 번호를 찾지 않고 그 번호를 쓴다.
+    guidance_blocks는 답없음 예시에서 확인처를 고를 근거 블록이다(ADR-0048 결정 2) — 주면 그 블록의 연락처·사이트 줄만
+    후보로 보이고, 후보 밖의 연락처를 쓰지 말라고 한다."""
     candidates = guidance_candidates(evidence_blocks(prompt))
+    refusal_part = ""
+    if guidance_blocks is not None:
+        candidates = [(number, line) for number, line in candidates if number in guidance_blocks and CONTACT.search(line)]
+        refusal_part = ("\n[답없음 예시]\n이 질문의 답은 [검색 근거]에 없다. 거절 문장으로 시작하고, 아래 [근거에 있는 안내 후보]의 "
+                        "연락처·사이트만 확인처로 쓴다. 후보가 없으면 거절 문장 하나만 쓴다.\n")
     guide_part = ("\n[근거에 있는 안내 후보]\n" + "\n".join(f"- [출처 {number}] {line}" for number, line in candidates) + "\n"
                   if candidates else "")
     if hint_sources:
@@ -105,7 +118,7 @@ def target_prompt(item: dict, prompt: str, hint: str, shape: str = "ga", hint_so
 {SHAPE_RULES[shape]}
 6. 일반 조언, 추측, 근거에 없는 날짜·숫자·연락처를 쓰지 않는다. 표 값은 질문의 행 이름과 열 이름에 맞는 값만 쓴다.
 7. {AMBIGUOUS_RULE}
-{hint_part}{guide_part}
+{hint_part}{refusal_part}{guide_part}
 [챗봇이 받는 입력]
 {prompt}
 

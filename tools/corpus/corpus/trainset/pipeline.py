@@ -100,13 +100,54 @@ def run_questions(batch_dir: Path, session, ollama_url: str, model: str, limit: 
     return counts
 
 
+REFUSAL_ROUNDS = 3  # 답이 든 청크를 빼고 다시 붙이는 최대 횟수(빼면 다른 청크의 같은 답이 올라올 수 있다)
+
+
+def _construct_refusal(session, ai_url: str, record: dict, attached: dict, options: dict) -> tuple[dict, dict]:
+    """답없음 예시(ADR-0048 결정 2): 답 근거가 든 근거 블록의 청크를 빼고 다시 붙여, 근거 8개에 답이 없게 만든다.
+    빼도 답이 남으면 실패로 돌려준다(그 예시는 버린다)."""
+    hint = (record.get("hint") or "").strip()
+    if not hint:
+        raise ValueError("답 근거가 없어 답없음 예시를 만들 수 없음")
+    removed: list[str] = []
+    for _ in range(REFUSAL_ROUNDS):
+        blocks = checks.hint_blocks(hint, attached["prompt"])
+        if not blocks:
+            return attached, {"removed_chunks": removed}
+        for number in blocks:
+            entry = attached["retrieved"][number - 1] if number - 1 < len(attached["retrieved"]) else {}
+            chunk_id = str(entry.get("chunk_id") or "")
+            if chunk_id and chunk_id not in removed:
+                removed.append(chunk_id)
+        attached = clients.attach(session, ai_url, record["question"], exclude_chunk_ids=removed, **options)
+    if checks.hint_blocks(hint, attached["prompt"]):
+        raise ValueError(f"답이 든 청크 {len(removed)}개를 빼도 근거에 답이 남음")
+    return attached, {"removed_chunks": removed}
+
+
+def refusal_contact_blocks(record: dict, retrieved: list[dict], family: dict | None) -> list[int]:
+    """답없음 예시의 확인처를 고를 근거 블록 번호: 재료 문서의 다른 청크, 같은 게시글(본문·첨부), 같은 묶음의 문서.
+    family(문서 → (게시글, 묶음))가 없으면 재료 문서만 본다."""
+    family = family or {}
+    material = str(record.get("ledger_id") or "")
+    post, group = family.get(material, (material, None))
+    blocks = []
+    for number, entry in enumerate(retrieved, 1):
+        ledger_id = str(entry.get("ledger_id") or "")
+        other_post, other_group = family.get(ledger_id, (ledger_id, None))
+        if ledger_id and (ledger_id == material or other_post == post or (group and other_group == group)):
+            blocks.append(number)
+    return blocks
+
+
 def run_attach(batch_dir: Path, session, ai_url: str, limit: int | None = None,
                log: Callable[[str], None] = print, dates: dict[str, timeline.Dates] | None = None,
-               today: str | None = None) -> Counter:
+               today: str | None = None, family: dict | None = None) -> Counter:
     """근거 붙이기: 데이터셋 AI 서버 /query(평가용 옵션)로 운영 프롬프트·근거 8개·학습 전 A.X 답을 받는다.
 
     dates(문서 대장의 게시일·유효 기간)를 주면 예시마다 그날의 서비스 색인 모양으로 근거를 붙인다(ADR-0047):
     그날 없던 문서를 검색 후보에서 빼고 프롬프트의 기준 날짜를 그날로 준다. 어떻게 붙였는지 예시의 timeline에 남긴다.
+    거절 + 확인처 종류는 답이 든 청크를 빼서 근거에 답이 없게 만들고(ADR-0048 결정 2), 확인처를 고를 블록을 refusal에 남긴다.
     """
     counts = Counter()
     today = today or date.today().isoformat()
@@ -119,7 +160,12 @@ def run_attach(batch_dir: Path, session, ai_url: str, limit: int | None = None,
                 excluded = timeline.excluded_ledger_ids(day, dates, keep_old)
                 options = {"exclude_ledger_ids": excluded, "as_of": day}
                 info = {"timeline": {"as_of": day, "old_versions": keep_old, "excluded_ledgers": len(excluded)}}
-            result = {"id": record["id"], **clients.attach(session, ai_url, record["question"], **options), **info}
+            attached = clients.attach(session, ai_url, record["question"], **options)
+            if record["kind"] == "refuse_guide":
+                attached, refusal = _construct_refusal(session, ai_url, record, attached, options)
+                info["refusal"] = {**refusal,
+                                   "contact_blocks": refusal_contact_blocks(record, attached["retrieved"], family)}
+            result = {"id": record["id"], **attached, **info}
             counts["attached"] += 1
         except (ValueError, KeyError, OSError) as error:
             result = {"id": record["id"], "error": str(error)}
@@ -166,10 +212,14 @@ def run_targets(batch_dir: Path, session, ollama_url: str, model: str, shapes: t
         hint = record.get("hint") if KINDS[record["kind"]].answerable else ""
         # 답 근거가 든 블록 번호는 코드가 짚어 준다(ADR-0048 결정 3) — 초안 모델이 번호를 찾다 틀리던 출처 번호 오류를 줄인다
         sources = checks.hint_blocks(hint, record["prompt"]) if hint else []
+        # 답없음 예시는 코드가 고른 블록의 연락처·사이트만 확인처 후보로 보인다(ADR-0048 결정 2)
+        refusal = record.get("refusal") if (record.get("kind_planned") or record["kind"]) == "refuse_guide" else None
+        guidance_blocks = refusal.get("contact_blocks") or [] if refusal is not None else None
         result = {"id": record["id"], "target_generation": {"model": model, **TARGET_OPTIONS}}
         try:
             for shape in shapes:
-                task = prompts.target_prompt(record, record["prompt"], hint, shape, hint_sources=sources)
+                task = prompts.target_prompt(record, record["prompt"], hint, shape, hint_sources=sources,
+                                             guidance_blocks=guidance_blocks)
                 out = clients.generate(session, ollama_url, model, task, **TARGET_OPTIONS)
                 text, generation = out["text"].strip(), out["generation"]
                 # 답이 쓴 근거의 안내 줄이 빠졌으면 검사 결과를 주고 한 번 다시 쓴다(ADR-0046). 엉뚱한 근거 종류는
