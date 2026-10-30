@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from datetime import date
 from pathlib import Path
 from typing import Callable
 
-from . import checks, clients, evidence, prompts
+from . import checks, clients, evidence, prompts, timeline
 from .plan import KINDS, ROUND1, USERS, scale
 
 STEPS = ("plan", "questions", "attached", "probes", "targets", "checked", "judged", "human")
@@ -100,12 +101,25 @@ def run_questions(batch_dir: Path, session, ollama_url: str, model: str, limit: 
 
 
 def run_attach(batch_dir: Path, session, ai_url: str, limit: int | None = None,
-               log: Callable[[str], None] = print) -> Counter:
-    """근거 붙이기: 데이터셋 AI 서버 /query(평가용 옵션)로 운영 프롬프트·근거 8개·학습 전 A.X 답을 받는다."""
+               log: Callable[[str], None] = print, dates: dict[str, timeline.Dates] | None = None,
+               today: str | None = None) -> Counter:
+    """근거 붙이기: 데이터셋 AI 서버 /query(평가용 옵션)로 운영 프롬프트·근거 8개·학습 전 A.X 답을 받는다.
+
+    dates(문서 대장의 게시일·유효 기간)를 주면 예시마다 그날의 서비스 색인 모양으로 근거를 붙인다(ADR-0047):
+    그날 없던 문서를 검색 후보에서 빼고 프롬프트의 기준 날짜를 그날로 준다. 어떻게 붙였는지 예시의 timeline에 남긴다.
+    """
     counts = Counter()
+    today = today or date.today().isoformat()
     for record in _todo(batch_dir, "attached", lambda r: r.get("possible") and r.get("question"), limit):
         try:
-            result = {"id": record["id"], **clients.attach(session, ai_url, record["question"])}
+            options, info = {}, {}
+            if dates is not None:
+                day = timeline.the_day(record.get("ledger_id"), dates, today)
+                keep_old = timeline.keeps_old_versions(record["id"])
+                excluded = timeline.excluded_ledger_ids(day, dates, keep_old)
+                options = {"exclude_ledger_ids": excluded, "as_of": day}
+                info = {"timeline": {"as_of": day, "old_versions": keep_old, "excluded_ledgers": len(excluded)}}
+            result = {"id": record["id"], **clients.attach(session, ai_url, record["question"], **options), **info}
             counts["attached"] += 1
         except (ValueError, KeyError, OSError) as error:
             result = {"id": record["id"], "error": str(error)}
