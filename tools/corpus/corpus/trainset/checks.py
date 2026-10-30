@@ -221,6 +221,14 @@ def check(record: dict, shape: str = "ga") -> dict:
             put("왕복 검색", source_retrieved(record) or bool(sources),
                 "질문을 만든 청크도, 답 근거가 든 근거 블록도 근거 8개 안에 없음")
         put("모호한 표 근거", *ambiguous_table(target, prompt))
+    refusal_info = record.get("refusal")
+    if planned == "refuse_guide" and refusal_info is not None:
+        # 답이 든 청크를 빼서 만든 답없음 예시(ADR-0048 결정 2): 근거에 답이 없음을 확인하고, 거절했는지,
+        # 확인처를 코드가 고른 블록(재료 문서·같은 게시글·같은 묶음)에서만 붙였는지 본다
+        put("답 근거 없음", not hint_blocks(hint, prompt), "답이 든 청크를 뺐는데 근거에 답 근거가 남음")
+        put("거절함", answer_body(target, shape).startswith(REFUSAL), "답이 없게 만든 근거인데 거절하지 않음")
+        allowed = set(refusal_info.get("contact_blocks") or [])
+        put("확인처 출처", cited <= allowed, f"재료·같은 게시글·같은 묶음 밖의 근거 {sorted(cited - allowed)}를 확인처로 붙임")
     # 질문과 답 사이에 줄을 넣는다 — 붙이면 질문 끝 숫자와 답 첫 숫자가 이어져 번호 경계를 못 찾는다
     both = f"{question}\n{target}"
     sensitive = RESIDENT_NUMBER.search(both) or MOBILE.search(both)
