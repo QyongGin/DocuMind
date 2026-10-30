@@ -17,7 +17,9 @@ AMBIGUOUS_RULE = ("질문에 학년도·학기가 없고 근거에 같은 안내
 KIND_RULES = {
     "fact": "답이 글에 그대로 적힌 값 하나(날짜·기간·금액·인원·연락처·장소 등)인 질문을 만든다.",
     "procedure": "글에 적힌 신청·제출·처리 방법이나 절차를 묻는 질문을 만든다.",
-    "table": "글의 표에서 한 행과 한 열을 함께 가리켜야 값이 하나로 정해지는 질문을 만든다. 질문에 행 이름과 열 이름을 담는다.",
+    # 표 머리글·칸 이름을 옮기게 하던 문장("질문에 행 이름과 열 이름을 담는다")이 판정 지침 6과 부딪쳐 바꿨다(ADR-0048 결정 4)
+    "table": ("글의 표에서 한 칸의 값을 묻는 질문을 만든다. 질문만 읽어도 어느 칸인지 하나로 정해지게 하되, 행과 열은 "
+              "묻는 사람이 평소 쓰는 말로 가리킨다. 표 머리글·칸 이름·분류 이름을 그대로 옮기지 않는다."),
     "multi": "두 글을 모두 읽어야 답할 수 있는 질문을 만든다. 한 글만 읽으면 답이 모자라야 한다.",
     "partial": "두 가지를 함께 묻는 질문을 만든다. 하나는 글에 답이 있고, 다른 하나는 글에 답이 없어야 한다.",
     "refuse_guide": "이 글과 같은 일을 다루지만 글에는 답이 없는 것을 묻는 질문을 만든다"
@@ -84,13 +86,18 @@ SHAPE_RULES = {
 }
 
 
-def target_prompt(item: dict, prompt: str, hint: str, shape: str = "ga") -> str:
-    """목표 답 초안 지시문. prompt는 학생 모델이 받는 운영 프롬프트 그대로다."""
+def target_prompt(item: dict, prompt: str, hint: str, shape: str = "ga", hint_sources: list[int] | None = None) -> str:
+    """목표 답 초안 지시문. prompt는 학생 모델이 받는 운영 프롬프트 그대로다.
+    hint_sources는 코드가 짚은 답 근거 블록 번호다(ADR-0048 결정 3) — 있으면 초안 모델이 번호를 찾지 않고 그 번호를 쓴다."""
     candidates = guidance_candidates(evidence_blocks(prompt))
     guide_part = ("\n[근거에 있는 안내 후보]\n" + "\n".join(f"- [출처 {number}] {line}" for number, line in candidates) + "\n"
                   if candidates else "")
-    hint_part = (f"\n[질문을 만든 글에서 답이 되는 부분]\n{hint.strip()}\n이 부분이 [검색 근거]의 몇 번에 있는지 찾아 그 번호를 쓴다. "
-                 "[검색 근거]에 없으면 근거에 없는 것으로 본다.\n" if hint and hint.strip() else "")
+    if hint_sources:
+        where = ("이 부분은 [검색 근거]의 " + "·".join(f"[출처 {number}]" for number in hint_sources)
+                 + "에 있다. 답의 출처 번호로 그 번호를 쓴다.")
+    else:
+        where = "이 부분이 [검색 근거]의 몇 번에 있는지 찾아 그 번호를 쓴다. [검색 근거]에 없으면 근거에 없는 것으로 본다."
+    hint_part = f"\n[질문을 만든 글에서 답이 되는 부분]\n{hint.strip()}\n{where}\n" if hint and hint.strip() else ""
     return f"""너는 대학 안내 챗봇이 배울 모범 답을 쓴다. 아래 [챗봇이 받는 입력]은 챗봇이 실제로 받는 글이다.
 그 입력의 필수 답변 규칙과 [검색 근거]만 써서 [사용자 질문]에 답한다.
 
