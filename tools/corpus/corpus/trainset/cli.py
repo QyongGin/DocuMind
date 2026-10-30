@@ -22,11 +22,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import tempfile
+from datetime import date
 from pathlib import Path
 
 import requests
 
-from . import judge, pipeline, review
+from . import judge, pipeline, review, timeline
 from .plan import ROUND1, boilerplate_lines, dataset_documents, fill_quotas, plan, scale
 
 DEFAULT_MODEL = "gemma4:12b-it-qat"
@@ -102,7 +103,10 @@ def cmd_questions(args) -> int:
 
 
 def cmd_attach(args) -> int:
-    counts = pipeline.run_attach(_batch_dir(args), requests.Session(), args.ai_url, args.limit)
+    # 그날의 서비스 색인 모양으로 근거를 붙인다(ADR-0047). --no-timeline이면 데이터셋 색인 그대로(그 전 방식, 비교용)
+    dates = None if args.no_timeline else timeline.ledger_dates(sqlite3.connect(Path(args.root) / "ledger.sqlite"))
+    counts = pipeline.run_attach(_batch_dir(args), requests.Session(), args.ai_url, args.limit, dates=dates,
+                                 today=date.today().isoformat())
     print(dict(counts))
     return 0 if not counts.get("error") else 1
 
@@ -214,6 +218,8 @@ def add_parser(commands) -> None:
     attaching = with_batch("attach", "근거 붙이기")
     attaching.add_argument("--ai-url", default="http://localhost:18100")
     attaching.add_argument("--limit", type=int)
+    attaching.add_argument("--no-timeline", action="store_true",
+                           help="그날 없던 문서를 빼지 않고 데이터셋 색인 그대로 근거를 붙인다(ADR-0047 전 방식, 비교용)")
     attaching.set_defaults(func=cmd_attach)
 
     probing = with_batch("probe", "학습 전 A.X 답 여러 번 받기(아는 정도, ADR-0042)")
