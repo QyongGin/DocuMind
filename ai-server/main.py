@@ -18,7 +18,9 @@ import logging
 import math
 import time
 from dataclasses import dataclass, replace
+from datetime import date, datetime
 from threading import Lock
+from zoneinfo import ZoneInfo
 
 from rag_contract_builders import (
     build_parsed_block,
@@ -148,6 +150,12 @@ TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
 TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
 EMBED_TABLE_RAW_CHUNKS = _env_bool("EMBED_TABLE_RAW_CHUNKS", True)
 QUERY_RETRIEVAL_CHUNKS_ENABLED = _env_bool("QUERY_RETRIEVAL_CHUNKS_ENABLED", True)
+# 프롬프트 날짜 줄(ADR-0047 결정 4): 맨 위 '오늘: YYYY-MM-DD'와 근거 머리말 '게시: YYYY-MM-DD'(색인 메타데이터 posted_at).
+# 기본은 꺼짐 — 개발셋으로 해가 없는지 잰 뒤(ADR-0047 측정 1단계) 켠다. 오늘은 한국 시간, 평가 요청의 as_of가 있으면 그 날짜
+PROMPT_DATE_LINES_ENABLED = _env_bool("AI_PROMPT_DATE_LINES_ENABLED", False)
+SERVICE_TIMEZONE = ZoneInfo("Asia/Seoul")
+# 평가 전용 제외 목록이 있을 때 벡터 검색을 늘려 받는 상한. 빼고 남은 후보가 검색 개수에 못 미치면 두 배씩 늘린다
+VECTOR_EXCLUSION_MAX_RESULTS = _env_int("AI_VECTOR_EXCLUSION_MAX_RESULTS", 400)
 OPENDATALOADER_JSON_TABLE_FACTS_ENABLED = _env_bool("OPENDATALOADER_JSON_TABLE_FACTS_ENABLED", False)
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
@@ -2715,6 +2723,12 @@ class QueryRequest(BaseModel):
     # 평가용(M1 11번 채점기): 이 답을 만든 바로 그 실행의 단계별 후보(글 전체)·프롬프트·생성 종료 이유를 함께 돌려준다.
     # 운영 경로(Spring Boot)는 보내지 않으므로 응답이 바뀌지 않는다. /query에만 있다.
     include_eval_trace: bool = False
+    # 평가·학습 데이터 전용(ADR-0047·0048): 검색 후보에서 뺄 문서(대장 번호)와 원문 청크(청크 id), 프롬프트의 '오늘' 날짜.
+    # 학습 예시의 근거를 질문 재료가 올라온 날의 서비스 색인 모양으로 만들고, 답이 든 청크를 빼서 답없음 예시를 만든다.
+    # 운영 경로(Spring Boot)는 보내지 않으므로 응답이 바뀌지 않는다. /query에만 있다.
+    exclude_ledger_ids: list[str] = Field(default_factory=list)
+    exclude_chunk_ids: list[str] = Field(default_factory=list)
+    as_of: date | None = None
 
 
 class RagTraceRequest(BaseModel):
@@ -3210,8 +3224,41 @@ def _get_table_fact_cache() -> list[PreparedTableFact]:
         return _table_fact_cache
 
 
-def _lookup_lexical_table_fact_candidates(question: str, limit: int = 5) -> list[dict]:
-    """표 질의에서 벡터 검색이 놓치는 table_fact 후보를 score와 함께 찾는다."""
+@dataclass(frozen=True)
+class CandidateExclusion:
+    """평가·학습 데이터 전용 제외 목록(ADR-0047·0048): 검색 후보에서 뺄 문서(대장 번호)와 원문 청크(청크 id).
+
+    세 검색기(벡터·BM25·표 사실)가 후보를 개수로 자르기 전에 이것으로 거른다. 운영 경로는 만들지 않는다.
+    표 사실은 부모 청크(parent_chunk_id), 검색용 청크는 부모 원문 청크로도 본다 — 답이 든 원문 청크를 빼면
+    그 청크에서 나온 표 사실·검색용 청크도 함께 빠진다.
+    """
+
+    ledger_ids: frozenset[str] = frozenset()
+    chunk_ids: frozenset[str] = frozenset()
+
+    @classmethod
+    def of(cls, ledger_ids, chunk_ids) -> "CandidateExclusion | None":
+        """요청 값으로 만든다. 뺄 것이 없으면 None(운영과 같은 경로)."""
+        ledgers = frozenset(str(value).strip() for value in ledger_ids or () if str(value).strip())
+        chunks = frozenset(str(value).strip() for value in chunk_ids or () if str(value).strip())
+        return cls(ledgers, chunks) if ledgers or chunks else None
+
+    def excludes(self, meta: dict | None, chunk_id) -> bool:
+        meta = meta or {}
+        if self.ledger_ids and str(meta.get("ledger_id") or "").strip() in self.ledger_ids:
+            return True
+        if not self.chunk_ids:
+            return False
+        own = {str(chunk_id), str(meta.get("parent_chunk_id") or "").strip(), _retrieval_parent_chunk_id(meta)}
+        return bool(own & self.chunk_ids)
+
+
+def _lookup_lexical_table_fact_candidates(
+    question: str,
+    limit: int = 5,
+    exclusion: CandidateExclusion | None = None,
+) -> list[dict]:
+    """표 질의에서 벡터 검색이 놓치는 table_fact 후보를 score와 함께 찾는다. exclusion은 평가 전용 제외 목록이다."""
     subject_terms, intent_terms = _extract_lexical_query_terms(question)
     if not subject_terms or not intent_terms:
         return []
@@ -3226,6 +3273,8 @@ def _lookup_lexical_table_fact_candidates(question: str, limit: int = 5) -> list
     prepared_intent_terms = _prepare_query_terms(intent_terms)
     candidates: list[tuple[int, PreparedTableFact]] = []
     for fact in table_facts:
+        if exclusion and exclusion.excludes(fact.metadata, fact.chunk_id):
+            continue
         score = _score_prepared_table_fact(fact, prepared_subject_terms, prepared_intent_terms, intent_terms)
         if score <= 0:
             continue
@@ -3511,8 +3560,12 @@ def _score_bm25_record(query_tokens: list[str], record: SparseIndexRecord, spars
     return score
 
 
-def _lookup_bm25_raw_chunk_candidates(analysis: QueryAnalysis, limit: int = 5) -> list[dict]:
-    """BM25 sparse retrieval 후보를 score와 함께 반환한다."""
+def _lookup_bm25_raw_chunk_candidates(
+    analysis: QueryAnalysis,
+    limit: int = 5,
+    exclusion: CandidateExclusion | None = None,
+) -> list[dict]:
+    """BM25 sparse retrieval 후보를 score와 함께 반환한다. exclusion은 평가 전용 제외 목록이다."""
     query_tokens = analysis.tokens
     if not query_tokens:
         return []
@@ -3530,6 +3583,8 @@ def _lookup_bm25_raw_chunk_candidates(analysis: QueryAnalysis, limit: int = 5) -
     candidates: list[tuple[float, int, SparseIndexRecord]] = []
     for position in candidate_indexes:
         record = sparse_index.records[position]
+        if exclusion and exclusion.excludes(record.metadata, record.chunk_id):
+            continue
         score = _score_bm25_record(query_tokens, record, sparse_index)
         if score > 0:
             candidates.append((score, position, record))
@@ -4303,10 +4358,25 @@ def _extract_query_evidence_facts(text: str, analysis: QueryAnalysis, max_facts:
     return "\n".join(_extract_query_evidence_fact_lines(text, analysis, max_facts, meta))
 
 
+POSTED_AT_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+
+
+def _format_posted_label(meta: dict) -> str:
+    """근거 머리말 '게시' 줄의 날짜(ADR-0047 결정 4). 날짜 줄이 꺼져 있거나 게시일이 없으면 빈 글.
+    게시일은 업로드 때 문서 대장에서 온 색인 메타데이터 posted_at이다(#126)."""
+    if not PROMPT_DATE_LINES_ENABLED:
+        return ""
+    match = POSTED_AT_PATTERN.match(str(meta.get("posted_at") or "").strip())
+    return match.group(1) if match else ""
+
+
 def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analysis: QueryAnalysis) -> str:
     """LLM이 검색 근거 단위를 구분할 수 있도록 출처 metadata와 청크 본문을 함께 포맷한다."""
     source_name = str(meta.get("source", "")).strip() or "알 수 없는 문서"
     metadata_lines = [f"문서: {source_name}"]
+    posted_label = _format_posted_label(meta)
+    if posted_label:
+        metadata_lines.append(f"게시: {posted_label}")
 
     page_label = _format_page_label(meta)
     if page_label:
@@ -4664,16 +4734,25 @@ def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list
     return expanded_docs, expanded_metadatas, expanded_ids
 
 
+def _prompt_today(as_of: date | None = None) -> date | None:
+    """프롬프트 '오늘' 줄의 날짜(ADR-0047 결정 4). 날짜 줄이 꺼져 있으면 None. 평가 요청의 as_of가 있으면 그 날짜, 없으면 한국 시간 오늘."""
+    if not PROMPT_DATE_LINES_ENABLED:
+        return None
+    return as_of or datetime.now(SERVICE_TIMEZONE).date()
+
+
 def _build_rag_prompt(
     system_prompt: str | None,
     context: str,
     question: str,
+    today: date | None = None,
 ) -> str:
-    """검색 근거와 사용자 질문을 LLM 입력 프롬프트로 조합한다."""
+    """검색 근거와 사용자 질문을 LLM 입력 프롬프트로 조합한다. today가 있으면 맨 위에 '오늘' 줄을 둔다(날짜 줄 켜짐일 때만)."""
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
+    today_line = f"오늘: {today.isoformat()}\n" if today else ""
     # 빈 줄 둘과 [답변 직전 확인]의 '우선 표 근거'·'우선 질의 근거' 두 줄은 규칙 경로(#169에서 삭제)의 흔적이다.
     # 지우면 프롬프트가 바뀌어 답이 달라질 수 있으므로, 프롬프트를 바꾸는 작업(M2 5단계·모델 선정 ①)에서 측정과 함께 정리한다.
-    return f"""{prompt_policy}
+    return f"""{today_line}{prompt_policy}
 
 {MANDATORY_RAG_PROMPT}
 
@@ -5516,6 +5595,32 @@ def _query_chroma_vectors(chroma_collection, question_vector: list[float], retri
     )
 
 
+def _query_chroma_vectors_excluding(
+    chroma_collection,
+    question_vector: list[float],
+    retrieval_limit: int,
+    include_vectors: bool,
+    exclusion: CandidateExclusion,
+) -> dict:
+    """제외 목록을 뺀 벡터 검색 결과 retrieval_limit개. Chroma는 개수를 정해 돌려주므로 늘려 받아 거른 뒤 자른다.
+
+    남은 후보가 모자라고 더 받을 수 있으면 두 배씩 늘린다(VECTOR_EXCLUSION_MAX_RESULTS까지). 순서는 거르기 전과 같다.
+    """
+    fields = ("documents", "metadatas", "ids", "distances", *(("embeddings",) if include_vectors else ()))
+    n_results = retrieval_limit
+    while True:
+        n_results = min(max(n_results * 2, retrieval_limit), VECTOR_EXCLUSION_MAX_RESULTS)
+        result = _query_chroma_vectors(chroma_collection, question_vector, n_results, include_vectors)
+        columns = {field: _first_query_result_list(result, field) for field in fields}
+        keep = [index for index, (meta, chunk_id) in enumerate(zip(columns["metadatas"], columns["ids"]))
+                if not exclusion.excludes(meta, chunk_id)]
+        exhausted = len(columns["ids"]) < n_results or n_results >= VECTOR_EXCLUSION_MAX_RESULTS
+        if len(keep) >= retrieval_limit or exhausted:
+            break
+    keep = keep[:retrieval_limit]
+    return {field: [[values[index] for index in keep if index < len(values)]] for field, values in columns.items()}
+
+
 def _retrieval_parent_chunk_id(meta: dict) -> str:
     """retrieval_chunks metadata에서 부모 raw chunk id를 복원한다."""
     parent_chunk_id = str(meta.get("source_parent_chunk_id") or "").strip()
@@ -5661,18 +5766,21 @@ def _query_vector_results(
     question_vector: list[float],
     retrieval_limit: int,
     include_vectors: bool,
+    exclusion: CandidateExclusion | None = None,
 ) -> dict:
-    """retrieval_chunks와 legacy documents vector search를 raw chunk 후보로 합친다."""
+    """retrieval_chunks와 legacy documents vector search를 raw chunk 후보로 합친다. exclusion은 평가 전용 제외 목록이다."""
+
+    def search(chroma_collection) -> dict:
+        if exclusion:
+            return _query_chroma_vectors_excluding(chroma_collection, question_vector, retrieval_limit, include_vectors,
+                                                   exclusion)
+        return _query_chroma_vectors(chroma_collection, question_vector, retrieval_limit, include_vectors)
+
     retrieval_result = _empty_vector_query_result(include_vectors)
     retrieval_error: str | None = None
     if QUERY_RETRIEVAL_CHUNKS_ENABLED:
         try:
-            raw_retrieval_result = _query_chroma_vectors(
-                retrieval_chunk_collection,
-                question_vector,
-                retrieval_limit,
-                include_vectors,
-            )
+            raw_retrieval_result = search(retrieval_chunk_collection)
             retrieval_result = _expand_retrieval_chunk_vector_result(raw_retrieval_result, include_vectors)
         except Exception as exc:
             retrieval_error = f"{type(exc).__name__}: {exc}"
@@ -5682,11 +5790,7 @@ def _query_vector_results(
                 exc_info=True,
             )
 
-    legacy_result = _tag_vector_result_source(
-        _query_chroma_vectors(collection, question_vector, retrieval_limit, include_vectors),
-        DOCUMENT_COLLECTION_NAME,
-        include_vectors,
-    )
+    legacy_result = _tag_vector_result_source(search(collection), DOCUMENT_COLLECTION_NAME, include_vectors)
     merged = _merge_vector_query_results([retrieval_result, legacy_result], include_vectors)
     merged["retrieval_chunk_hits"] = len(_first_query_result_list(retrieval_result, "ids"))
     merged["legacy_vector_hits"] = len(_first_query_result_list(legacy_result, "ids"))
@@ -5784,7 +5888,7 @@ def _trace_query_retrieval(
     final_metadatas = metadatas[:top_k]
     final_ids = ids[:top_k]
     context = _build_context(final_docs, final_metadatas, final_ids, analysis) if final_docs else ""
-    prompt = _build_rag_prompt(system_prompt, context, question) if final_docs else ""
+    prompt = _build_rag_prompt(system_prompt, context, question, today=_prompt_today()) if final_docs else ""
     final_candidates = [
         _format_trace_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, index < top_k)
         for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids))
@@ -5998,13 +6102,18 @@ def _prepare_query(
     top_k: int,
     system_prompt: str | None = None,
     eval_stages: dict | None = None,
+    exclusion: CandidateExclusion | None = None,
+    as_of: date | None = None,
 ) -> tuple[str | None, list, dict]:
     """
     질문 임베딩 → ChromaDB 검색 → 순위 융합 → 프롬프트 + 출처 조합.
     문서가 없으면 prompt를 None으로 반환한다. 호출자가 빈 응답 처리를 담당한다.
     eval_stages(평가용 dict)를 주면 단계별 후보·문맥·프롬프트를 그 안에 기록한다. 검색·답은 주지 않을 때와 같다.
     검색 순서는 _order_retrieval_results(순위 융합, ADR-0032) 하나로 정한다. /debug/rag-trace도 같은 함수를 쓴다.
+    exclusion·as_of는 평가·학습 데이터 전용이다(ADR-0047·0048). 운영 경로는 주지 않으며, 주지 않으면 검색기 호출이 그대로다.
     """
+    # 제외 목록이 없으면 검색기를 운영과 똑같이 부른다(인자도 더하지 않음)
+    exclude_kwargs = {"exclusion": exclusion} if exclusion else {}
     prepare_start = time.perf_counter()
     analysis = _analyze_query(question)
     embedding_start = time.perf_counter()
@@ -6017,7 +6126,7 @@ def _prepare_query(
 
     chroma_start = time.perf_counter()
     retrieval_limit = min(20, max(top_k, top_k * 3))
-    results = _query_vector_results(question_vector, retrieval_limit, include_vectors=False)
+    results = _query_vector_results(question_vector, retrieval_limit, include_vectors=False, **exclude_kwargs)
     chroma_elapsed = time.perf_counter() - chroma_start
 
     docs = results["documents"][0] if results["documents"] else []
@@ -6027,8 +6136,8 @@ def _prepare_query(
     raw_result_count = len(docs)
     retrieval_chunk_hits = int(results.get("retrieval_chunk_hits") or 0)
     legacy_vector_hits = int(results.get("legacy_vector_hits") or 0)
-    bm25_candidates = _lookup_bm25_raw_chunk_candidates(analysis, limit=top_k)
-    table_fact_candidates = _lookup_lexical_table_fact_candidates(question)
+    bm25_candidates = _lookup_bm25_raw_chunk_candidates(analysis, limit=top_k, **exclude_kwargs)
+    table_fact_candidates = _lookup_lexical_table_fact_candidates(question, **exclude_kwargs)
     bm25_docs, bm25_metadatas, bm25_ids = _candidate_lists(bm25_candidates)
     lexical_docs, lexical_metadatas, lexical_ids = _candidate_lists(table_fact_candidates)
     # 벡터는 거리(작을수록 가까움), BM25·표 사실은 각자의 점수(클수록 가까움). 순위 융합은 점수를 쓰지 않는다.
@@ -6096,10 +6205,14 @@ def _prepare_query(
     context_build_start = time.perf_counter()
     context = _build_context(docs, metadatas, ids, analysis)
     # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
-    prompt = _build_rag_prompt(system_prompt, context, question)
+    prompt = _build_rag_prompt(system_prompt, context, question, today=_prompt_today(as_of))
     if eval_stages is not None:
         eval_stages["context"] = context
         eval_stages["prompt"] = prompt
+        if exclusion or as_of:
+            eval_stages["exclusion"] = {"ledger_ids": len(exclusion.ledger_ids) if exclusion else 0,
+                                        "chunk_ids": len(exclusion.chunk_ids) if exclusion else 0,
+                                        "as_of": as_of.isoformat() if as_of else None}
 
     # 출처 목록 구성: document_id, source(파일명), 페이지, 청크 미리보기, 사용자 표시용 헤더 포함
     sources = []
@@ -6307,7 +6420,7 @@ def _eval_response(response: dict, eval_stages: dict | None, answer_path: str, g
     """평가용 옵션을 켠 요청이면 응답에 eval_trace를 붙인다. 끈 요청(운영)은 응답을 그대로 돌려준다."""
     if eval_stages is None:
         return response
-    trace = {key: value for key, value in eval_stages.items() if key not in ("context", "prompt", "rerank")}
+    trace = {key: value for key, value in eval_stages.items() if key not in ("context", "prompt", "rerank", "exclusion")}
     return {
         **response,
         "eval_trace": {
@@ -6317,6 +6430,7 @@ def _eval_response(response: dict, eval_stages: dict | None, answer_path: str, g
             "prompt": eval_stages.get("prompt", ""),
             "generation": generation,
             "rerank": eval_stages.get("rerank"),
+            "exclusion": eval_stages.get("exclusion"),
             "runtime": _eval_runtime_settings(),
         },
     }
@@ -6349,6 +6463,7 @@ def _eval_runtime_settings() -> dict:
         "embedding_num_ctx": OLLAMA_EMBEDDING_NUM_CTX,
         "num_predict": OLLAMA_NUM_PREDICT,
         "query_retrieval_chunks_enabled": QUERY_RETRIEVAL_CHUNKS_ENABLED,
+        "prompt_date_lines": PROMPT_DATE_LINES_ENABLED,
         "reranker": {
             "model": _reranker_model_info(),
             "candidates": RERANK_CANDIDATES,
@@ -6380,12 +6495,16 @@ async def query_document(request: QueryRequest):
     # _prepare_query는 embed_query·Chroma 조회가 모두 동기 블로킹이다.
     # async 핸들러에서 직접 호출하면 이벤트 루프가 묶여 다른 요청이 대기하므로
     # asyncio.to_thread()로 별도 스레드에서 실행한다.
+    exclusion = CandidateExclusion.of(request.exclude_ledger_ids, request.exclude_chunk_ids)
+    # 평가 전용 칸이 비면 운영과 똑같이 부른다(인자도 더하지 않음)
+    eval_only = {key: value for key, value in (("exclusion", exclusion), ("as_of", request.as_of)) if value}
     prompt, sources, query_metrics = await asyncio.to_thread(
         _prepare_query,
         request.question,
         request.top_k,
         request.system_prompt,
         eval_stages,
+        **eval_only,
     )
 
     if prompt is None:
