@@ -1,21 +1,6 @@
----
-type: 조사 색인
-language: ko
-filename: "{slug}-{yyyymmdd}"
-preset: ai-ml
-criteria_doc: AGENTS.md  # §4 정하기 — 외부 근거는 심사 통과 논문 + 모델 제작사 공식 자료만
-lenses: [서비스, 비즈니스, 유지보수, 확장]
-evidence_tags: true
-excluded_log: outputs/research/검색기록.md  # 로컬 전용, 커밋 안 함
-allow_domains: []
-block_domains: []
----
-
 # 조사 문서와 참조 지도
 
-> 이 폴더는 결정에 쓴 외부 근거를 모아 둔 곳이다. 자료 기준은 AGENTS.md §4(2026-10-25): **학회·학술지 심사를 통과한 논문**과 **모델을 직접 만드는 회사·기관의 공식 문서·기술 보고서**만 쓴다. 소속과 게재처는 원문에서 확인해 적는다. 기준에 맞지 않아 뺀 자료와 검색 과정은 로컬 `outputs/research/검색기록.md`에 둔다(커밋 안 함).
->
-> 맨 위 머리 정보는 이 폴더의 조사 문서 설정이다(자료 기준 문서, 파일 이름 규칙, 결정 관점, 뺀 자료 기록 위치). 조사 문서를 쓰는 사람과 도구가 같은 기준을 따르게 하려고 둔다.
+> 이 폴더는 결정에 쓴 외부 근거를 모아 둔 곳이다. 자료 기준(2026-10-25): **학회·학술지 심사를 통과한 논문**과 **모델을 직접 만드는 회사·기관의 공식 문서·기술 보고서**만 쓴다. 소속과 게재처는 원문에서 확인해 적는다. 기준에 맞지 않아 뺀 자료와 검색 과정은 로컬 `outputs/research/검색기록.md`에 둔다(커밋 안 함).
 
 ## 1. 근거 대장
 
@@ -31,11 +16,11 @@ block_domains: []
 
 > M2 6단계(학습 데이터) 결정부터 정리했다. 표의 [최신 N]·[검토 N]·[제작 N]·[시점 N]은 위 근거 대장의 번호다.
 
-### 작업 규칙
+### 자료 기준
 
 | 프로젝트 부분 | 자료 | 자료의 어느 부분 | 가져온 것 |
 |---|---|---|---|
-| AGENTS.md §4 외부 근거 기준 | ACL 공식 소개, Google Scholar Metrics, Google Research 블로그 [최신 17] | ACL 소개 문장, 계산언어학 분야 h5-index 순위(ACL 236·EMNLP 218), "Google at ACL 2021" | 학회의 신뢰도를 제3자 지표로 확인하는 방법 |
+| 자료 기준(이 문서 머리말) | ACL 공식 소개, Google Scholar Metrics, Google Research 블로그 [최신 17] | ACL 소개 문장, 계산언어학 분야 h5-index 순위(ACL 236·EMNLP 218), "Google at ACL 2021" | 학회의 신뢰도를 제3자 지표로 확인하는 방법 |
 
 ### 학습 데이터 결정(ADR)
 
@@ -69,7 +54,7 @@ block_domains: []
 | | OpenAI "Supervised fine-tuning" [최신 6] | "as realistic as possible" | 같음 |
 | | Kambhatla 외 [최신 21] | "significantly less diverse than human-written ones" | 말투·길이를 바꿔 지시 |
 | | Preference Leakage [최신 22], Anthropic·OpenAI·Gemini 약관 [최신 23·25·26] | 위와 같음 | 초안 모델을 상용 모델로 바꾸지 않는다(버린 대안) |
-| ADR-0045 모호한 질문 | — | — | 첫 묶음 실측과 사용자 결정(외부 자료 없음) |
+| ADR-0045 모호한 질문 | — | — | 첫 묶음 실측과 결정(외부 자료 없음) |
 
 ### 점검 문서·남은 결정
 
