@@ -18,6 +18,7 @@
 | 클라우드 세션에서 이어 하기 | `workflow/클라우드-세션-작업-절차.md` |
 | 데스크탑 켜고 끄기 | `development/local-gpu/데스크탑-작업-시작-종료-절차.md` |
 | 평가 실행(베이스라인·모델 비교) | `development/local-gpu/평가-실행-절차.md` |
+| 학습 예시용 데이터셋 색인 띄우기 | `development/local-gpu/데이터셋-색인-절차.md` |
 | 개발 환경값(포트·compose 명령) | `development/README.md` |
 | DB·색인 백업과 복원 | `deployment/DB-색인-백업-복원-절차.md` |
 

@@ -1,6 +1,7 @@
 """대장 행을 서비스 백엔드 API로 올린다(`python -m corpus upload`, 이슈 #126 결정 3).
 
-- 올릴 행: `service`(서비스 색인, index_status='색인') / `dataset`(데이터셋용 색인, 학습 몫·개인정보 통과)
+- 올릴 행: `service`(서비스 색인, index_status='색인') / `dataset`(데이터셋용 색인, 학습 몫·개인정보 통과 중
+  묶음마다 한 판 — 유효한 판이 있으면 그 판, 없으면 게시일이 가장 늦은 보관 판, ADR-0038)
 - 로그인: 관리자 비밀번호는 실행할 때 입력한다(저장하지 않음). 환경변수 DOCUMIND_ADMIN_PASSWORD가 있으면 그 값
 - 한 문서씩 올리고 진행률로 처리가 끝날 때까지 기다린 뒤 다음 문서로 간다. 백엔드 문서 처리 실행기가
   스레드 1개·대기열 20칸이라, 기다리지 않고 보내면 거절된다
@@ -35,10 +36,11 @@ MAX_CONSECUTIVE_FAILURES = 5
 POLL_SECONDS = 2.0
 DOCUMENT_TIMEOUT_SECONDS = 30 * 60
 
-# 대상별로 올릴 행. 글을 꺼낼 수 있는 형식만, 원본 파일이 있는 행만
+# 대상별로 올릴 행. 글을 꺼낼 수 있는 형식만, 원본 파일이 있는 행만.
+# 데이터셋은 이 조건으로 고른 뒤 묶음마다 한 판만 남긴다(one_version_per_group). '제외' 행(내용 중복·빈 파일)은 넣지 않는다
 SELECTIONS = {
     "service": "index_status = '색인'",
-    "dataset": "split = '학습' AND pii_status = '통과'",
+    "dataset": "split = '학습' AND pii_status = '통과' AND index_status IN ('색인', '보관')",
 }
 
 class UploadStop(Exception):
@@ -72,7 +74,29 @@ def select_rows(con: sqlite3.Connection, target: str, formats: list[str] | None 
         f"AND format IN ({placeholders}) ORDER BY doc_id"
     )
     con.row_factory = sqlite3.Row
-    return [dict(row) for row in con.execute(query, allowed)]
+    rows = [dict(row) for row in con.execute(query, allowed)]
+    return one_version_per_group(rows) if target == "dataset" else rows
+
+
+def one_version_per_group(rows: list[dict]) -> list[dict]:
+    """묶음마다 한 판만 남긴다(ADR-0038). 순서는 그대로 둔다.
+
+    유효한 판('색인')이 있는 묶음은 그 행들, 없는 묶음은 게시일이 가장 늦은 보관 행들(같은 날 올린 글과 첨부는 함께).
+    같은 안내의 옛 판이 근거 블록을 채우지 않게 해 서비스 색인과 같은 모양을 만든다. 묶음이 없는 행은 그대로 둔다.
+    """
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        if row.get("group_id"):
+            groups.setdefault(row["group_id"], []).append(row)
+    keep: set[str] = set()
+    for members in groups.values():
+        live = [row for row in members if row["index_status"] == "색인"]
+        if live:
+            keep.update(row["doc_id"] for row in live)
+            continue
+        latest = max(row.get("posted_at") or "" for row in members)
+        keep.update(row["doc_id"] for row in members if (row.get("posted_at") or "") == latest)
+    return [row for row in rows if not row.get("group_id") or row["doc_id"] in keep]
 
 
 def source_fields(row: dict) -> dict:
