@@ -81,8 +81,61 @@ def test_page_embeds_examples_and_hides_nothing_needed():
     example = data["examples"][0]
     assert data["batch"] == "r1-first" and example["claude"]["verdict"] == "통과"
     assert [block["cited"] for block in example["blocks"]] == [True, False]
-    assert {"8월", "29일"} <= set(example["values"]) and "1" not in example["values"]  # 출처 번호는 칠하지 않음
+    assert ("8월 29일까지", "c0") in painted(example["target"], example["target_marks"])
     assert html.count("</script>") == 1  # 데이터 속 닫는 태그가 화면의 스크립트를 끊지 않게(본래 닫는 태그 하나만)
+
+
+def painted(text, marks):
+    return [(text[start:end], tag) for start, end, tag in marks]
+
+
+def test_highlight_pairs_answer_and_evidence_by_sentence():
+    blocks = {1: "휴학 신청 기간은 8월 18일부터 8월 29일까지이다.\n문의는 학사지원팀 02-000-0000.",
+              2: "1. 등록금: 신입생 행 정보는 금액=1,200,000원이다."}
+    target = "가나대학 휴학은 8월 29일까지 신청합니다. 문의는 학사지원팀(02-000-0000)입니다.\n[출처 1]"
+    marks = review.highlight(target, "가나대학 휴학 언제까지 신청해?", blocks)
+    answer = painted(target, marks["target"])
+    assert ("8월 29일까지", "c0") in answer and ("02-000-0000", "c1") in answer  # 문장마다 다른 색
+    assert all("가나대학" not in text for text, _ in answer)  # 질문을 되풀이한 말은 칠하지 않음
+    assert all("출처" not in text for text, _ in answer)
+    evidence = painted(blocks[1], marks["blocks"][1])
+    assert ("8월 29일까지", "c0") in evidence and ("02-000-0000", "c1") in evidence
+    assert marks["blocks"][2] == []
+
+
+def test_highlight_marks_sentence_missing_from_evidence_but_not_refusal():
+    blocks = {1: "휴학 신청 기간은 8월 18일부터 8월 29일까지이다."}
+    target = "제공된 문서에서는 확인할 수 없습니다. 자세한 내용은 학과 홈페이지 공지를 보세요.\n[출처 1]"
+    marks = review.highlight(target, "복학 언제 해?", blocks)
+    assert painted(target, marks["target"]) == [("자세한 내용은 학과 홈페이지 공지를 보세요.", "miss")]
+
+
+def test_highlight_skips_generic_endings_and_falls_back_to_restated_words():
+    blocks = {1: "어학 장학금 대상: OPIc IM 등급, TOEIC 700점. 신청은 학생지원팀에 하면 됩니다."}
+    target = "OPIc IM 등급이면 어학 장학금을 받을 수 있습니다.\n[출처 1]"
+    marks = review.highlight(target, "OPIc IM 등급이면 어학 장학금 받을 수 있어?", blocks)
+    answer = painted(target, marks["target"])
+    assert ("OPIc IM 등급", "c0") in answer  # 새 글이 없는 '네' 답은 되풀이한 글이라도 칠한다
+    assert all(text not in ("있습니다.", "습니다.") for text, _ in answer)
+
+
+def test_highlight_underlines_question_words_when_target_only_refuses():
+    blocks = {1: "가나대학 기숙사 신청은 생활관 홈페이지에서 한다."}
+    question = "가나대학 기숙사 식비 얼마예요?"
+    marks = review.highlight("제공된 문서에서는 확인할 수 없습니다.\n[출처 1]", question, blocks)
+    assert painted(question, marks["question"]) == [("가나대학 기숙사", "qw")]
+    assert painted(blocks[1], marks["blocks"][1]) == [("가나대학 기숙사", "qw")]
+    answered = review.highlight("기숙사 신청은 생활관 홈페이지에서 합니다.", question, blocks)
+    assert answered["question"] == []  # 답한 예시는 질문 낱말을 따로 표시하지 않는다
+    crowded = {1: "가나대학 기숙사 안내\n" * 6}  # 근거 곳곳에 나오는 낱말은 주제일 뿐이라 표시하지 않는다
+    assert review.highlight("제공된 문서에서는 확인할 수 없습니다.", question, crowded)["question"] == []
+
+
+def test_highlight_splits_evidence_marks_at_line_breaks():
+    blocks = {1: "|구분|금액|\n|신입생|1,200,000원|"}
+    marks = review.highlight("신입생 등록금은 1,200,000원입니다.", "등록금 얼마?", blocks)
+    assert all("\n" not in blocks[1][start:end] for start, end, _ in marks["blocks"][1])
+    assert ("1,200,000원", "c0") in painted(blocks[1], marks["blocks"][1])
 
 
 def test_merge_review_counts_disagreements(tmp_path):
