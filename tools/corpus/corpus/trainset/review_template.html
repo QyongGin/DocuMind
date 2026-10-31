@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>학습 예시 표본 판정</title>
 <style>
-:root{--bg:#fbfaf7;--card:#fff;--ink:#1d1d1b;--sub:#5f5e5a;--line:#e1e0d9;--ok:#0f6e56;--okbg:#e1f5ee;--no:#a32d2d;--nobg:#fcebeb;--hi:#faeeda}
-@media (prefers-color-scheme:dark){:root{--bg:#1a1a19;--card:#232321;--ink:#f0efec;--sub:#c3c2b7;--line:#383835;--ok:#5dcaa5;--okbg:#08362b;--no:#f09595;--nobg:#4a1b1b;--hi:#4a3305}}
+:root{--bg:#fbfaf7;--card:#fff;--ink:#1d1d1b;--sub:#5f5e5a;--line:#e1e0d9;--ok:#0f6e56;--okbg:#e1f5ee;--no:#a32d2d;--nobg:#fcebeb;--hi:#faeeda;--row:#f7f1df}
+@media (prefers-color-scheme:dark){:root{--bg:#1a1a19;--card:#232321;--ink:#f0efec;--sub:#c3c2b7;--line:#383835;--ok:#5dcaa5;--okbg:#08362b;--no:#f09595;--nobg:#4a1b1b;--hi:#4a3305;--row:#33301f}}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
 main{max-width:860px;margin:0 auto;padding:16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 16px}
@@ -27,13 +27,19 @@ input.memo{flex:1;min-width:200px;font:inherit;border:1px solid var(--line);bord
 .claude.show{display:block}
 .agree{font-weight:600}
 footer{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-mark{background:var(--hi);color:inherit}
+mark{color:#1d1d1b;border-radius:3px;padding:0 1px}
+mark.c0{background:#fff176}mark.c1{background:#a7f3c4}mark.c2{background:#a5dcfa}mark.c3{background:#f9b8d4}
+mark.qw{background:none;color:inherit;border-bottom:2px solid #5b8fd6;border-radius:0}
+.row{background:var(--row)}
+.miss{text-decoration:underline dotted var(--no) 2px;text-underline-offset:3px}
+.legend{font-size:13px;color:var(--sub);margin-top:4px}
 </style>
 </head>
 <body>
 <main>
 <h1 style="font-size:20px;font-weight:600">학습 예시 표본 판정</h1>
-<p class="meta">예시마다 질문·목표 답·챗봇이 받은 근거를 보고 <b>통과</b>(챗봇이 이 답을 배워도 됨) 또는 <b>탈락</b>을 고른다. Claude 판정은 고른 뒤에 보인다. 다 끝나면 아래 단추로 판정 기록을 내려받아 채팅에 알려 준다.</p>
+<p class="meta">예시마다 질문·목표 답·챗봇이 받은 근거를 보고 <b>통과</b>(챗봇이 이 답을 배워도 됨) 또는 <b>탈락</b>을 고른다. Claude 판정은 고른 뒤에 보인다. 다 끝나면 아래 단추로 판정 기록을 내려받는다.</p>
+<p class="meta">목표 답의 글이 근거에 글자 그대로 있으면 답과 근거에 <mark class="c0">같은 색</mark>으로 칠하고, 그 근거 줄을 옅게 깔아 표의 행이 보이게 했다. 질문을 되풀이한 말은 칠하지 않는다. <span class="miss">점선 밑줄</span>은 근거에서 같은 글을 못 찾은 문장이다(바꿔 쓴 말인지, 근거에 없는 말인지 본다). 거절만 한 답이면 질문 낱말을 근거에서 <mark class="qw">파란 밑줄</mark>로 표시해, 정말 답이 없는지 찾기 쉽게 했다.</p>
 <div id="list"></div>
 </main>
 <footer><span id="count"></span><button id="save">판정 기록 내려받기</button></footer>
@@ -45,17 +51,21 @@ try{state=JSON.parse(localStorage.getItem(KEY)||"{}")}catch(e){state={}}
 const started=Date.now();
 function persist(){try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){}}
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c])}
-function marked(text,values){let html=esc(text);for(const v of values){if(v.length<2)continue;html=html.split(esc(v)).join("<mark>"+esc(v)+"</mark>")}return html}
+// 칠할 자리 [시작, 끝, 색]을 글에 입힌다. 자리는 겹치지 않고 줄을 넘지 않게 만들어져 온다
+function paint(text,marks){let html="",at=0;for(const [s,e,tag] of marks){html+=esc(text.slice(at,s))+(tag==="miss"?`<span class="miss">`:`<mark class="${tag}">`)+esc(text.slice(s,e))+(tag==="miss"?"</span>":"</mark>");at=e}return html+esc(text.slice(at))}
+function rows(html){return html.split("\n").map(line=>line.includes("<mark")?`<span class="row">${line}</span>`:line).join("\n")}
 function render(){
   const list=document.getElementById("list");list.innerHTML="";
   D.examples.forEach((x,i)=>{
     const s=state[x.id]||{};
     const card=document.createElement("div");card.className="card";
-    const blocks=x.blocks.map(b=>`<details class="${b.cited?"cited":""}" ${b.cited?"open":""}><summary>[출처 ${b.n}]${b.cited?" — 목표 답이 쓴 근거":""}</summary><pre>${marked(b.text,x.values)}</pre></details>`).join("");
+    const blocks=x.blocks.map(b=>{const used=b.marks.length>0;const note=b.cited?" — 목표 답이 단 번호":(used?" — 번호는 안 달았지만 목표 답의 글이 있음":"");return `<details class="${b.cited?"cited":""}" ${b.cited||used?"open":""}><summary>[출처 ${b.n}]${note}</summary><pre>${rows(paint(b.text,b.marks))}</pre></details>`}).join("");
+    const missing=x.target_marks.some(m=>m[2]==="miss");
     const agree=s.human?(s.human===x.claude.verdict?'<span class="agree" style="color:var(--ok)">일치</span>':'<span class="agree" style="color:var(--no)">어긋남</span>'):"";
     card.innerHTML=`<div class="meta">${i+1} / ${D.examples.length} · ${esc(x.kind)} · 묻는 사람 ${esc(x.user)} · ${esc(x.id)}</div>
-<div class="q">${esc(x.question)}</div>
-<div class="label">목표 답(챗봇이 배울 답)</div><div class="target">${esc(x.target)}</div>
+<div class="q">${paint(x.question,x.question_marks)}</div>
+<div class="label">목표 답(챗봇이 배울 답)</div><div class="target">${paint(x.target,x.target_marks)}</div>
+${missing?`<div class="legend"><span class="miss">점선 밑줄</span>: 근거에서 같은 글을 못 찾은 문장</div>`:""}
 ${x.notes.length?`<div class="label">자동 검사 메모</div><div>${x.notes.map(esc).join("<br>")}</div>`:""}
 <div class="label">챗봇이 받은 근거 8개</div>${blocks}
 <div class="choose"><button class="pass ${s.human==="통과"?"on":""}" data-v="통과">통과</button><button class="fail ${s.human==="탈락"?"on":""}" data-v="탈락">탈락</button><input class="memo" placeholder="탈락이면 이유 한 줄" value="${esc(s.memo||"")}"></div>
@@ -68,9 +78,9 @@ ${x.notes.length?`<div class="label">자동 검사 메모</div><div>${x.notes.ma
   const differ=done.filter(x=>state[x.id].human!==x.claude.verdict).length;
   document.getElementById("count").textContent=`판정 ${done.length} / ${D.examples.length} · Claude와 어긋남 ${differ}`;
 }
+function recordLines(){return D.examples.filter(x=>state[x.id]&&state[x.id].human).map(x=>JSON.stringify({id:x.id,human:state[x.id].human,memo:state[x.id].memo||"",claude:x.claude.verdict})).join("\n")+"\n"}
 document.getElementById("save").onclick=()=>{
-  const lines=D.examples.filter(x=>state[x.id]&&state[x.id].human).map(x=>JSON.stringify({id:x.id,human:state[x.id].human,memo:state[x.id].memo||"",claude:x.claude.verdict})).join("\n")+"\n";
-  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([lines],{type:"application/x-ndjson"}));
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([recordLines()],{type:"application/x-ndjson"}));
   a.download=`판정기록-${D.batch}.jsonl`;a.click();
 };
 render();
