@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from datetime import date
 from pathlib import Path
@@ -334,10 +335,11 @@ def known_rate(record: dict) -> float:
     return probe["correct"] / probe["decided"] if probe.get("decided") else 0.5
 
 
-def pick_round(batch_dirs: list[Path], size: int, shapes: tuple[str, ...] = ("ga", "na")) -> list[dict]:
-    """1회차 학습 예시 고르기. 최종 판정 '통과'이고 모든 모양이 자동 검사를 통과한 예시에서 종류 비율(ROUND1)대로 고른다.
+def pick_round(batch_dirs: list[Path], size: int, shapes: tuple[str, ...] = ("ga",)) -> list[dict]:
+    """1회차 학습 예시 고르기. 최종 판정 '통과'이고 고른 모양이 모두 자동 검사를 통과한 예시에서 종류 비율(ROUND1)대로 고른다.
     종류 안에서는 학습 전 A.X가 틀리던 예시를 먼저 넣고(ADR-0042 쓰임 ①), 모자란 종류의 자리는 남은 예시로 같은 순서로 채운다.
-    묶음을 넘어 질문이 겹치면 앞 묶음 것만 쓴다. 모든 모양에 같은 예시를 써서 모양 비교를 같은 문항 짝으로 한다(ADR-0039)."""
+    묶음을 넘어 질문이 겹치면 앞 묶음 것만 쓴다. 모양은 결론 먼저 한 벌이 기본이다(ADR-0050 결정 7 — 인용형 비교는 하지 않음).
+    모양을 여럿 주면 모든 모양에 같은 예시를 쓴다."""
     candidates = [record for batch_dir in batch_dirs for record in merged(batch_dir)
                   if final_verdict(record) == "통과" and all((record.get("keep") or {}).get(shape) for shape in shapes)]
     duplicate_of = checks.duplicates(candidates)
@@ -355,18 +357,28 @@ def pick_round(batch_dirs: list[Path], size: int, shapes: tuple[str, ...] = ("ga
     return sorted(chosen, key=lambda record: order[record["id"]])
 
 
+CITATION = re.compile(r"\[출처 \d+\]")
+
+
+def training_target(text: str) -> str:
+    """학습 파일에 쓰는 목표 답. 거절 문장 뒤에 출처 번호만 있으면 번호를 지운다(ADR-0050 결정 4) — 답이 없는데 출처를 다는
+    버릇을 학습하지 않게. 거절 뒤에 확인처 문장이 있으면 그 번호는 확인처가 나온 근거라 남긴다."""
+    return prompts.REFUSAL if CITATION.sub("", text).strip() == prompts.REFUSAL else text
+
+
 def training_line(record: dict, shape: str) -> dict:
     """학습 파일 한 줄(A.X 채팅 형식): 사용자 = 운영 프롬프트, 답 = 목표 답. A.X는 시스템 메시지 없이 사용자 한 턴으로 답한다
     (deploy/models 틀)."""
     return {"id": record["id"],
             "messages": [{"role": "user", "content": record["prompt"]},
-                         {"role": "assistant", "content": record[f"target_{shape}"]}],
+                         {"role": "assistant", "content": training_target(record[f"target_{shape}"])}],
             "meta": {key: record.get(key) for key in ("kind", "kind_planned", "user_actual", "style", "ledger_id", "group_id")}
                     | {"drafter": (record.get("drafter") or {}).get("model"), "shape": shape}}
 
 
-def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple[str, ...] = ("ga", "na")) -> dict:
-    """1회차 학습 파일: 모양마다 round-<모양>.jsonl(같은 예시), 고른 예시의 종류·A.X 아는 정도를 manifest.json에 남긴다."""
+def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple[str, ...] = ("ga",)) -> dict:
+    """1회차 학습 파일: 모양마다 round-<모양>.jsonl(같은 예시), 고른 예시의 종류·A.X 아는 정도·거절 뒤 출처 번호를 지운 수를
+    manifest.json에 남긴다."""
     chosen = pick_round(batch_dirs, size, shapes)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -383,7 +395,10 @@ def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple
 
     manifest = {"size": len(chosen), "batches": [Path(batch_dir).name for batch_dir in batch_dirs], "shapes": list(shapes),
                 "kinds": dict(Counter(record["kind"] for record in chosen)),
-                "known": dict(Counter(known(record) for record in chosen)), "ids": [record["id"] for record in chosen]}
+                "known": dict(Counter(known(record) for record in chosen)),
+                "removed_refusal_citations": {shape: sum(training_target(record[f"target_{shape}"]) != record[f"target_{shape}"]
+                                                         for record in chosen) for shape in shapes},
+                "ids": [record["id"] for record in chosen]}
     (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
     return manifest
 
