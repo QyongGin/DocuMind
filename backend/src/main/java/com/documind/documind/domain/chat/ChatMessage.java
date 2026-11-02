@@ -42,6 +42,10 @@ public class ChatMessage {
     @Column(columnDefinition = "JSON")
     private String sourceDocs;
 
+    // 거절 문장만 나간 답(정해 둔 안내를 붙인 답)인지. 관리자 '못 답한 질문' 목록에 쓴다(ADR-0052 결정 5)
+    @Column(nullable = false)
+    private boolean refused;
+
     // NOT NULL, updatable=false: 최초 저장 후 변경 불가
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -76,5 +80,18 @@ public class ChatMessage {
         this.answer = answer;
         this.rawAnswer = rawAnswer;
         this.sourceDocs = sourceDocs;
+    }
+
+    /**
+     * 화면용 답과 모델 원문 답, 출처 목록에 더해 거절 문장만 나간 답인지를 저장한다(ADR-0052 결정 5).
+     *
+     * @param answer     화면용 답(출처 번호를 지운 것)
+     * @param rawAnswer  모델 원문 답
+     * @param sourceDocs 출처 목록 JSON
+     * @param refused    거절 문장만 나간 답인지
+     */
+    public void complete(String answer, String rawAnswer, String sourceDocs, boolean refused) {
+        complete(answer, rawAnswer, sourceDocs);
+        this.refused = refused;
     }
 }

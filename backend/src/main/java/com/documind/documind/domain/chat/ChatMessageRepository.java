@@ -1,5 +1,7 @@
 package com.documind.documind.domain.chat;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -11,6 +13,9 @@ import java.util.Optional;
 
 /** chat_messages 테이블 CRUD를 담당하는 JPA Repository */
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
+
+    /** 거절 문장만 나간 답을 한 쪽씩 조회한다. 관리자 '못 답한 질문' 목록에 사용한다(ADR-0052 결정 5). */
+    Page<ChatMessage> findByRefusedTrue(Pageable pageable);
 
     /** 특정 세션에 속한 메시지를 시간순으로 조회한다. 세션 상세 조회 시 대화 흐름 재현에 사용한다. */
     List<ChatMessage> findByChatSessionIdOrderByCreatedAtAsc(Long sessionId);

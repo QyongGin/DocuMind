@@ -163,7 +163,8 @@ class SseStreamingContext {
             if (answerStored) {
                 return;
             }
-            persistenceService.completeMessage(messageId, sessionId, screenAnswer.text(), rawAnswer, sourcesJson);
+            persistenceService.completeMessage(messageId, sessionId, screenAnswer.text(), rawAnswer, sourcesJson,
+                    screenAnswer.refusedOnly());
             answerStored = true;
             normallyCompleted = true;
         }
@@ -236,7 +237,7 @@ class SseStreamingContext {
         synchronized (persistenceLock) {
             if (!answerStored) {
                 // 안전 오류 문장은 모델 원문이 아니지만 원문 칸도 같은 글로 둔다(기록을 다시 열 때 그대로 보인다)
-                persistenceService.completeMessage(messageId, sessionId, message, message, "[]");
+                persistenceService.completeMessage(messageId, sessionId, message, message, "[]", false);
                 answerStored = true;
             }
         }

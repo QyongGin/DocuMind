@@ -13,4 +13,13 @@ import java.util.List;
  */
 public record ScreenAnswer(String text, List<ReferenceDocument> references, RefusalGuidance guidance,
                            List<Integer> citedSources) {
+
+    /**
+     * 거절 문장만 나간 답인지(정해 둔 안내를 붙인 답). 관리자 '못 답한 질문'에 모은다(ADR-0052 결정 5).
+     *
+     * @return 거절 문장만 있는 답이면 true
+     */
+    public boolean refusedOnly() {
+        return guidance != null;
+    }
 }

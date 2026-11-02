@@ -26,10 +26,13 @@ public class ChatStreamPersistenceService {
      * @param answer 화면용 답(출처 번호를 지운 것)
      * @param rawAnswer 모델 원문 답(출처 번호 포함)
      * @param sourcesJson 답변 출처 JSON 문자열
+     * @param refused 거절 문장만 나간 답인지(관리자 '못 답한 질문')
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void completeMessage(Long messageId, Long sessionId, String answer, String rawAnswer, String sourcesJson) {
-        chatMessageRepository.findById(messageId).ifPresent(message -> message.complete(answer, rawAnswer, sourcesJson));
+    public void completeMessage(Long messageId, Long sessionId, String answer, String rawAnswer, String sourcesJson,
+                                boolean refused) {
+        chatMessageRepository.findById(messageId)
+                .ifPresent(message -> message.complete(answer, rawAnswer, sourcesJson, refused));
         chatSessionRepository.updateUpdatedAt(sessionId, LocalDateTime.now());
     }
 
