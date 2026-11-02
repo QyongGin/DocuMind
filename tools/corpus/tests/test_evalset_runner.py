@@ -90,6 +90,21 @@ def test_run_marks_server_without_eval_trace_as_failure(evalset, tmp_path):
     assert "eval_trace" in runner.read_answers(tmp_path / "run")["ev-0001"]["error"]
 
 
+def test_run_fixes_today_only_when_asked(evalset, tmp_path):
+    """프롬프트 '오늘' 날짜(ADR-0047)를 고정하면 요청과 실행 기록에 남고, 주지 않으면 요청이 전과 같다.
+    다른 날 잰 실행과 짝 비교할 때 날짜 줄 차이가 답을 바꾸지 않게 한다."""
+    fixed = FakeSession()
+    run(evalset, tmp_path / "fixed", fixed, ids=["ev-0001"], as_of="2026-10-31")
+    assert fixed.requests[0][1]["as_of"] == "2026-10-31"
+    assert json.loads((tmp_path / "fixed" / runner.MANIFEST).read_text(encoding="utf-8"))["as_of"] == "2026-10-31"
+    plain = FakeSession()
+    run(evalset, tmp_path / "plain", plain, ids=["ev-0001"])
+    assert "as_of" not in plain.requests[0][1]
+    assert json.loads((tmp_path / "plain" / runner.MANIFEST).read_text(encoding="utf-8"))["as_of"] is None
+    with pytest.raises(ValueError, match="as_of"):  # 한 실행 폴더에 다른 날짜를 섞지 않는다
+        run(evalset, tmp_path / "fixed", FakeSession(), ids=["ev-0002"], as_of="2026-11-02")
+
+
 def test_run_records_rank_fusion_and_does_not_send_a_mode(evalset, tmp_path):
     session = FakeSession()
     run(evalset, tmp_path / "run", session, ids=["ev-0001"])
