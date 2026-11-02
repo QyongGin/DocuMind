@@ -22,6 +22,9 @@ DocuMind는 사내 문서를 외부로 보내지 않는 on-premise(내부 설치
 
 - 하나의 issue(이슈) 또는 하나의 명확한 목표만 한 branch(브랜치)에 담는다.
 - feature(기능 추가), fix(버그 수정), refactor(동작 유지 구조 개선), docs(문서), chore(잡무성 변경)를 한 PR에 과도하게 섞지 않는다.
+- PR 하나에는 한 가지 목적의 변경만 담는다. 작업(이슈) 하나는 PR 하나 이상이 될 수 있지만, 작업 여러 개를 PR 하나에 넣지 않는다. 구글 코드 리뷰 지침은 알맞은 크기를 "one self-contained change"로 보고([Small CLs](https://google.github.io/eng-practices/review/developer/small-cls.html)), GitHub 문서는 커진 PR을 "smaller pull requests that each serve one purpose"로 나누라고 한다([Helping others review your changes](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/getting-started/helping-others-review-your-changes)).
+- 작업을 시작할 때 이슈를 만들고, 작업이 끝나면 그 PR을 바로 올려 머지한다(본문에 `Closes #이슈`). 여러 작업을 한 브랜치에 쌓아 단계 끝에 한꺼번에 올리지 않고, 작업 계획에 'PR'을 따로 한 단계로 두지 않는다. 결정 문서(ADR)와 보고서는 그 변경의 PR에 함께 넣는다.
+- 한 작업이 서버 API와 그 API를 쓰는 코드에 걸치면 서버 쪽 PR을 먼저 따로 올려도 된다. 두 PR 본문에 서로를 적는다.
 - 관련 없는 대규모 리팩토링은 현재 작업에 끼워 넣지 않고 별도 issue로 분리한다.
 - 기존 사용자 동작, API response contract(응답 계약), DB schema(스키마), RAG evidence(근거) 품질을 바꾸는 작업은 테스트 또는 수동 검증 기록을 남긴다.
 - 큰 작업은 parent issue(상위 이슈) 또는 Epic(상위 관리 이슈)로 만들고, 실제 구현은 child issue(파생 이슈) 단위로 나눈다.
