@@ -17,6 +17,7 @@ import math
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 from data import load_examples, split_examples, to_prompt_completion
@@ -49,11 +50,18 @@ def sha256_of(path: str) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def input_ids_of(encoded) -> list[int]:
+    """apply_chat_template(tokenize=True) 결과에서 토큰 번호만 꺼낸다.
+
+    Transformers 5는 dict가 아닌 BatchEncoding(Mapping)을 돌려준다. dict로 가르면 키 개수를 토큰 수로 센다.
+    """
+    return list(encoded["input_ids"] if isinstance(encoded, Mapping) else encoded)
+
+
 def check_chat_template(tokenizer) -> None:
     """학습에 쓰는 채팅 틀이 서빙(Ollama) 틀과 같은 입력을 만드는지, 끝 토큰이 한 토큰인지 확인한다."""
-    hello = tokenizer.apply_chat_template([{"role": "user", "content": "안녕하세요"}], add_generation_prompt=True,
-                                          tokenize=True)
-    hello_ids = hello["input_ids"] if isinstance(hello, dict) else hello
+    hello_ids = input_ids_of(tokenizer.apply_chat_template([{"role": "user", "content": "안녕하세요"}],
+                                                           add_generation_prompt=True, tokenize=True))
     if len(hello_ids) != EXPECTED_HELLO_TOKENS:
         raise SystemExit(f"채팅 틀 확인 실패: '안녕하세요'가 {len(hello_ids)}토큰(서빙 틀은 {EXPECTED_HELLO_TOKENS}토큰)")
     if len(tokenizer.encode(EOS_TOKEN, add_special_tokens=False)) != 1:
@@ -64,8 +72,7 @@ def example_lengths(tokenizer, examples: list[dict]) -> list[int]:
     """채팅 틀을 씌운 프롬프트와 답의 토큰 수(끝 토큰 포함)."""
     lengths = []
     for example in examples:
-        ids = tokenizer.apply_chat_template(example["messages"], tokenize=True)
-        lengths.append(len(ids["input_ids"] if isinstance(ids, dict) else ids))
+        lengths.append(len(input_ids_of(tokenizer.apply_chat_template(example["messages"], tokenize=True))))
     return lengths
 
 
