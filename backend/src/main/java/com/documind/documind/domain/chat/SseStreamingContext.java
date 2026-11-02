@@ -201,6 +201,7 @@ class SseStreamingContext {
         outbound.put("answer", screenAnswer.text());
         outbound.put("references", screenAnswer.references());
         outbound.put("guidance", screenAnswer.guidance());
+        outbound.put("links", screenAnswer.links());
         return objectMapper.writeValueAsString(outbound);
     }
 

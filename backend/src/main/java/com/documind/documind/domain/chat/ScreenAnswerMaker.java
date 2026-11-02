@@ -31,6 +31,10 @@ public class ScreenAnswerMaker {
     private static final Pattern CITATION = Pattern.compile("\\s*" + CITATION_TEXT);
     private static final Pattern NUMBER = Pattern.compile("\\d+");
     private static final Pattern ANGLE_LINK = Pattern.compile("<(https?://[^\\s<>]+)>");
+    // 답 속 링크. 끝은 공백·꺾쇠·따옴표·괄호·한글 앞에서 끊는다(모델이 '…/form이며'처럼 링크 바로 뒤에 조사를 붙여 쓴다)
+    private static final Pattern LINK = Pattern.compile("https?://[^\\s<>\"'()\\[\\]{}\\u3131-\\u318E\\uAC00-\\uD7A3]+");
+    // 링크 끝에 붙은 문장부호는 링크가 아니라 문장의 것이다(문장 끝 마침표, 쉼표 등)
+    private static final String TRAILING_PUNCTUATION = ".,;:!?";
     private static final Pattern BOARD_NUMBER = Pattern.compile("\\(\\d+\\)$");
     // 대장의 게시판 이름은 '게시판(번호)' 또는 분류가 붙은 '게시판(번호)·분류'(예: 정보목록(32)·학사규정) 꼴이다
     private static final String BOARD_CATEGORY_SEPARATOR = "·";
@@ -80,9 +84,31 @@ public class ScreenAnswerMaker {
         }
         String text = tidy(ANGLE_LINK.matcher(CITATION.matcher(raw).replaceAll("")).replaceAll("$1"));
         if (text.equals(refusalSentence)) {
-            return new ScreenAnswer(text, List.of(), refusalGuidance, List.copyOf(cited));
+            return new ScreenAnswer(text, List.of(), refusalGuidance, List.copyOf(cited), findLinks(text));
         }
-        return new ScreenAnswer(text, references(cited, sources), null, List.copyOf(cited));
+        return new ScreenAnswer(text, references(cited, sources), null, List.copyOf(cited), findLinks(text));
+    }
+
+    /**
+     * 답 글 속 링크를 찾는다. 끝은 공백·꺾쇠·따옴표·괄호·한글 앞에서 끊고, 끝에 붙은 문장부호는 뺀다.
+     *
+     * @param text 화면용 답 글
+     * @return 나온 순서대로의 링크와 그 자리
+     */
+    static List<AnswerLink> findLinks(String text) {
+        List<AnswerLink> links = new ArrayList<>();
+        Matcher matcher = LINK.matcher(text);
+        while (matcher.find()) {
+            int end = matcher.end();
+            while (end > matcher.start() && TRAILING_PUNCTUATION.indexOf(text.charAt(end - 1)) >= 0) {
+                end--;
+            }
+            // 'https://' 뒤에 주소가 없으면 링크가 아니다
+            if (end > text.indexOf("://", matcher.start()) + 3) {
+                links.add(new AnswerLink(matcher.start(), end, text.substring(matcher.start(), end)));
+            }
+        }
+        return List.copyOf(links);
     }
 
     private List<ReferenceDocument> references(List<Integer> cited, List<Map<String, Object>> sources) {

@@ -198,6 +198,19 @@ class SseStreamingContextTest {
     }
 
     @Test
+    @DisplayName("done 이벤트에 답 속 링크와 그 자리를 담음")
+    void onToken_sendsAnswerLinks() throws Exception {
+        SseStreamingContext context = createContext();
+
+        context.onToken("{\"done\":true,\"answer\":\"신청은 https://www.ganada.ac.kr/form에서 합니다.\",\"sources\":[]}");
+
+        ArgumentCaptor<SseEmitter.SseEventBuilder> events = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
+        verify(emitter).send(events.capture());
+        String done = dataOf(events.getValue());
+        assertTrue(done.contains("\"links\":[{\"start\":4,\"end\":33,\"url\":\"https://www.ganada.ac.kr/form\"}]"), done);
+    }
+
+    @Test
     @DisplayName("처리 기록 저장이 실패해도 done 이벤트를 보내고 스트림을 정상 종료함")
     void onToken_whenTraceSaveFails_stillCompletesStream() throws Exception {
         SseStreamingContext context = createContext();
