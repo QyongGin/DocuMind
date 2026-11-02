@@ -5,11 +5,10 @@ import lombok.Getter;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 
 /**
  * GET /api/chat/sessions/{id} 상세 조회 응답에 포함되는 단일 메시지 DTO.
- * sources는 DB의 JSON 문자열을 역직렬화한 결과이며, 역직렬화 실패 시 빈 리스트로 폴백한다.
+ * 검색 후보(청크 본문, 업로드 시각)는 넣지 않고 관리자 개발자 정보 API로만 준다(ADR-0052).
  */
 @Getter
 @Builder
@@ -24,10 +23,7 @@ public class ChatMessageResponse {
     // LLM 답변. 스트리밍 중단 시 null일 수 있음
     private String answer;
 
-    // 답변 근거 문서 목록. DB의 JSON 문자열을 역직렬화한 결과
-    private List<Map<String, Object>> sources;
-
-    // 참고한 문서(답이 쓴 근거, ADR-0050). 화면은 sources 대신 이것을 보인다
+    // 참고한 문서(답이 쓴 근거, ADR-0050)
     private List<ReferenceDocument> references;
 
     // 거절 문장만 있는 답에 붙이는 정해 둔 안내. 그 밖에는 null

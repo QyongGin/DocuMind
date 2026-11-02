@@ -157,7 +157,7 @@ class SseStreamingContext {
                 : currentAnswer();
         // 화면용 답(ADR-0051): 출처 번호를 지우고 참고한 문서·안내를 만들어 done 이벤트에 담는다. 화면은 흐른 글을 이 답으로 바꾼다
         ScreenAnswer screenAnswer = screenAnswerMaker.make(rawAnswer, enrichedSources);
-        String outboundJson = outboundDone(enrichedSources, screenAnswer);
+        String outboundJson = outboundDone(screenAnswer);
 
         synchronized (persistenceLock) {
             if (answerStored) {
@@ -192,14 +192,12 @@ class SseStreamingContext {
         return sourceDocumentMetadataEnricher.enrich(sources);
     }
 
-    // 화면에 보낼 칸만 고른다. AI 서버가 보낸 처리 기록(trace) 같은 내부 정보는 브라우저로 보내지 않는다(ADR-0052)
-    private String outboundDone(List<Map<String, Object>> sources, ScreenAnswer screenAnswer)
-            throws JsonProcessingException {
+    // 화면에 보낼 칸만 고른다. 검색 후보와 처리 기록(trace) 같은 내부 정보는 브라우저로 보내지 않는다(ADR-0052)
+    private String outboundDone(ScreenAnswer screenAnswer) throws JsonProcessingException {
         Map<String, Object> outbound = new LinkedHashMap<>();
         outbound.put("done", true);
         outbound.put("messageId", messageId);
         outbound.put("answer", screenAnswer.text());
-        outbound.put("sources", sources);
         outbound.put("references", screenAnswer.references());
         outbound.put("guidance", screenAnswer.guidance());
         return objectMapper.writeValueAsString(outbound);

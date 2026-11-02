@@ -142,9 +142,6 @@ class ChatHistoryTest {
         ChatMessageResponse msg = result.getMessages().get(0);
         assertEquals("테스트 질문", msg.getQuestion());
         assertEquals("테스트 답변", msg.getAnswer());
-        // H2 JSON 컬럼 타입과 JPA String 매핑의 호환성 차이로 sourceDocs가 null로 읽힐 수 있음.
-        // deserializeSources()가 null 입력 시 빈 리스트로 폴백하는 것을 검증 (NPE 발생 않음)
-        assertNotNull(msg.getSources());
     }
 
     @Test
@@ -224,7 +221,6 @@ class ChatHistoryTest {
         assertEquals(userSession.getId(), result.getSessionId());
         assertEquals(1, result.getMessages().size());
         assertEquals("로그인 테스트 질문", result.getMessages().get(0).getQuestion());
-        assertNotNull(result.getMessages().get(0).getSources());
     }
 
     @Test

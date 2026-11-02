@@ -162,6 +162,23 @@ class SseStreamingContextTest {
     }
 
     @Test
+    @DisplayName("검색 후보는 대화 기록에 저장하고, 브라우저로 보내는 done 이벤트에는 넣지 않음")
+    void onToken_keepsSourcesFromBrowserButStoresThem() throws Exception {
+        SseStreamingContext context = createContext();
+
+        context.onToken("{\"done\":true,\"answer\":\"휴학 신청은 8월 29일까지입니다.\","
+                + "\"sources\":[{\"source\":\"휴학 안내.pdf\",\"content\":\"가나대학 휴학 청크 본문\"}]}");
+
+        verify(persistenceService).completeMessage(eq(MESSAGE_ID), eq(SESSION_ID), any(), any(),
+                eq("[{\"source\":\"휴학 안내.pdf\",\"content\":\"가나대학 휴학 청크 본문\"}]"));
+        ArgumentCaptor<SseEmitter.SseEventBuilder> events = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
+        verify(emitter).send(events.capture());
+        String done = dataOf(events.getValue());
+        assertTrue(done.contains("\"answer\":\"휴학 신청은 8월 29일까지입니다.\""), done);
+        assertFalse(done.contains("sources") || done.contains("청크 본문"), done);
+    }
+
+    @Test
     @DisplayName("처리 기록 저장이 실패해도 done 이벤트를 보내고 스트림을 정상 종료함")
     void onToken_whenTraceSaveFails_stillCompletesStream() throws Exception {
         SseStreamingContext context = createContext();
