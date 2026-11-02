@@ -3702,3 +3702,48 @@ button:disabled {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* 관리자 못 답한 질문(ADR-0052 결정 5) */
+.unanswered-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.unanswered-item {
+  display: grid;
+  gap: 6px;
+  padding: 18px 0;
+  border-top: 1px solid var(--chat-border);
+}
+
+.unanswered-item:last-child {
+  border-bottom: 1px solid var(--chat-border);
+}
+
+.unanswered-item__question {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.unanswered-item__meta,
+.unanswered-empty {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.unanswered-item__dev-info {
+  margin-top: 6px;
+}
+
+.unanswered-more {
+  justify-self: start;
+  min-height: 40px;
+}

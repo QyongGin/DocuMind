@@ -13,6 +13,7 @@ import { getFeedbackStats } from '../../services/feedbackStatsApi.js'
 import { getPromptConfig, updatePromptConfig } from '../../services/promptApi.js'
 import inqLogoUrl from '../../images/inq-logo.png'
 import inqSymbolUrl from '../../images/inq-symbol.png'
+import { UnansweredQuestions } from './UnansweredQuestions.jsx'
 
 // 업로드 허용 형식. 백엔드 DocumentFileType, AI 서버 ALLOWED_EXTENSIONS와 같게 유지한다
 const UPLOAD_EXTENSIONS = ['pdf', 'hwp', 'hwpx', 'docx', 'pptx', 'xlsx', 'html', 'htm']
@@ -539,6 +540,13 @@ function AdminDashboardPage() {
           >
             프롬프트
           </button>
+          <button
+            type="button"
+            className={activeSection === 'unanswered' ? 'admin-rail__item admin-rail__item--active' : 'admin-rail__item'}
+            onClick={() => setActiveSection('unanswered')}
+          >
+            못 답한 질문
+          </button>
         </nav>
 
         <div className="admin-rail__bottom">
@@ -819,6 +827,8 @@ function AdminDashboardPage() {
             </form>
           </section>
         )}
+
+        {activeSection === 'unanswered' && <UnansweredQuestions />}
       </main>
 
       {isUploading && (
