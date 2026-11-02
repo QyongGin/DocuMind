@@ -6,6 +6,8 @@ name: CI
 on:
   pull_request:
     branches: [develop, main]
+    # edited: PR 제목·본문을 고치면 PR 규칙 검사를 다시 한다(모듈 테스트도 함께 다시 돌아 ci-ok가 한 실행의 결과만 모은다)
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
 concurrency:
@@ -122,13 +124,36 @@ jobs:
       - run: npm run lint
       - run: npm run build
 
+  pr-rules:
+    name: PR 규칙 (제목·이슈 연결·크기)
+    # CONTRIBUTING.md 0·2·6장. 제목 형식과 이슈 연결이 없으면 실패, 크기와 브랜치 이름은 경고만
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: 검사 스크립트 테스트
+        run: python -m unittest discover -s .github/scripts -p "test_*.py"
+      - name: 제목 형식과 이슈 연결(없으면 실패), 크기와 브랜치 이름(경고)
+        # 제목·본문은 셸에 끼워 넣지 않고 환경 변수로만 넘긴다
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python .github/scripts/check_pr_rules.py
+
   ci-ok:
     name: ci-ok
-    needs: [changes, corpus, ai-server, backend, frontend]
+    needs: [changes, corpus, ai-server, backend, frontend, pr-rules]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: 모듈 잡 결과 모으기(실패·취소가 하나라도 있으면 실패)
+      - name: 모듈 잡과 PR 규칙 결과 모으기(실패·취소가 하나라도 있으면 실패)
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
