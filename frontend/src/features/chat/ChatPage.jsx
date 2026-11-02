@@ -7,6 +7,8 @@ import { openChatStream } from '../../services/chatStream.js'
 import { getAuthProfile, hasAccessToken } from '../../services/authStorage.js'
 import { deleteChatSession, getChatSession, listChatSessions } from '../../services/chatHistoryApi.js'
 import { getSessionKey } from '../../utils/sessionKey.js'
+import { ReferenceList } from './ReferenceList.jsx'
+import { RefusalGuidance } from './RefusalGuidance.jsx'
 import inqLogoUrl from '../../images/inq-logo.png'
 import inqSymbolUrl from '../../images/inq-symbol.png'
 
@@ -274,6 +276,9 @@ function ChatPage() {
   const [messageId, setMessageId] = useState(null)
   const [answer, setAnswer] = useState('')
   const [sources, setSources] = useState([])
+  // 화면용 답의 참고한 문서와 거절 안내(ADR-0050). sources(검색 후보)는 관리자에게만 보인다
+  const [references, setReferences] = useState([])
+  const [guidance, setGuidance] = useState(null)
   const [isStreaming, setIsStreaming] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [feedback, setFeedback] = useState(null)
@@ -405,6 +410,8 @@ function ChatPage() {
       setMessageId(lastMessage.messageId ?? null)
       setAnswer(lastMessage.answer ?? '')
       setSources(Array.isArray(lastMessage.sources) ? lastMessage.sources : [])
+      setReferences(Array.isArray(lastMessage.references) ? lastMessage.references : [])
+      setGuidance(lastMessage.guidance ?? null)
       setFeedback(feedbackFromScore(lastMessage.feedbackScore))
     } catch (error) {
       setHistoryError(error.message)
@@ -505,6 +512,8 @@ function ChatPage() {
     setQuestion('')
     setAnswer('')
     setSources([])
+    setReferences([])
+    setGuidance(null)
     setErrorMessage('')
     setFeedback(null)
     setFeedbackError('')
@@ -517,13 +526,21 @@ function ChatPage() {
       sessionKey,
       topK: env.defaultTopK,
       onToken: appendAnswerToken,
-      onDone: ({ answer: completedAnswer, messageId: completedMessageId, sources: nextSources }) => {
+      onDone: ({
+        answer: completedAnswer,
+        messageId: completedMessageId,
+        sources: nextSources,
+        references: nextReferences,
+        guidance: nextGuidance,
+      }) => {
         flushBufferedAnswerTokens()
         if (completedAnswer) {
           setAnswer(completedAnswer)
         }
         setMessageId(completedMessageId ?? null)
         setSources(nextSources)
+        setReferences(nextReferences)
+        setGuidance(nextGuidance)
         setIsStreaming(false)
         loadHistory()
       },
@@ -592,6 +609,8 @@ function ChatPage() {
     setMessageId(null)
     setAnswer('')
     setSources([])
+    setReferences([])
+    setGuidance(null)
     setErrorMessage('')
     setFeedback(null)
     setFeedbackError('')
@@ -616,6 +635,8 @@ function ChatPage() {
       setMessageId(null)
       setAnswer('')
       setSources([])
+      setReferences([])
+      setGuidance(null)
       setFeedback(null)
       setFeedbackError('')
       setErrorMessage('')
@@ -825,9 +846,12 @@ function ChatPage() {
                   </article>
                 </div>
 
-                {sourceGroups.length > 0 && (
-                  <section className="source-card" aria-label="출처 문서">
-                    <h2>출처 문서</h2>
+                <RefusalGuidance guidance={guidance} />
+                <ReferenceList references={references} />
+
+                {isAdmin && sourceGroups.length > 0 && (
+                  <section className="source-card" aria-label="검색 근거(관리자)">
+                    <h2>검색 근거(관리자)</h2>
                     <ol className="source-list">
                       {sourceGroups.map((group, index) => (
                         <li key={group.key}>
