@@ -26,29 +26,34 @@ SENTENCE_END = re.compile(r"(?<=[다요])[.!?](?=\s|$)|\n")
 GENERIC = re.compile(r"(?:해야|할수|수|하시면|하면|있|없|합|됩|입|습|니다|\W)+")  # '있습니다.' 같은 말끝만인 글은 칠하지 않는다
 
 
+def _by_kind(records: list[dict], rng: random.Random) -> dict[str, list[dict]]:
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for record in records:
+        groups[record["kind"]].append(record)
+    for members in groups.values():
+        rng.shuffle(members)
+    return groups
+
+
+def _round_robin(groups: dict[str, list[dict]], limit: int) -> list[dict]:
+    """종류를 돌아가며 하나씩 꺼낸다(한 종류로 쏠리지 않게)."""
+    out, kinds = [], sorted(groups)
+    while len(out) < limit and any(groups[kind] for kind in kinds):
+        for kind in kinds:
+            if groups[kind] and len(out) < limit:
+                out.append(groups[kind].pop())
+    return out
+
+
 def sample(records: list[dict], size: int, seed: int) -> list[dict]:
-    """판정된 예시에서 표본을 고른다. 탈락을 먼저(표본의 절반까지), 나머지는 종류를 돌아가며 통과에서."""
+    """판정된 예시에서 표본을 고른다. 탈락을 먼저(표본의 절반까지), 나머지는 통과에서. 둘 다 종류를 돌아가며 고른다
+    (ADR-0037 결정 2: 답·거절·표 질문을 고르게)."""
     rng = random.Random(seed)
     judged = [record for record in records if record.get("verdict") in ("통과", "탈락")]
-    failed = [record for record in judged if record["verdict"] == "탈락"]
-    rng.shuffle(failed)
-    chosen = failed[: int(size * MAX_FAIL_SHARE)]
-    by_kind: dict[str, list[dict]] = defaultdict(list)
-    for record in judged:
-        if record["verdict"] == "통과":
-            by_kind[record["kind"]].append(record)
-    for members in by_kind.values():
-        rng.shuffle(members)
-    kinds = sorted(by_kind)
-    while len(chosen) < size and any(by_kind[kind] for kind in kinds):
-        for kind in kinds:
-            if by_kind[kind] and len(chosen) < size:
-                chosen.append(by_kind[kind].pop())
-    for record in failed:  # 통과가 모자라면 남은 탈락으로 채운다
-        if len(chosen) >= size:
-            break
-        if record not in chosen:
-            chosen.append(record)
+    failed = _by_kind([record for record in judged if record["verdict"] == "탈락"], rng)
+    chosen = _round_robin(failed, int(size * MAX_FAIL_SHARE))
+    chosen += _round_robin(_by_kind([record for record in judged if record["verdict"] == "통과"], rng), size - len(chosen))
+    chosen += _round_robin(failed, size - len(chosen))  # 통과가 모자라면 남은 탈락으로 채운다
     order = {record["id"]: number for number, record in enumerate(records)}
     return sorted(chosen, key=lambda record: order[record["id"]])
 
@@ -162,20 +167,63 @@ def highlight(target: str, question: str, blocks: dict[int, str]) -> dict:
             "blocks": {number: _without_overlap(marks) for number, marks in block_marks.items()}}
 
 
+META_LINE = re.compile(r"^(문서|게시|청크|섹션):\s*")
+SECTION_HEAD = re.compile(r"^[^:]{1,20}:\s*$")  # '질문 의도 추출 정보:' 같은 칸 제목 줄
+LINE_LABEL = re.compile(r"^-\s*[^:]{1,20}:\s*")  # '- 관련 근거: ' 같은 줄 앞머리
+CONTEXT_LINES = 1  # 칠한 줄 앞뒤로 함께 보일 줄 수
+
+
+def block_head(text: str) -> dict:
+    """근거 블록 머리의 문서 이름과 게시일."""
+    head = {}
+    for line in text.splitlines():
+        match = META_LINE.match(line)
+        if match and match.group(1) in ("문서", "게시"):
+            head[match.group(1)] = line[match.end():].strip()
+    return {"title": head.get("문서", ""), "posted": head.get("게시", "")}
+
+
+def shown_lines(text: str, marks: list[list], context: int = CONTEXT_LINES) -> list[int]:
+    """사람이 볼 근거 줄: 칠한 글이 있는 줄과 그 앞뒤 줄. 머리 줄(문서·게시·청크·섹션), 칸 제목 줄, 빈 줄은 빼고,
+    같은 글이 근거의 여러 칸(관련 근거·발췌·전체 내용)에 되풀이되면 처음 한 번만 보인다.
+    근거 블록 전체(10~30줄)를 다 읽지 않고 답과 맞춰 볼 줄만 보게 해 확인 시간을 줄인다."""
+    lines = text.split("\n")
+    starts, at = [], 0
+    for line in lines:
+        starts.append(at)
+        at += len(line) + 1
+    marked = {next(number for number in range(len(lines) - 1, -1, -1) if starts[number] <= start) for start, _, _ in marks}
+    keep = {number for line in marked for number in range(line - context, line + context + 1) if 0 <= number < len(lines)}
+    shown, seen = [], set()
+    for number in sorted(keep):
+        line = lines[number]
+        if not line.strip() or META_LINE.match(line) or SECTION_HEAD.match(line.strip()):
+            continue
+        key = re.sub(r"\s+", "", LINE_LABEL.sub("", line.strip()))
+        if key not in seen:
+            seen.add(key)
+            shown.append(number)
+    return shown
+
+
 def page(records: list[dict], batch: str) -> str:
-    """표본 화면 HTML. 목표 답의 글을 근거에서 찾아 같은 색으로 칠하고, 목표 답이 쓴 번호와 칠한 블록만 펼친다."""
+    """표본 화면 HTML. 한 번에 예시 하나: 목표 답의 글을 근거에서 찾아 같은 색으로 칠하고, 근거는 칠한 줄과 앞뒤 줄만 보인다
+    (전체는 펼쳐 보기). 사람이 고른 뒤에 Claude 판정이 보인다."""
     examples = []
     for record in records:
         target = record.get("target_ga") or ""
         cited = {int(number) for number in checks.CITE.findall(target)}
         blocks = {number: text.strip() for number, text in checks.evidence_blocks(record.get("prompt") or "").items()}
         marks = highlight(target, record.get("question") or "", blocks)
+        first_line = (record.get("prompt") or "").split("\n", 1)[0]
         examples.append({
             "id": record["id"], "kind": KINDS[record["kind"]].label, "user": record.get("user_actual") or record["user"],
+            "today": first_line[len("오늘:"):].strip() if first_line.startswith("오늘:") else "",
             "question": record.get("question") or "", "question_marks": marks["question"],
             "target": target, "target_marks": marks["target"],
             "notes": (record.get("result") or {}).get("ga", {}).get("judge_notes") or [],
-            "blocks": [{"n": number, "text": text, "cited": number in cited, "marks": marks["blocks"][number]}
+            "blocks": [{"n": number, "text": text, "cited": number in cited, "marks": marks["blocks"][number],
+                        "show": shown_lines(text, marks["blocks"][number]), **block_head(text)}
                        for number, text in sorted(blocks.items())],
             "claude": {"verdict": record.get("verdict"), "category": record.get("category") or "",
                        "reason": record.get("reason") or ""},
