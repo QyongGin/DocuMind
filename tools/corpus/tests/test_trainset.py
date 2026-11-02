@@ -496,9 +496,14 @@ def test_ambiguous_rule_shared_by_target_prompt_and_judge_guide():
     from corpus.trainset import judge
     for shape in ("ga", "na"):
         assert prompts.AMBIGUOUS_RULE in prompts.target_prompt({}, PROMPT, "", shape)
-    assert prompts.AMBIGUOUS_RULE in judge.PROMPT and judge.GUIDE_VERSION == "2026-10-31"
+    assert prompts.AMBIGUOUS_RULE in judge.PROMPT and judge.GUIDE_VERSION == "2026-11-01"
     # ADR-0047 결정 5: '가장 최근 근거로'가 아니라 '오늘 기준으로 유효한 근거로', 지난 학기뿐이면 밝히고 확인처
     assert "오늘" in prompts.AMBIGUOUS_RULE and "지난 학기" in prompts.AMBIGUOUS_RULE and "가장 최근 것" not in prompts.AMBIGUOUS_RULE
+    # ADR-0049: 기준은 근거에 적힌 것만 필요할 때만 — 오늘 날짜로 만들지 않고, 베낄 예시 문구를 넣지 않는다
+    assert "오늘 날짜로 학년도·학기를 만들지 않는다" in prompts.AMBIGUOUS_RULE
+    assert "기준을 붙이지 않는다" in prompts.AMBIGUOUS_RULE and "학기 기준'" not in prompts.AMBIGUOUS_RULE
+    assert "근거 문서에 없는 학년도·학기를 기준으로 썼으면 탈락" in judge.PROMPT
+    assert "기준이 없는 것은 탈락 사유가 아니다" in judge.PROMPT
 
 
 def test_check_notes_missing_period_from_cited_evidence():
