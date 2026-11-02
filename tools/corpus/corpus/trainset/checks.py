@@ -12,7 +12,7 @@ from collections import defaultdict
 from ..evalset.scoring import REFUSAL_PHRASES, _number_in_context, normalize, numbers_with_units
 from .evidence import CITE, PHONE, evidence_blocks, missing_guidance  # noqa: F401 (review가 checks.evidence_blocks·PHONE을 씀)
 from .plan import KINDS
-from .prompts import REFUSAL
+from .prompts import REFUSALS
 
 RESIDENT_NUMBER = re.compile(r"(?<!\d)\d{6}-[1-4]\d{6}(?!\d)")
 MOBILE = re.compile(r"(?<!\d)01[016789]-?\d{3,4}-?\d{4}(?!\d)")
@@ -76,9 +76,11 @@ def shape_check(kind: str, target: str, shape: str) -> tuple[bool, str]:
         text = body.split("답:", 1)[1].strip()
     last_line = text.splitlines()[-1] if text else ""
     if not answerable:
-        if not text.startswith(REFUSAL):
+        # 2026-11-02 전에 만든 묶음은 옛 거절 문장으로 시작한다(내보낼 때 새 문장으로 바꿈)
+        refusal = next((sentence for sentence in REFUSALS if text.startswith(sentence)), None)
+        if refusal is None:
             return False, "거절 예시가 운영 거절 문장으로 시작하지 않음"
-        if len(text) > len(REFUSAL) + 2 and not CITE.search(text):
+        if len(text) > len(refusal) + 2 and not CITE.search(text):
             return False, "확인처를 덧붙였는데 근거 번호가 없음"
         return True, ""
     if not CITE.search(last_line):
@@ -155,7 +157,7 @@ def decide_kind(record: dict) -> tuple[str, str]:
     body = answer_body(record.get("target_ga") or "", "ga")
     if not body:
         return planned, ""
-    behavior = "refuse" if body.startswith(REFUSAL) else ("partial" if refusal_like(body) else "answer")
+    behavior = "refuse" if body.startswith(REFUSALS) else ("partial" if refusal_like(body) else "answer")
     planned_behavior = _behavior(planned)
     if behavior == planned_behavior:
         return planned, ""
@@ -226,7 +228,7 @@ def check(record: dict, shape: str = "ga") -> dict:
         # 답이 든 청크를 빼서 만든 답없음 예시(ADR-0048 결정 2): 근거에 답이 없음을 확인하고, 거절했는지,
         # 확인처를 코드가 고른 블록(재료 문서·같은 게시글·같은 묶음)에서만 붙였는지 본다
         put("답 근거 없음", not hint_blocks(hint, prompt), "답이 든 청크를 뺐는데 근거에 답 근거가 남음")
-        put("거절함", answer_body(target, shape).startswith(REFUSAL), "답이 없게 만든 근거인데 거절하지 않음")
+        put("거절함", answer_body(target, shape).startswith(REFUSALS), "답이 없게 만든 근거인데 거절하지 않음")
         allowed = set(refusal_info.get("contact_blocks") or [])
         put("확인처 출처", cited <= allowed, f"재료·같은 게시글·같은 묶음 밖의 근거 {sorted(cited - allowed)}를 확인처로 붙임")
     # 질문과 답 사이에 줄을 넣는다 — 붙이면 질문 끝 숫자와 답 첫 숫자가 이어져 번호 경계를 못 찾는다
@@ -236,7 +238,7 @@ def check(record: dict, shape: str = "ga") -> dict:
     if kind != "refuse_offtopic":
         # 목표 답 단계에서 한 번 다시 쓴 뒤에도 쓴 근거의 안내 줄(연락처·사이트·기간)이 빠졌으면 안내 빠짐을 의심한다(ADR-0046).
         # 질문한 일과 관계있는 안내인지는 규칙으로 가를 수 없어 떨어뜨리지 않고 Claude 판정에 메모로 넘긴다
-        left = missing_guidance(target, prompt, refusal=answer_body(target, shape).startswith(REFUSAL))
+        left = missing_guidance(target, prompt, refusal=answer_body(target, shape).startswith(REFUSALS))
         if left:
             listed = [f"[출처 {number}] {', '.join(lost)}" for number, _, lost in left[:3]]
             notes.append(f"근거의 안내 {listed}가 목표 답에 없음 — 질문한 일과 관계있으면 안내 빠짐")
@@ -263,7 +265,7 @@ def probe_score(record: dict, kind: str) -> dict:
     behavior = _behavior(kind)
     correct, decided, wrong = 0, 0, []
     for answer in answers:
-        refused = answer.strip().startswith(REFUSAL) or refusal_like(answer)
+        refused = answer.strip().startswith(REFUSALS) or refusal_like(answer)
         if behavior == "refuse":
             ok = refused
         elif not expected:

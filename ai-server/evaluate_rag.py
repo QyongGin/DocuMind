@@ -19,6 +19,9 @@ from typing import Any
 DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_QUESTIONS_PATH = Path(__file__).with_name("rag_quality_questions.json")
 DEFAULT_UNSUPPORTED_KEYWORDS = [
+    # 2026-11-02부터의 운영 거절 문장(ADR-0050). 옛 문장은 지난 실행 결과를 다시 볼 때를 위해 남긴다
+    "학교 홈페이지 안내에서 이 내용을 찾지 못했습니다",
+    "학교 홈페이지 안내에서 찾지 못했습니다",
     "제공된 문서에서는 확인할 수 없습니다",
     "문서에서는 확인할 수 없습니다",
     "찾을 수 없습니다",
