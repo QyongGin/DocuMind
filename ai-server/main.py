@@ -2729,6 +2729,9 @@ class QueryRequest(BaseModel):
     exclude_ledger_ids: list[str] = Field(default_factory=list)
     exclude_chunk_ids: list[str] = Field(default_factory=list)
     as_of: date | None = None
+    # 처리 기록(ADR-0052): 답 끝에 프롬프트·단계별 걸린 초·근거 후보별 검색 점수·모델 설정을 trace로 함께 돌려준다.
+    # 백엔드가 답마다 저장해 관리자 개발자 모드에서 본다. /query와 /query/stream 모두 있다. 평가 실행기는 보내지 않는다.
+    include_trace: bool = False
 
 
 class RagTraceRequest(BaseModel):
@@ -5479,6 +5482,36 @@ def _record_table_fact_trace(trace_by_id: dict[str, dict], candidate: dict) -> N
     entry.setdefault("table_fact_preview", _preview_text(candidate["document"], 240))
 
 
+def _record_retrieval_traces(
+    trace_by_id: dict[str, dict],
+    vector: tuple[list[str], list[dict], list[str]],
+    distances: list[float],
+    bm25_candidates: list[dict],
+    table_fact_candidates: list[dict],
+    metric: str,
+) -> None:
+    """검색기 셋의 후보마다 어느 검색기가 몇 위·몇 점으로 찾았는지 trace_by_id에 모은다.
+
+    /debug/rag-trace와 운영 질의의 처리 기록(ADR-0052)이 같은 기록을 쓴다. 표 사실은 부모 청크 id로 모은다.
+    """
+    for index, (doc, meta, chunk_id) in enumerate(zip(*vector)):
+        distance = distances[index] if index < len(distances) else None
+        _record_vector_trace(trace_by_id, str(chunk_id), doc, meta or {}, index + 1, distance, metric)
+    for candidate in bm25_candidates:
+        _record_bm25_trace(trace_by_id, candidate)
+    for candidate in table_fact_candidates:
+        _record_table_fact_trace(trace_by_id, candidate)
+
+
+def _candidate_retrieval(trace_by_id: dict[str, dict], chunk_id: str, meta: dict) -> dict:
+    """후보 하나의 검색기 기록. 표 사실에서 펼친 부모 청크는 부모 id로 찾는다."""
+    return (
+        trace_by_id.get(str(chunk_id))
+        or trace_by_id.get(_candidate_parent_key(str(chunk_id), meta or {}))
+        or {"retrieval_methods": []}
+    )
+
+
 def _format_vector_candidate(
     rank: int,
     chunk_id: str,
@@ -5551,8 +5584,7 @@ def _format_trace_candidate(
     query_evidence_facts = _extract_query_evidence_fact_lines(doc, analysis, max_facts=5, meta=meta)
     matched_table_facts = _get_matched_table_facts(meta)
 
-    trace_key = _candidate_parent_key(str(chunk_id), meta)
-    retrieval = trace_by_id.get(str(chunk_id)) or trace_by_id.get(trace_key) or {"retrieval_methods": []}
+    retrieval = _candidate_retrieval(trace_by_id, chunk_id, meta)
     formatted = _candidate_location_summary(chunk_id, doc, meta, question=question)
     formatted.update({
         "rank": rank,
@@ -5852,7 +5884,6 @@ def _trace_query_retrieval(
         meta = meta or {}
         distance = vector_distances[index] if index < len(vector_distances) else None
         embedding = vector_embeddings[index] if include_vectors and index < len(vector_embeddings) else None
-        _record_vector_trace(trace_by_id, str(chunk_id), doc, meta, index + 1, distance, metric)
         vector_candidates.append(
             _format_vector_candidate(
                 index + 1,
@@ -5867,12 +5898,9 @@ def _trace_query_retrieval(
         )
 
     bm25_candidates = _lookup_bm25_raw_chunk_candidates(analysis, limit=top_k)
-    for candidate in bm25_candidates:
-        _record_bm25_trace(trace_by_id, candidate)
-
     table_fact_candidates = _lookup_lexical_table_fact_candidates(question)
-    for candidate in table_fact_candidates:
-        _record_table_fact_trace(trace_by_id, candidate)
+    _record_retrieval_traces(trace_by_id, (vector_docs, vector_metadatas, vector_ids), vector_distances,
+                             bm25_candidates, table_fact_candidates, metric)
 
     # 운영 질의와 같은 함수로 순서를 정한다. 추적 결과가 실제 답의 후보와 어긋나지 않게 한다.
     ordered = _order_retrieval_results(
@@ -6100,6 +6128,34 @@ def _record_eval_stage(
     stages[name] = entries
 
 
+def _answer_candidates(
+    metadatas: list[dict],
+    ids: list[str],
+    fused_ids: list[str],
+    retrieval_by_id: dict[str, dict],
+    rerank_scores: dict[str, float],
+) -> list[dict]:
+    """처리 기록(ADR-0052)의 근거 후보: N번째가 프롬프트의 [출처 N]이다.
+
+    후보마다 어느 검색기가 몇 위·몇 점으로 찾았는지, 순위 융합 순위, 재순위 점수를 남긴다. 글은 프롬프트에 있어 다시 담지 않는다.
+    """
+    fused_rank = {str(chunk_id): rank for rank, chunk_id in enumerate(fused_ids, start=1)}
+    candidates = []
+    for rank, (meta, chunk_id) in enumerate(zip(metadatas, ids), start=1):
+        meta = meta or {}
+        candidates.append({
+            "rank": rank,
+            "chunk_id": str(chunk_id),
+            "document_id": str(meta.get("document_id", "")),
+            "ledger_id": meta.get("ledger_id"),
+            "chunk_index": meta.get("chunk_index"),
+            "retrieval": _candidate_retrieval(retrieval_by_id, chunk_id, meta),
+            "fused_rank": fused_rank.get(str(chunk_id)),
+            "rerank_score": rerank_scores.get(str(chunk_id)),
+        })
+    return candidates
+
+
 def _prepare_query(
     question: str,
     top_k: int,
@@ -6139,8 +6195,14 @@ def _prepare_query(
     raw_result_count = len(docs)
     retrieval_chunk_hits = int(results.get("retrieval_chunk_hits") or 0)
     legacy_vector_hits = int(results.get("legacy_vector_hits") or 0)
+    lexical_start = time.perf_counter()
     bm25_candidates = _lookup_bm25_raw_chunk_candidates(analysis, limit=top_k, **exclude_kwargs)
     table_fact_candidates = _lookup_lexical_table_fact_candidates(question, **exclude_kwargs)
+    lexical_elapsed = time.perf_counter() - lexical_start
+    # 처리 기록(ADR-0052): 후보마다 어느 검색기가 몇 위·몇 점으로 찾았는지. /debug/rag-trace와 같은 기록 함수를 쓴다
+    retrieval_by_id: dict[str, dict] = {}
+    _record_retrieval_traces(retrieval_by_id, (docs, metadatas, ids), distance_values, bm25_candidates,
+                             table_fact_candidates, _collection_distance_metric())
     bm25_docs, bm25_metadatas, bm25_ids = _candidate_lists(bm25_candidates)
     lexical_docs, lexical_metadatas, lexical_ids = _candidate_lists(table_fact_candidates)
     # 벡터는 거리(작을수록 가까움), BM25·표 사실은 각자의 점수(클수록 가까움). 순위 융합은 점수를 쓰지 않는다.
@@ -6168,10 +6230,18 @@ def _prepare_query(
     metadatas = metadatas[:top_k]
     ids = ids[:top_k]
     _record_eval_stage(eval_stages, "final", docs, metadatas, ids)
+    # 처리 기록(ADR-0052)에 담는 값: 근거 후보별 점수, 재순위 사용 여부. 로그용 metrics와 함께 돌려준다
+    trace_values = {
+        "candidates": _answer_candidates(metadatas, ids, ordered.fused[2], retrieval_by_id, rerank_info["scores"]),
+        "rerank": {key: value for key, value in rerank_info.items() if key not in ("scores", "elapsed")},
+        "lexical_elapsed": lexical_elapsed,
+        "rerank_elapsed": rerank_info["elapsed"],
+    }
 
     if not docs:
         prepare_elapsed = time.perf_counter() - prepare_start
         metrics = {
+            **trace_values,
             "prepare_elapsed": prepare_elapsed,
             "embedding_elapsed": embedding_elapsed,
             "chroma_elapsed": chroma_elapsed,
@@ -6246,6 +6316,7 @@ def _prepare_query(
     distance_max = max(distance_values) if distance_values else None
     distance_avg = sum(distance_values) / len(distance_values) if distance_values else None
     metrics = {
+        **trace_values,
         "prepare_elapsed": prepare_elapsed,
         "embedding_elapsed": embedding_elapsed,
         "chroma_elapsed": chroma_elapsed,
@@ -6266,7 +6337,6 @@ def _prepare_query(
         "query_intent": analysis.intent,
         "query_subject_terms": sorted(analysis.subject_terms),
         "rerank_used": rerank_info["used"],
-        "rerank_elapsed": rerank_info["elapsed"],
         "rerank_error": rerank_info["error"],
     }
     logger.info(
@@ -6456,8 +6526,8 @@ def _reranker_model_info() -> dict | None:
     return _reranker_info_cache
 
 
-def _eval_runtime_settings() -> dict:
-    """평가 실행 기록(manifest)에 남길 서버 설정. 같은 설정·같은 평가셋이면 점수를 다시 만들 수 있게 한다."""
+def _model_settings() -> dict:
+    """답을 만든 모델·생성·검색 설정. 처리 기록(ADR-0052)과 평가 실행 기록이 함께 쓴다. 다른 서버를 부르지 않는다."""
     return {
         "llm_model": OLLAMA_LLM_MODEL,
         "llm_temperature": OLLAMA_TEMPERATURE,
@@ -6467,11 +6537,42 @@ def _eval_runtime_settings() -> dict:
         "num_predict": OLLAMA_NUM_PREDICT,
         "query_retrieval_chunks_enabled": QUERY_RETRIEVAL_CHUNKS_ENABLED,
         "prompt_date_lines": PROMPT_DATE_LINES_ENABLED,
+    }
+
+
+def _eval_runtime_settings() -> dict:
+    """평가 실행 기록(manifest)에 남길 서버 설정. 같은 설정·같은 평가셋이면 점수를 다시 만들 수 있게 한다."""
+    return {
+        **_model_settings(),
         "reranker": {
             "model": _reranker_model_info(),
             "candidates": RERANK_CANDIDATES,
             "doc_chars": RERANK_DOC_CHARS,
         } if RERANKER_URL else None,
+    }
+
+
+def _answer_trace(prompt: str | None, metrics: dict, **generation_seconds: float | None) -> dict:
+    """처리 기록(ADR-0052): 백엔드가 답마다 저장해 관리자 개발자 모드에서 보고 30일 뒤 지운다.
+
+    프롬프트(근거 블록 포함), 단계별 걸린 초, 근거 후보별 검색 점수, 재순위 사용 여부, 모델 설정을 담는다.
+    generation_seconds는 생성 쪽 초다: first_token(요청부터 첫 글자까지), generation(생성 시작부터 끝까지), total.
+    """
+    seconds = {
+        "embedding": metrics.get("embedding_elapsed"),
+        "vector_search": metrics.get("chroma_elapsed"),
+        "lexical_search": metrics.get("lexical_elapsed"),
+        "rerank": metrics.get("rerank_elapsed"),
+        "context_build": metrics.get("context_build_elapsed"),
+        "prepare": metrics.get("prepare_elapsed"),
+        **generation_seconds,
+    }
+    return {
+        "prompt": prompt,
+        "seconds": {name: _round_float(value, 3) for name, value in seconds.items()},
+        "candidates": metrics.get("candidates", []),
+        "rerank": metrics.get("rerank"),
+        "model": _model_settings(),
     }
 
 
@@ -6511,7 +6612,10 @@ async def query_document(request: QueryRequest):
     )
 
     if prompt is None:
-        return _eval_response({"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}, eval_stages, "no_documents")
+        response = {"answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
+        if request.include_trace:
+            response["trace"] = _answer_trace(None, query_metrics, total=time.perf_counter() - query_start)
+        return _eval_response(response, eval_stages, "no_documents")
 
     # async 핸들러에서 ainvoke()로 이벤트 루프 블로킹 방지
     llm_start = time.perf_counter()
@@ -6528,7 +6632,11 @@ async def query_document(request: QueryRequest):
         time.perf_counter() - query_start
     )
 
-    return _eval_response({"answer": answer, "sources": sources}, eval_stages, "llm", generation)
+    response = {"answer": answer, "sources": sources}
+    if request.include_trace:
+        response["trace"] = _answer_trace(prompt, query_metrics, generation=llm_elapsed,
+                                          total=time.perf_counter() - query_start)
+    return _eval_response(response, eval_stages, "llm", generation)
 
 
 @app.post("/query/stream")
@@ -6537,7 +6645,7 @@ async def query_stream(request: QueryRequest):
     SSE 스트리밍 RAG 파이프라인:
     1. 임베딩 → 검색 → 프롬프트 조합 (_prepare_query)
     2. 생성 모델 토큰 스트리밍 → SSE data 이벤트 전송
-    3. 완료 시 sources 포함 done 이벤트 전송
+    3. 완료 시 sources 포함 done 이벤트 전송(include_trace면 처리 기록 trace도)
     클라이언트 연결 종료 시 asyncio.CancelledError로 자동 중단된다.
     """
     stream_start = time.perf_counter()
@@ -6551,11 +6659,10 @@ async def query_stream(request: QueryRequest):
 
     if prompt is None:
         async def empty_stream():
-            payload = json.dumps(
-                {"done": True, "answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []},
-                ensure_ascii=False
-            )
-            yield f"data: {payload}\n\n"
+            done = {"done": True, "answer": "관련 내용을 문서에서 찾을 수 없습니다.", "sources": []}
+            if request.include_trace:
+                done["trace"] = _answer_trace(None, query_metrics, total=time.perf_counter() - stream_start)
+            yield f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(
             empty_stream(),
@@ -6599,7 +6706,12 @@ async def query_stream(request: QueryRequest):
                 time.perf_counter() - stream_start
             )
             # 정상 완료 시 출처 포함 done 이벤트 전송
-            yield f"data: {json.dumps({'done': True, 'sources': sources}, ensure_ascii=False)}\n\n"
+            done = {"done": True, "sources": sources}
+            if request.include_trace:
+                done["trace"] = _answer_trace(prompt, query_metrics, first_token=first_token_elapsed,
+                                              generation=time.perf_counter() - llm_start,
+                                              total=time.perf_counter() - stream_start)
+            yield f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
         except asyncio.CancelledError:
             # 클라이언트가 연결을 끊은 정상적인 중단. 재전파해 FastAPI가 정리하도록 한다
             raise
