@@ -32,6 +32,8 @@ class SseStreamingContext {
     private final ScreenAnswerMaker screenAnswerMaker;
     private final SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher;
     private final StringBuffer answerBuffer = new StringBuffer();
+    // 흐르는 답에서 출처 번호를 거른다(ADR-0051 결정 4). answerBuffer에는 모델 원문을 그대로 쌓는다
+    private final CitationStreamFilter citationFilter = new CitationStreamFilter();
     private final Object persistenceLock = new Object();
     private boolean normallyCompleted;
     private boolean answerStored;
@@ -81,7 +83,7 @@ class SseStreamingContext {
 
         try {
             if (node.has("token")) {
-                handleTokenEvent(jsonData, node);
+                handleTokenEvent(node);
             } else if (node.has("done") && node.get("done").asBoolean()) {
                 handleDoneEvent(jsonData, node);
             } else if (node.has("error")) {
@@ -138,9 +140,13 @@ class SseStreamingContext {
         sendSafeErrorAndComplete(UPSTREAM_ERROR_CODE, UPSTREAM_ERROR_MESSAGE);
     }
 
-    private void handleTokenEvent(String jsonData, JsonNode node) throws IOException {
-        answerBuffer.append(node.get("token").asText());
-        emitter.send(SseEmitter.event().data(jsonData));
+    private void handleTokenEvent(JsonNode node) throws IOException {
+        String token = node.get("token").asText();
+        answerBuffer.append(token);
+        String visible = citationFilter.accept(token);
+        if (!visible.isEmpty()) {
+            emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(Map.of("token", visible))));
+        }
     }
 
     private void handleDoneEvent(String jsonData, JsonNode node) throws IOException {

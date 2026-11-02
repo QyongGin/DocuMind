@@ -4,11 +4,14 @@ import com.documind.documind.domain.document.DocumentRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
 import java.io.IOException;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -118,6 +121,27 @@ class SseStreamingContextTest {
     }
 
     @Test
+    @DisplayName("흐르는 토큰에서 출처 번호를 걸러 보내고(번호 중간에서 끊겨 와도), 원문은 그대로 쌓아 저장함")
+    void onToken_filtersCitationsFromStreamedTokens() throws Exception {
+        SseStreamingContext context = createContext();
+
+        context.onToken("{\"token\":\"신청은 [참고] 메뉴에서 합니다.\"}");
+        context.onToken("{\"token\":\" [\"}");
+        context.onToken("{\"token\":\"출처\"}");
+        context.onToken("{\"token\":\" 2]\"}");
+        context.onToken("{\"done\":true,\"sources\":[]}");
+
+        ArgumentCaptor<SseEmitter.SseEventBuilder> events = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
+        verify(emitter, times(3)).send(events.capture());
+        String streamed = events.getAllValues().subList(0, 2).stream().map(SseStreamingContextTest::dataOf)
+                .collect(java.util.stream.Collectors.joining());
+        assertTrue(streamed.contains("신청은 [참고] 메뉴에서 합니다."), streamed);
+        assertFalse(streamed.contains("출처"), streamed);
+        verify(persistenceService).completeMessage(MESSAGE_ID, SESSION_ID, "신청은 [참고] 메뉴에서 합니다.",
+                "신청은 [참고] 메뉴에서 합니다. [출처 2]", "[]");
+    }
+
+    @Test
     @DisplayName("upstream 오류 발생 시 안전 오류 답변을 저장하고 스트림을 종료함")
     void onUpstreamError_savesSafeErrorAnswerAndDisposesSubscription() throws Exception {
         Disposable subscription = mock(Disposable.class);
@@ -159,6 +183,10 @@ class SseStreamingContextTest {
         verify(persistenceService, never()).savePartialAnswer(any(), any());
         verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
         verify(emitter).complete();
+    }
+
+    private static String dataOf(SseEmitter.SseEventBuilder event) {
+        return event.build().stream().map(part -> String.valueOf(part.getData())).collect(java.util.stream.Collectors.joining());
     }
 
     private SseStreamingContext createContext() {

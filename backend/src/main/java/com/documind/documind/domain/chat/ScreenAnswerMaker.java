@@ -25,8 +25,10 @@ import java.util.stream.Collectors;
 @Component
 public class ScreenAnswerMaker {
 
-    // 출처 번호와 그 앞의 공백·줄바꿈. 답 끝의 '\n\n[출처 1]', 문장 안의 ' [출처 2]', 묶어 쓴 '[출처 1, 3]'을 함께 지운다
-    private static final Pattern CITATION = Pattern.compile("\\s*\\[출처\\s*(\\d+(?:\\s*[,·]\\s*\\d+)*)\\]");
+    // 출처 번호 하나('[출처 1]', 묶어 쓴 '[출처 1, 3]'). 흐르는 답을 거르는 CitationStreamFilter와 함께 쓴다
+    static final String CITATION_TEXT = "\\[출처\\s*(\\d+(?:\\s*[,·]\\s*\\d+)*)\\]";
+    // 출처 번호와 그 앞의 공백·줄바꿈. 답 끝의 '\n\n[출처 1]'과 문장 안의 ' [출처 2]'를 함께 지운다
+    private static final Pattern CITATION = Pattern.compile("\\s*" + CITATION_TEXT);
     private static final Pattern NUMBER = Pattern.compile("\\d+");
     private static final Pattern ANGLE_LINK = Pattern.compile("<(https?://[^\\s<>]+)>");
     private static final Pattern BOARD_NUMBER = Pattern.compile("\\(\\d+\\)$");
