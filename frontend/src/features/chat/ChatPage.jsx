@@ -7,6 +7,7 @@ import { openChatStream } from '../../services/chatStream.js'
 import { getAuthProfile, hasAccessToken } from '../../services/authStorage.js'
 import { deleteChatSession, getChatSession, listChatSessions } from '../../services/chatHistoryApi.js'
 import { getSessionKey } from '../../utils/sessionKey.js'
+import { DevInfoPanel } from './DevInfoPanel.jsx'
 import { ReferenceList } from './ReferenceList.jsx'
 import { RefusalGuidance } from './RefusalGuidance.jsx'
 import inqLogoUrl from '../../images/inq-logo.png'
@@ -115,105 +116,6 @@ function BadgeButton({ className = '', onClick, label }) {
   )
 }
 
-function getSourceTitle(source, index) {
-  return source.document_original_name || source.source || source.document_name || source.filename || `참조 문서 ${index + 1}`
-}
-
-function getSourcePath(source) {
-  return ['Header 1', 'Header 2', 'Header 3', 'Header 4', 'Header 5', 'Header 6']
-    .map((key) => source[key])
-    .filter(Boolean)
-    .join(' · ')
-}
-
-function toSourcePageNumber(value) {
-  if (value === null || value === undefined || value === '') return null
-
-  const pageNumber = Number(value)
-  return Number.isFinite(pageNumber) ? pageNumber : null
-}
-
-function getSourcePageLabel(source) {
-  const startPage = toSourcePageNumber(source.page_start ?? source.pageStart ?? source.page)
-  const endPage = toSourcePageNumber(source.page_end ?? source.pageEnd)
-
-  if (startPage === null) return ''
-  if (endPage !== null && endPage !== startPage) return `PDF ${startPage}-${endPage}페이지`
-  return `PDF ${startPage}페이지`
-}
-
-function getSourceDetailMeta(source) {
-  const pageLabel = getSourcePageLabel(source)
-
-  return [
-    pageLabel,
-    getChunkPositionLabel(source),
-    pageLabel ? '' : getSourcePath(source),
-  ].filter(Boolean)
-}
-
-function getDocumentInfoMeta(group) {
-  return [
-    group.documentId ? `문서 ID ${group.documentId}` : '',
-    group.uploadedAt ? `업로드 ${formatSourceDateTime(group.uploadedAt)}` : '',
-  ].filter(Boolean)
-}
-
-function getChunkPositionLabel(source) {
-  if (source.chunk_index === null || source.chunk_index === undefined) {
-    return ''
-  }
-
-  const chunkNumber = Number(source.chunk_index)
-  if (!Number.isFinite(chunkNumber)) {
-    return ''
-  }
-
-  return `문서 내 ${chunkNumber + 1}번째 청크`
-}
-
-function getSourceSnippet(source) {
-  return source.content || source.text || source.page_content || '출처 본문이 응답에 포함되지 않았습니다.'
-}
-
-function formatSourceDateTime(value) {
-  if (!value) return ''
-  return String(value).replace('T', ' ').slice(0, 16)
-}
-
-function getSourceGroupKey(source, index) {
-  return source.document_id || source.document_original_name || source.source || source.filename || `source-${index}`
-}
-
-function groupSourcesByDocument(sources) {
-  const groups = new Map()
-
-  sources.forEach((source, index) => {
-    const key = getSourceGroupKey(source, index)
-    const existing = groups.get(key)
-    const sourcePath = getSourcePath(source)
-
-    if (existing) {
-      existing.chunks.push({ source, originalIndex: index })
-      if (!existing.primaryPath && sourcePath) {
-        existing.primaryPath = sourcePath
-      }
-      return
-    }
-
-    groups.set(key, {
-      key,
-      documentId: source.document_id,
-      title: getSourceTitle(source, index),
-      uploadedAt: source.document_uploaded_at,
-      primaryPath: sourcePath,
-      chunks: [{ source, originalIndex: index }],
-    })
-  })
-
-  return Array.from(groups.values())
-}
-
 function getRoleLabel(role) {
   if (role === 'ADMIN') return '관리자'
   if (role === 'STAFF') return '교직원'
@@ -275,8 +177,7 @@ function ChatPage() {
   const [submittedQuestion, setSubmittedQuestion] = useState('')
   const [messageId, setMessageId] = useState(null)
   const [answer, setAnswer] = useState('')
-  const [sources, setSources] = useState([])
-  // 화면용 답의 참고한 문서와 거절 안내(ADR-0050). sources(검색 후보)는 관리자에게만 보인다
+  // 화면용 답의 참고한 문서와 거절 안내(ADR-0050). 검색 후보는 관리자 개발자 정보(DevInfoPanel)가 관리자 API로 받는다
   const [references, setReferences] = useState([])
   const [guidance, setGuidance] = useState(null)
   const [isStreaming, setIsStreaming] = useState(false)
@@ -287,7 +188,6 @@ function ChatPage() {
   const [historySessions, setHistorySessions] = useState([])
   const [isHistoryLoading, setIsHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
-  const [activeSourceIndex, setActiveSourceIndex] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const authProfile = isLoggedIn ? getAuthProfile() : null
 
@@ -395,7 +295,6 @@ function ChatPage() {
     setErrorMessage('')
     setFeedback(null)
     setFeedbackError('')
-    setActiveSourceIndex(null)
 
     try {
       const detail = await getChatSession(sessionId, {
@@ -409,7 +308,6 @@ function ChatPage() {
       setSubmittedQuestion(lastMessage.question ?? detail.title ?? '')
       setMessageId(lastMessage.messageId ?? null)
       setAnswer(lastMessage.answer ?? '')
-      setSources(Array.isArray(lastMessage.sources) ? lastMessage.sources : [])
       setReferences(Array.isArray(lastMessage.references) ? lastMessage.references : [])
       setGuidance(lastMessage.guidance ?? null)
       setFeedback(feedbackFromScore(lastMessage.feedbackScore))
@@ -511,13 +409,11 @@ function ChatPage() {
     setMessageId(null)
     setQuestion('')
     setAnswer('')
-    setSources([])
     setReferences([])
     setGuidance(null)
     setErrorMessage('')
     setFeedback(null)
     setFeedbackError('')
-    setActiveSourceIndex(null)
     setIsStreaming(true)
 
     eventSourceRef.current = openChatStream({
@@ -529,7 +425,6 @@ function ChatPage() {
       onDone: ({
         answer: completedAnswer,
         messageId: completedMessageId,
-        sources: nextSources,
         references: nextReferences,
         guidance: nextGuidance,
       }) => {
@@ -538,7 +433,6 @@ function ChatPage() {
           setAnswer(completedAnswer)
         }
         setMessageId(completedMessageId ?? null)
-        setSources(nextSources)
         setReferences(nextReferences)
         setGuidance(nextGuidance)
         setIsStreaming(false)
@@ -598,7 +492,6 @@ function ChatPage() {
   const canSend = question.trim().length > 0 && !isStreaming
   const hasConversation = submittedQuestion || answer || errorMessage
   const canGiveFeedback = Boolean(answer) && Boolean(messageId) && !isStreaming && !errorMessage && !isFeedbackSaving
-  const sourceGroups = groupSourcesByDocument(sources)
   const isAdmin = authProfile?.role === 'ADMIN'
 
   const resetChat = () => {
@@ -608,13 +501,11 @@ function ChatPage() {
     setSubmittedQuestion('')
     setMessageId(null)
     setAnswer('')
-    setSources([])
     setReferences([])
     setGuidance(null)
     setErrorMessage('')
     setFeedback(null)
     setFeedbackError('')
-    setActiveSourceIndex(null)
     setIsStreaming(false)
     setIsProfileOpen(false)
     setDeleteTarget(null)
@@ -634,13 +525,11 @@ function ChatPage() {
       setSubmittedQuestion('')
       setMessageId(null)
       setAnswer('')
-      setSources([])
       setReferences([])
       setGuidance(null)
       setFeedback(null)
       setFeedbackError('')
       setErrorMessage('')
-      setActiveSourceIndex(null)
       setIsStreaming(false)
     }
   }
@@ -849,55 +738,7 @@ function ChatPage() {
                 <RefusalGuidance guidance={guidance} />
                 <ReferenceList references={references} />
 
-                {isAdmin && sourceGroups.length > 0 && (
-                  <section className="source-card" aria-label="검색 근거(관리자)">
-                    <h2>검색 근거(관리자)</h2>
-                    <ol className="source-list">
-                      {sourceGroups.map((group, index) => (
-                        <li key={group.key}>
-                          <article className="source-document">
-                            <button
-                              type="button"
-                              className="source-trigger"
-                              aria-expanded={activeSourceIndex === index}
-                              aria-controls={`source-detail-${index}`}
-                              onClick={() => setActiveSourceIndex((prevIndex) => (prevIndex === index ? null : index))}
-                            >
-                              <strong>{group.title}</strong>
-                            </button>
-                            {activeSourceIndex === index && (
-                              <div id={`source-detail-${index}`} className="source-detail">
-                                <dl className="source-detail__meta source-detail__meta--document" aria-label="문서 상세 정보">
-                                  {getDocumentInfoMeta(group).map((item) => (
-                                    <div key={item}>
-                                      <dt className="sr-only">출처 정보</dt>
-                                      <dd>{item}</dd>
-                                    </div>
-                                  ))}
-                                </dl>
-                                <div className="source-chunk-list" aria-label={`${group.title} 검색 청크 목록`}>
-                                  {group.chunks.map(({ source, originalIndex }) => (
-                                    <section className="source-chunk" key={`${group.key}-${originalIndex}`}>
-                                      <dl className="source-detail__meta" aria-label="청크 상세 정보">
-                                        {getSourceDetailMeta(source).map((item) => (
-                                          <div key={item}>
-                                            <dt className="sr-only">청크 정보</dt>
-                                            <dd>{item}</dd>
-                                          </div>
-                                        ))}
-                                      </dl>
-                                      <p>{getSourceSnippet(source)}</p>
-                                    </section>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </article>
-                        </li>
-                      ))}
-                    </ol>
-                  </section>
-                )}
+                {isAdmin && messageId && !isStreaming && <DevInfoPanel key={messageId} messageId={messageId} />}
 
                 <div className="feedback-bar" aria-label="답변 피드백">
                   <button
