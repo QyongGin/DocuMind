@@ -142,6 +142,53 @@ class SseStreamingContextTest {
     }
 
     @Test
+    @DisplayName("done 이벤트의 처리 기록은 답을 저장한 뒤 따로 저장하고, 브라우저로 보내는 done 이벤트에는 넣지 않음")
+    void onToken_withTrace_savesTraceAfterAnswerAndKeepsItFromBrowser() throws Exception {
+        SseStreamingContext context = createContext();
+
+        context.onToken("{\"token\":\"휴학 신청은 8월 29일까지입니다.\"}");
+        context.onToken("{\"done\":true,\"sources\":[],\"trace\":{\"prompt\":\"[검색 근거] 가나대학\","
+                + "\"seconds\":{\"total\":1.5}}}");
+
+        var order = inOrder(persistenceService);
+        order.verify(persistenceService).completeMessage(eq(MESSAGE_ID), eq(SESSION_ID), any(), any(), any());
+        order.verify(persistenceService).saveTrace(MESSAGE_ID,
+                "{\"prompt\":\"[검색 근거] 가나대학\",\"seconds\":{\"total\":1.5}}");
+        ArgumentCaptor<SseEmitter.SseEventBuilder> events = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
+        verify(emitter, times(2)).send(events.capture());
+        String done = dataOf(events.getAllValues().get(1));
+        assertTrue(done.contains("\"answer\":\"휴학 신청은 8월 29일까지입니다.\""), done);
+        assertFalse(done.contains("trace") || done.contains("검색 근거"), done);
+    }
+
+    @Test
+    @DisplayName("처리 기록 저장이 실패해도 done 이벤트를 보내고 스트림을 정상 종료함")
+    void onToken_whenTraceSaveFails_stillCompletesStream() throws Exception {
+        SseStreamingContext context = createContext();
+        doThrow(new RuntimeException("db down")).when(persistenceService).saveTrace(any(), any());
+
+        context.onToken("{\"done\":true,\"answer\":\"휴학 신청은 8월 29일까지입니다.\",\"sources\":[],"
+                + "\"trace\":{\"prompt\":\"P\"}}");
+
+        verify(persistenceService).completeMessage(eq(MESSAGE_ID), eq(SESSION_ID), any(), any(), any());
+        ArgumentCaptor<SseEmitter.SseEventBuilder> events = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
+        verify(emitter).send(events.capture());
+        String sent = dataOf(events.getValue());
+        assertTrue(sent.contains("\"done\":true") && !sent.contains("error"), sent);  // 오류 이벤트가 아닌 정상 done
+        verify(emitter).complete();
+    }
+
+    @Test
+    @DisplayName("처리 기록이 없는 done 이벤트(옛 AI 서버)는 기록을 저장하지 않음")
+    void onToken_withoutTrace_savesNoTrace() {
+        SseStreamingContext context = createContext();
+
+        context.onToken("{\"done\":true,\"answer\":\"검색 결과가 없습니다.\",\"sources\":[]}");
+
+        verify(persistenceService, never()).saveTrace(any(), any());
+    }
+
+    @Test
     @DisplayName("upstream 오류 발생 시 안전 오류 답변을 저장하고 스트림을 종료함")
     void onUpstreamError_savesSafeErrorAnswerAndDisposesSubscription() throws Exception {
         Disposable subscription = mock(Disposable.class);

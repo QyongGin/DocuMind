@@ -22,4 +22,8 @@ public class FastApiQueryRequest {
     // 관리자가 설정한 시스템 프롬프트. FastAPI 필드명이 snake_case이므로 명시
     @JsonProperty("system_prompt")
     private String systemPrompt;
+
+    // 처리 기록(ADR-0052)을 답 끝에 함께 받는다. 백엔드는 모든 답의 처리 기록을 저장한다
+    @JsonProperty("include_trace")
+    private boolean includeTrace;
 }

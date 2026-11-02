@@ -48,6 +48,11 @@ chat:
     contact-url: ${CHAT_CONTACT_URL:https://www.inhatc.ac.kr/kr/166/subview.do}
   # SSE streamId 임시 저장 최대 건수. 외부 gateway/IP rate limit과 함께 메모리 보호 장치로 사용한다.
   stream-session-max-entries: ${CHAT_STREAM_SESSION_MAX_ENTRIES:1000}
+  # 처리 기록(ADR-0052): 답마다 프롬프트·단계별 시간·근거 후보 점수를 저장하고 보관 기간이 지나면 지운다
+  trace:
+    retention: ${CHAT_TRACE_RETENTION:30d}
+    # 지난 처리 기록을 지우는 시각(초 분 시 일 월 요일). 기본 매일 04:30
+    cleanup-cron: ${CHAT_TRACE_CLEANUP_CRON:0 30 4 * * *}
 
 jwt:
   # HS256 최소 256bit(32자 이상) 필요. 기본값 없이 환경변수로만 주입한다.

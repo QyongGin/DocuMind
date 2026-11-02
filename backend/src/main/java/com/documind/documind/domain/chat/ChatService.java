@@ -39,6 +39,7 @@ public class ChatService {
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
     private final ChatFeedbackRepository chatFeedbackRepository;
+    private final ChatMessageTraceRepository chatMessageTraceRepository;
     private final ChatStreamPersistenceService chatStreamPersistenceService;
     private final SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher;
     private final ScreenAnswerMaker screenAnswerMaker;
@@ -84,6 +85,9 @@ public class ChatService {
 
         // 6. 세션의 마지막 활동 시각 갱신. 사이드바 목록의 최신 활동 순 정렬에 사용
         chatSessionRepository.updateUpdatedAt(session.getId(), LocalDateTime.now());
+
+        // 7. 처리 기록(ADR-0052)을 답과 같은 트랜잭션에 저장한다
+        saveTrace(message.getId(), fastApiResponse.getTrace());
 
         return ChatResponse.builder()
                 .sessionId(session.getId())
@@ -148,12 +152,13 @@ public class ChatService {
 
     /**
      * 세션과 소속 메시지를 삭제한다.
-     * FK 위반을 피하기 위해 메시지를 먼저 지우고 세션을 지운다.
+     * FK 위반을 피하기 위해 피드백·처리 기록, 메시지, 세션 순으로 지운다.
      */
     @Transactional
     public void deleteSession(Long sessionId, Long userId, String sessionKey) {
         resolveSession(sessionId, userId, sessionKey);
         chatFeedbackRepository.deleteByChatSessionId(sessionId);
+        chatMessageTraceRepository.deleteByChatSessionId(sessionId);
         chatMessageRepository.deleteByChatSessionId(sessionId);
         chatSessionRepository.deleteById(sessionId);
     }
@@ -280,12 +285,49 @@ public class ChatService {
         return trimmedQuestion.substring(0, SESSION_TITLE_MAX_LENGTH);
     }
 
-    // 기록을 다시 열어도 같은 모양: 저장한 모델 원문과 출처 목록으로 화면용 답을 다시 만든다(ADR-0051 결정 3).
+    /**
+     * 관리자 개발자 모드의 답 하나 정보를 조회한다(ADR-0050 결정 6, ADR-0052).
+     * 처리 기록은 보관 기간이 지났거나 기록이 없던 답이면 null이다. 원문 답과 근거 후보는 대화 기록에서 읽는다.
+     *
+     * @param messageId 답(메시지) ID
+     * @return 원문 답, 화면 처리 내역, 근거 후보, 처리 기록
+     */
+    @Transactional(readOnly = true)
+    public ChatDevInfoResponse getDevInfo(Long messageId) {
+        ChatMessage message = chatMessageRepository.findById(messageId)
+                .orElseThrow(() -> new CustomException(ErrorCode.CHAT_MESSAGE_NOT_FOUND));
+        List<Map<String, Object>> sources = deserializeSources(message.getSourceDocs());
+        ScreenAnswer screenAnswer = screenAnswerOf(message, sources);
+        Map<String, Object> trace = chatMessageTraceRepository.findById(messageId)
+                .map(messageTrace -> deserializeTrace(messageId, messageTrace.getTrace()))
+                .orElse(null);
+        return new ChatDevInfoResponse(
+                message.getId(),
+                message.getQuestion(),
+                message.getCreatedAt(),
+                rawAnswerOf(message),
+                screenAnswer == null ? null : screenAnswer.text(),
+                screenAnswer == null ? List.of() : screenAnswer.citedSources(),
+                screenAnswer != null && screenAnswer.guidance() != null,
+                sources,
+                trace
+        );
+    }
+
     // 원문 칸이 생기기 전 메시지와 중단된 답은 저장한 답을 원문으로 쓴다
+    private static String rawAnswerOf(ChatMessage message) {
+        return message.getRawAnswer() != null ? message.getRawAnswer() : message.getAnswer();
+    }
+
+    // 기록을 다시 열어도 같은 모양: 저장한 모델 원문과 출처 목록으로 화면용 답을 다시 만든다(ADR-0051 결정 3)
+    private ScreenAnswer screenAnswerOf(ChatMessage message, List<Map<String, Object>> sources) {
+        String raw = rawAnswerOf(message);
+        return raw == null ? null : screenAnswerMaker.make(raw, sources);
+    }
+
     private ChatMessageResponse toMessageResponse(ChatMessage message, Byte feedbackScore) {
         List<Map<String, Object>> sources = deserializeSources(message.getSourceDocs());
-        String raw = message.getRawAnswer() != null ? message.getRawAnswer() : message.getAnswer();
-        ScreenAnswer screenAnswer = raw == null ? null : screenAnswerMaker.make(raw, sources);
+        ScreenAnswer screenAnswer = screenAnswerOf(message, sources);
         return ChatMessageResponse.builder()
                 .messageId(message.getId())
                 .question(message.getQuestion())
@@ -296,6 +338,29 @@ public class ChatService {
                 .feedbackScore(feedbackScore)
                 .createdAt(message.getCreatedAt())
                 .build();
+    }
+
+    // 저장한 처리 기록 JSON을 읽는다. 깨진 기록은 없는 것으로 본다
+    private Map<String, Object> deserializeTrace(Long messageId, String trace) {
+        try {
+            return objectMapper.readValue(trace, new TypeReference<>() {});
+        } catch (JsonProcessingException e) {
+            log.error("처리 기록 역직렬화 실패. messageId={}", messageId, e);
+            return null;
+        }
+    }
+
+    // 처리 기록(ADR-0052)을 저장한다. 옛 AI 서버처럼 기록이 없으면 저장하지 않는다
+    private void saveTrace(Long messageId, Map<String, Object> trace) {
+        if (trace == null) {
+            return;
+        }
+        try {
+            chatMessageTraceRepository.save(
+                    ChatMessageTrace.of(messageId, objectMapper.writeValueAsString(trace), LocalDateTime.now()));
+        } catch (JsonProcessingException e) {
+            log.error("처리 기록 직렬화 실패. 저장하지 않습니다. messageId={}", messageId, e);
+        }
     }
 
     // sources 리스트를 JSON 문자열로 변환. 직렬화 실패 시 빈 배열 문자열로 폴백

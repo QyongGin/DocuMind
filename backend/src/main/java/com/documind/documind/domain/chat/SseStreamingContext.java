@@ -3,13 +3,13 @@ package com.documind.documind.domain.chat;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -85,7 +85,7 @@ class SseStreamingContext {
             if (node.has("token")) {
                 handleTokenEvent(node);
             } else if (node.has("done") && node.get("done").asBoolean()) {
-                handleDoneEvent(jsonData, node);
+                handleDoneEvent(node);
             } else if (node.has("error")) {
                 handleErrorEvent(jsonData, node);
             }
@@ -149,7 +149,7 @@ class SseStreamingContext {
         }
     }
 
-    private void handleDoneEvent(String jsonData, JsonNode node) throws IOException {
+    private void handleDoneEvent(JsonNode node) throws IOException {
         List<Map<String, Object>> enrichedSources = enrichDoneSources(node);
         String sourcesJson = objectMapper.writeValueAsString(enrichedSources);
         String rawAnswer = node.has("answer")
@@ -157,7 +157,7 @@ class SseStreamingContext {
                 : currentAnswer();
         // 화면용 답(ADR-0051): 출처 번호를 지우고 참고한 문서·안내를 만들어 done 이벤트에 담는다. 화면은 흐른 글을 이 답으로 바꾼다
         ScreenAnswer screenAnswer = screenAnswerMaker.make(rawAnswer, enrichedSources);
-        String enrichedJsonData = replaceSources(jsonData, node, enrichedSources, screenAnswer);
+        String outboundJson = outboundDone(enrichedSources, screenAnswer);
 
         synchronized (persistenceLock) {
             if (answerStored) {
@@ -167,8 +167,21 @@ class SseStreamingContext {
             answerStored = true;
             normallyCompleted = true;
         }
-        emitter.send(SseEmitter.event().data(enrichedJsonData));
+        saveTrace(node.get("trace"));
+        emitter.send(SseEmitter.event().data(outboundJson));
         emitter.complete();
+    }
+
+    // 처리 기록(ADR-0052)은 답을 저장한 뒤 따로 저장한다. 실패해도 사용자에게 가는 답에는 영향을 주지 않는다
+    private void saveTrace(JsonNode trace) {
+        if (trace == null || !trace.isObject()) {
+            return;
+        }
+        try {
+            persistenceService.saveTrace(messageId, objectMapper.writeValueAsString(trace));
+        } catch (Exception e) {
+            log.warn("처리 기록 저장 실패. messageId={}", messageId, e);
+        }
     }
 
     private List<Map<String, Object>> enrichDoneSources(JsonNode node) {
@@ -179,18 +192,16 @@ class SseStreamingContext {
         return sourceDocumentMetadataEnricher.enrich(sources);
     }
 
-    private String replaceSources(String jsonData, JsonNode node, List<Map<String, Object>> sources,
-                                  ScreenAnswer screenAnswer) throws JsonProcessingException {
-        if (!node.isObject()) {
-            return jsonData;
-        }
-
-        ObjectNode outbound = (ObjectNode) node.deepCopy();
-        outbound.set("sources", objectMapper.valueToTree(sources));
+    // 화면에 보낼 칸만 고른다. AI 서버가 보낸 처리 기록(trace) 같은 내부 정보는 브라우저로 보내지 않는다(ADR-0052)
+    private String outboundDone(List<Map<String, Object>> sources, ScreenAnswer screenAnswer)
+            throws JsonProcessingException {
+        Map<String, Object> outbound = new LinkedHashMap<>();
+        outbound.put("done", true);
         outbound.put("messageId", messageId);
         outbound.put("answer", screenAnswer.text());
-        outbound.set("references", objectMapper.valueToTree(screenAnswer.references()));
-        outbound.set("guidance", objectMapper.valueToTree(screenAnswer.guidance()));
+        outbound.put("sources", sources);
+        outbound.put("references", screenAnswer.references());
+        outbound.put("guidance", screenAnswer.guidance());
         return objectMapper.writeValueAsString(outbound);
     }
 

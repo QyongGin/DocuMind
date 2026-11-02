@@ -164,6 +164,7 @@ public class FastApiClient {
                 .question(question)
                 .topK(topK)
                 .systemPrompt(systemPrompt)
+                .includeTrace(true)
                 .build();
 
         try {
@@ -311,6 +312,7 @@ public class FastApiClient {
                         .question(question)
                         .topK(topK)
                         .systemPrompt(systemPrompt)
+                        .includeTrace(true)
                         .build())
                 .retrieve()
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
