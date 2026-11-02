@@ -35,10 +35,12 @@ KINDS = {kind.name: kind for kind in (
     Kind("refuse_guide", "거절 + 확인처", False, 1),
     Kind("refuse_offtopic", "거절 · 엉뚱한 근거", False, 0),
 )}
-# 1회차 200개(설계 §2): 답 120 · 일부만 있음 20 · 거절 + 확인처 40 · 엉뚱한 근거 20
-ROUND1 = {"fact": 35, "procedure": 30, "table": 35, "multi": 20, "partial": 20, "refuse_guide": 40, "refuse_offtopic": 20}
+# 1회차 200개: 답 140 · 일부만 있음 20 · 거절 + 확인처 30 · 엉뚱한 근거 10 — 거절 20%(ADR-0043, 2026-10-26).
+# 처음 설계(거절 30%)를 평가셋 답없음 비율(14.7%, 개발셋 본 18.8%)과 학습 전 A.X 과잉 거절(7.4%)을 보고 낮췄다. 표 값은 답의 29%
+ROUND1 = {"fact": 40, "procedure": 35, "table": 40, "multi": 25, "partial": 20, "refuse_guide": 30, "refuse_offtopic": 10}
 USERS = ("재학생", "예비 입학생·지원자", "교직원", "외국인", "업체")
-STYLES = ("짧은 구어체", "정중체", "상황 설명형", "쉬운 한국어")
+# 말투(ADR-0044): 실제 사용자처럼 짧은 구어·검색어형을 더했다. 운영 질문 기록이 없어 비율은 고르게 돌린다
+STYLES = ("짧은 구어", "검색어형", "정중체", "상황 설명형", "쉬운 한국어")
 MIN_CHUNK_CHARS = 200
 TABLE_MIN_ROWS = 3
 BOILERPLATE_MIN_DOCS = 5  # 이만큼 넘는 문서에 같은 줄이 있으면 상투문
@@ -54,6 +56,23 @@ def scale(quotas: dict[str, int], total: int) -> dict[str, int]:
     for name in by_remainder[: total - sum(result.values())]:
         result[name] += 1
     return result
+
+
+MIN_YIELD = 0.2  # 수율을 모르거나 아주 낮을 때 쓰는 바닥값(계획 5개에 통과 1개)
+
+
+def fill_quotas(target: dict[str, int], passed: dict[str, int], planned: dict[str, int], planned_passed: dict[str, int],
+                total: int) -> dict[str, int]:
+    """다음 묶음의 종류별 개수: 1회차 목표(target)에서 이미 통과한 수(passed, 받은 근거로 정한 종류)를 빼고 모자란 종류만
+    배정한다(ADR-0041 결정 6). 계획한 종류가 판정 통과로 이어진 비율(수율 = planned_passed / planned)이 낮은 종류는 그만큼
+    더 계획한다. 모자란 종류가 없으면 빈 사전."""
+    weights = {}
+    for name, goal in target.items():
+        lack = max(0, goal - passed.get(name, 0))
+        if lack:
+            rate = planned_passed.get(name, 0) / planned[name] if planned.get(name) else MIN_YIELD
+            weights[name] = lack / max(rate, MIN_YIELD)
+    return {name: count for name, count in scale(weights, total).items() if count} if weights else {}
 
 
 def dataset_documents(con: sqlite3.Connection) -> list[dict]:
@@ -141,8 +160,9 @@ def plan(documents: list[dict], quotas: dict[str, int], fetch_chunks: Callable[[
     items = []
     for number, name in enumerate(sequence, 1):
         kind = KINDS[name]
+        # 사용자와 말투 수가 같아도 짝이 고정되지 않게, 말투는 사용자를 한 바퀴 돌 때마다 하나씩 넘긴다
         item = {"id": f"{batch}-{number:04d}", "batch": batch, "kind": name, "user": USERS[(number - 1) % len(USERS)],
-                "style": STYLES[(number - 1) % len(STYLES)], "seed": seed, "group_id": None, "ledger_id": None,
+                "style": STYLES[((number - 1) // len(USERS)) % len(STYLES)], "seed": seed, "group_id": None, "ledger_id": None,
                 "document_id": None, "title": None, "topic": None, "format": None, "chunks": []}
         if kind.chunks == 0:
             items.append(item)

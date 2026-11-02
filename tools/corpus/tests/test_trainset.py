@@ -42,8 +42,9 @@ def fetch_chunks(document_id):
 
 def test_scale_keeps_round1_ratio():
     assert scale(ROUND1, 200) == ROUND1
-    assert scale(ROUND1, 40) == {"fact": 7, "procedure": 6, "table": 7, "multi": 4, "partial": 4,
-                                 "refuse_guide": 8, "refuse_offtopic": 4}
+    assert scale(ROUND1, 40) == {"fact": 8, "procedure": 7, "table": 8, "multi": 5, "partial": 4,
+                                 "refuse_guide": 6, "refuse_offtopic": 2}
+    assert (ROUND1["refuse_guide"] + ROUND1["refuse_offtopic"]) / sum(ROUND1.values()) == 0.2  # 거절 20%(ADR-0043)
     assert sum(scale(ROUND1, 60).values()) == 60
 
 
@@ -222,13 +223,47 @@ def test_refusal_shapes():
     # 운영 거절 문장이 아닌 거절(번호를 붙였거나 짧아도) — 채점기가 거절로 못 알아볼 수 있는 말투를 가르치지 않는다
     other_words = checks.check(record(kind="refuse_guide", target_ga="확인이 어렵습니다. 학사지원팀(02-000-0000)에 문의하세요. [출처 1]"))
     assert failed(other_words) == ["모양"]
-    assert failed(checks.check(record(kind="refuse_offtopic", target_ga="모르겠습니다."))) == ["모양"]
+    dont_know = checks.check(record(kind="refuse_offtopic", target_ga="모르겠습니다."))
+    assert "모양" in failed(dont_know) and dont_know["drop"]  # 거절 말투라 답 예시로 바뀌지 않고 모양에서 떨어진다
 
 
 def test_partial_needs_answer_and_refusal():
     target = f"휴학 신청은 8월 29일까지입니다. 휴학 비용은 {prompts.REFUSAL}\n[출처 1]"
     assert failed(checks.check(record(kind="partial", target_ga=target))) == []
-    assert "모양" in failed(checks.check(record(kind="partial")))
+    # 일부만 있음 계획인데 받은 근거로 다 답했으면 답 예시로 바뀐다(ADR-0041)
+    whole = checks.check(record(kind="partial"))
+    assert whole["kind"] == "fact" and failed(whole) == [] and whole["judge_notes"]
+
+
+def test_kind_follows_received_evidence_not_plan():
+    # 거절 계획인데 받은 근거에 답이 있어 답했다 — 근거 번호가 둘이면 여러 근거 합치기
+    answered = checks.check(record(kind="refuse_guide", hint="", target_ga="8월 29일까지 신청하면 됩니다.\n[출처 1][출처 2]"))
+    assert answered["kind"] == "multi" and not answered["drop"] and "계획 refuse_guide" in answered["judge_notes"][0]
+    # 값이 없는 말글 답은 글자 겹침으로 가르지 않고 Claude 판정에 확인 메모를 넘긴다
+    words = checks.check(record(kind="refuse_guide", hint="", target_ga="학사지원팀에서 휴학을 신청받습니다.\n[출처 1]"))
+    assert words["kind"] == "fact" and "출처 번호 대조" not in words["checks"]
+    assert any("값이 없는 답" in note for note in words["judge_notes"])
+    # 답 계획인데 질문 재료 청크가 검색됐고 답 근거도 남았는데 거절했다 — 목표 답이 틀린 것이라 바꾸지 않고 떨어뜨린다
+    wrong_refusal = checks.check(record(kind="fact", target_ga=f"{prompts.REFUSAL}\n[출처 1]"))
+    assert wrong_refusal["kind"] == "fact" and "모양" in failed(wrong_refusal)
+    # 질문 재료 청크가 검색되지 않아 받은 근거에 답이 없으면 거절 예시로 바뀐다
+    missed = checks.check(record(kind="fact", target_ga=f"{prompts.REFUSAL}\n[출처 1]",
+                                 retrieved=[{"document_id": "9", "chunk_index": 0}]))
+    assert missed["kind"] == "refuse_guide" and not missed["drop"]
+
+
+def test_run_checks_keeps_planned_kind_and_gives_same_result_twice(tmp_path):
+    batch = tmp_path / "r1"
+    base = record(id="r1-0001", kind="refuse_guide", hint="", target_ga="8월 29일까지 신청하면 됩니다.\n[출처 1]")
+    pipeline.write(batch, "plan", [{key: base[key] for key in ("id", "kind", "document_id", "chunks")}], mode="w")
+    pipeline.write(batch, "questions", [{"id": "r1-0001", "question": base["question"], "hint": "", "possible": True}])
+    pipeline.write(batch, "attached", [{"id": "r1-0001", "prompt": base["prompt"], "retrieved": base["retrieved"]}])
+    pipeline.write(batch, "targets", [{"id": "r1-0001", "target_ga": base["target_ga"]}])
+    for _ in range(2):
+        counts = pipeline.run_checks(batch)
+        merged = pipeline.merged(batch)[0]
+        assert (merged["kind"], merged["kind_planned"], counts["종류 바꿈"]) == ("fact", "refuse_guide", 1)
+    assert pipeline.status(batch)["fact"]["종류 바꿈"] == 1
 
 
 def test_refusal_example_flags_ax_answer_with_evidence_values():
@@ -336,7 +371,20 @@ def test_plan_gives_drafter_text_without_boilerplate():
 def test_question_prompt_asks_for_named_subject_and_keeps_user():
     text = prompts.question_prompt({"kind": "fact", "user": "교직원", "style": "정중체", "title": "가나대학 안내",
                                     "chunks": [chunk(0)]})
-    assert "대상(행사·전형·장학금·프로그램·학과 이름 등)" in text and "전혀 없을 때만" in text and "반드시 지킨다" in text
+    assert "대상(행사·전형·장학금·프로그램·학과 등)" in text and "전혀 없을 때만" in text and "반드시 지킨다" in text
+    assert "공식 명칭 전체" in text  # 문서 용어를 베끼지 않고 평소 부르는 이름으로(ADR-0044)
+
+
+def test_styles_rotate_independently_of_users():
+    from corpus.trainset.plan import STYLES, USERS, plan
+    items = plan([], {"refuse_offtopic": 25}, lambda document_id: [], "r1", seed=1)  # 글 없는 종류라 문서가 필요 없다
+    assert len({(item["user"], item["style"]) for item in items}) == len(USERS) * len(STYLES)  # 25개면 짝이 모두 한 번씩
+    assert {"짧은 구어", "검색어형"} <= set(STYLES) and all(style in prompts.STYLE_RULES for style in STYLES)
+
+
+def test_target_prompt_lists_guidance_candidates_from_evidence():
+    text = prompts.target_prompt({"kind": "fact"}, PROMPT, "8월 18일부터 8월 29일까지")
+    assert "[근거에 있는 안내 후보]" in text and "- [출처 1]" in text and "02-000-0000" in text.split("\n[챗봇이 받는 입력]\n")[0]  # 후보는 입력 앞(지시문 안)에
 
 
 def test_offtopic_prompt_does_not_invite_impossible():
@@ -352,3 +400,155 @@ def test_offtopic_prompt_does_not_invite_impossible():
 ])
 def test_user_category(text, expected):
     assert pipeline.user_category(text, "교직원") == expected
+
+
+def test_probe_score_counts_ax_answers_against_target():
+    good = "8월 29일까지 신청하면 됩니다."
+    scored = checks.probe_score(record(ax_answer=good, ax_samples=[good, "9월 5일까지입니다.", prompts.REFUSAL]), "fact")
+    assert (scored["n"], scored["decided"], scored["correct"]) == (4, 4, 2)
+    assert scored["wrong"] == ["9월 5일까지입니다.", prompts.REFUSAL]  # 틀린 답은 선호 학습의 '나쁜 답' 후보
+    refusal = checks.probe_score(record(kind="refuse_guide", target_ga=prompts.REFUSAL, ax_answer=good,
+                                        ax_samples=[prompts.REFUSAL, "확인이 어렵습니다."]), "refuse_guide")
+    assert (refusal["decided"], refusal["correct"]) == (3, 2)
+    no_values = checks.probe_score(record(target_ga="학사지원팀에서 받습니다.\n[출처 1]", ax_answer="학사지원팀"), "fact")
+    assert (no_values["n"], no_values["decided"]) == (1, 0)  # 값이 없으면 규칙으로 가르지 않는다
+
+
+def test_check_notes_missing_contact_from_cited_evidence():
+    missing = checks.check(record(target_ga="8월 29일까지 신청하면 됩니다.\n[출처 1]"))
+    assert not missing["drop"] and any("02-000-0000" in note for note in missing["judge_notes"])
+    given = checks.check(record())  # 기본 목표 답은 학사지원팀 번호를 말한다
+    assert not any("연락처" in note for note in given["judge_notes"])
+
+
+def test_run_probe_samples_ax_with_production_settings(tmp_path):
+    batch = tmp_path / "r1"
+    pipeline.write(batch, "plan", [{"id": "r1-0001", "kind": "fact"}], mode="w")
+    pipeline.write(batch, "questions", [{"id": "r1-0001", "question": "휴학 언제까지?", "possible": True}])
+    pipeline.write(batch, "attached", [{"id": "r1-0001", "prompt": PROMPT,
+                                        "runtime": {"llm_model": "ax40light:q4km", "num_ctx": 12288, "num_predict": 512}}])
+    session = FakeSession({"response": "8월 29일까지입니다."})
+    assert pipeline.run_probe(batch, session, "http://o", samples=3, log=lambda line: None) == {"probed": 1}
+    bodies = [body for _, body in session.sent]
+    assert len(bodies) == 3 and {body["model"] for body in bodies} == {"ax40light:q4km"}
+    assert {(body["options"]["num_ctx"], body["options"]["temperature"]) for body in bodies} == {(12288, 0.7)}
+    assert bodies[0]["prompt"] == PROMPT  # 운영 프롬프트 그대로
+    assert pipeline.merged(batch)[0]["ax_samples"] == ["8월 29일까지입니다."] * 3
+    assert pipeline.run_probe(batch, session, "http://o", samples=3, log=lambda line: None) == {}  # 끝난 것은 건너뜀
+
+
+def test_missing_guidance_compares_cited_lines_regardless_of_date_format():
+    from corpus.trainset import evidence
+    complete = "2026. 8. 18. ~ 8. 29.까지 신청합니다. 문의 02-000-0000\n[출처 1]"
+    assert evidence.missing_guidance(complete, PROMPT) == []
+    lost = evidence.missing_guidance("8월 29일까지 신청하면 됩니다.\n[출처 1]", PROMPT)
+    assert [(number, values) for number, _, values in lost] == [(1, ["02-000-0000", "8월 18일"])]
+    # 거절 답은 확인처(연락처·사이트)만 본다
+    refusal = evidence.missing_guidance(prompts.REFUSAL + "\n[출처 1]", PROMPT, refusal=True)
+    assert [values for _, _, values in refusal] == [["02-000-0000"]]
+
+
+def test_missing_guidance_skips_uncited_evidence_and_revision_dates():
+    from corpus.trainset import evidence
+    prompt = ("[검색 근거]\n[출처 1]\n문서: 가나대학 학칙.pdf\n전체 내용:\n"
+              "학생은 사유 발생일로부터 7일 이내에 출석인정원을 낸다. <개정 2019.11.25.>\n\n"
+              "[출처 2]\n문서: 가나대학 학사 안내.html\n전체 내용:\n문의: 가나대학 학사팀 02-111-1111\n\n[사용자 질문]\n출석 인정?")
+    assert evidence.missing_guidance("7일 이내에 출석인정원을 내야 합니다.\n[출처 1]", prompt) == []  # 개정일·출처 2는 안 봄
+    assert [values for _, _, values in evidence.missing_guidance("출석인정원을 내야 합니다.\n[출처 1]", prompt)] == [["7일"]]
+
+
+def test_run_targets_rewrites_once_when_cited_guidance_is_missing(tmp_path):
+    batch = tmp_path / "r1"
+    prompts_by_id = {"r1-0001": PROMPT, "r1-0002": PROMPT.replace("휴학 언제까지 신청해?", "휴학 문의처랑 기간?"),
+                     "r1-0003": PROMPT.replace("휴학 언제까지 신청해?", "가나시 내일 날씨?")}
+    kinds = {"r1-0001": "fact", "r1-0002": "fact", "r1-0003": "refuse_offtopic"}
+    pipeline.write(batch, "plan", [{"id": item_id, "kind": kind, "chunks": []} for item_id, kind in kinds.items()], mode="w")
+    pipeline.write(batch, "questions", [{"id": item_id, "question": "q", "hint": "8월 29일까지", "possible": True}
+                                        for item_id in kinds])
+    pipeline.write(batch, "attached", [{"id": item_id, "prompt": prompt} for item_id, prompt in prompts_by_id.items()])
+    full, partial = record()["target_ga"], "8월 29일까지 신청하면 됩니다.\n[출처 1]"
+
+    def ollama(body):
+        if "[검사 결과]" in body["prompt"]:
+            return {"response": full}
+        if "가나시 내일 날씨?" in body["prompt"]:
+            return {"response": prompts.REFUSAL}
+        return {"response": full if "휴학 문의처랑 기간?" in body["prompt"] else partial}
+
+    session = FakeSession(ollama)
+    counts = pipeline.run_targets(batch, session, "http://o", "gemma", log=lambda line: None)
+    assert counts["made"] == 3 and counts["guidance_fix"] == 1 and len(session.sent) == 4
+    targets = pipeline.read(batch, "targets")
+    fixed = targets["r1-0001"]
+    assert fixed["target_ga"] == full
+    assert fixed["target_generation"]["ga"]["guidance_fix"]["draft"] == partial
+    assert fixed["target_generation"]["ga"]["guidance_fix"]["missing"] == ["[출처 1] 02-000-0000, 8월 18일"]
+    fix_prompt = session.sent[1][1]["prompt"]
+    assert "[먼저 쓴 답]\n" + partial in fix_prompt and "02-000-0000, 8월 18일" in fix_prompt
+    assert "근거 줄을 목록으로 붙여 넣지 않는다" in fix_prompt and fix_prompt.endswith(prompts.TARGET_END)
+    assert fix_prompt.count(PROMPT) == 1  # 챗봇 입력은 한 번만
+    assert "guidance_fix" not in targets["r1-0002"]["target_generation"]["ga"]  # 이미 다 쓴 답은 다시 쓰지 않음
+    assert "guidance_fix" not in targets["r1-0003"]["target_generation"]["ga"]  # 엉뚱한 근거 종류는 확인처를 붙이지 않음
+
+
+def test_ambiguous_rule_shared_by_target_prompt_and_judge_guide():
+    from corpus.trainset import judge
+    for shape in ("ga", "na"):
+        assert prompts.AMBIGUOUS_RULE in prompts.target_prompt({}, PROMPT, "", shape)
+    assert prompts.AMBIGUOUS_RULE in judge.PROMPT and judge.GUIDE_VERSION == "2026-10-26"
+
+
+def test_check_notes_missing_period_from_cited_evidence():
+    result = checks.check(record(target_ga="휴학은 8월 29일까지이며 문의는 학사지원팀(02-000-0000)입니다.\n[출처 1]"))
+    assert not result["drop"] and any("8월 18일" in note for note in result["judge_notes"])
+
+
+def test_fill_quotas_assigns_only_missing_kinds_weighted_by_yield():
+    from corpus.trainset.plan import fill_quotas
+    target = {"fact": 4, "table": 4, "refuse_guide": 2}
+    planned = {"fact": 4, "table": 4, "refuse_guide": 2}
+    # 표는 3개 모자라고 수율 1/4, 거절은 2개 모자라고 수율 0(바닥값 0.2) → 무게 12 대 10
+    quotas = fill_quotas(target, {"fact": 4, "table": 1}, planned, {"fact": 3, "table": 1}, 10)
+    assert quotas == {"table": 5, "refuse_guide": 5}
+    assert fill_quotas(target, target, planned, target, 10) == {}  # 다 채웠으면 새 묶음이 필요 없다
+
+
+def test_pick_round_balances_kinds_prefers_what_ax_misses_and_shares_ids_across_shapes(tmp_path):
+    def batch(name, rows):
+        folder = tmp_path / name
+        pipeline.write(folder, "plan", [{"id": row["id"], "kind": row["kind"]} for row in rows], mode="w")
+        pipeline.write(folder, "questions", [{"id": row["id"], "question": row["q"], "possible": True} for row in rows])
+        pipeline.write(folder, "attached", [{"id": row["id"], "prompt": PROMPT} for row in rows])
+        pipeline.write(folder, "targets", [{"id": row["id"], "target_ga": f"{row['id']} 가", "target_na": f"{row['id']} 나"}
+                                           for row in rows])
+        pipeline.write(folder, "checked", [{"id": row["id"], "kind": row["kind"], "keep": {"ga": True, "na": row.get("na", True)},
+                                            "probe": row.get("probe", {})} for row in rows])
+        pipeline.write(folder, "judged", [{"id": row["id"], "verdict": row["verdict"]} for row in rows])
+        pipeline.write(folder, "human", [{"id": row["id"], "human": row["human"]} for row in rows if "human" in row])
+        return folder
+
+    def probe(correct, decided):
+        return {"correct": correct, "decided": decided}
+
+    first = batch("a", [
+        {"id": "a1", "kind": "fact", "q": "가나대학 휴학 신청 기간이 언제인가요?", "verdict": "통과", "probe": probe(5, 5)},
+        {"id": "a2", "kind": "fact", "q": "가나대학 등록금 얼마야?", "verdict": "통과", "probe": probe(0, 5)},
+        {"id": "a3", "kind": "table", "q": "신입생 등록 기간 표", "verdict": "통과", "probe": probe(2, 4)},
+        {"id": "a4", "kind": "fact", "q": "가나대학 기숙사비?", "verdict": "탈락", "probe": probe(0, 5)},
+        {"id": "a5", "kind": "fact", "q": "가나대학 장학금 문의처", "verdict": "통과", "na": False, "probe": probe(0, 5)}])
+    second = batch("b", [
+        {"id": "b1", "kind": "fact", "q": "가나대학 휴학 신청 기간이 언제인가요?", "verdict": "통과", "probe": probe(0, 5)},
+        {"id": "b2", "kind": "refuse_guide", "q": "가나대학 셔틀버스 요금?", "verdict": "탈락", "human": "통과"},
+        {"id": "b3", "kind": "fact", "q": "가나대학 졸업 학점?", "verdict": "통과", "human": "탈락", "probe": probe(0, 5)}])
+    # 3개면 1회차 비율로 사실·표·절차 하나씩. 절차는 없어 남은 예시 중 아는 정도가 낮은 b2(모름 0.5)가 a1(다 맞힘)보다 먼저
+    # b1은 a1과 질문이 겹쳐 빠지고, a4는 탈락, a5는 모양 '나'가 자동 검사를 못 넘어, b3은 사람이 탈락으로 바꿔 빠진다
+    assert [record["id"] for record in pipeline.pick_round([first, second], 3)] == ["a2", "a3", "b2"]
+    manifest = pipeline.export_round([first, second], tmp_path / "round1", 3)
+    assert manifest["kinds"] == {"fact": 1, "table": 1, "refuse_guide": 1}
+    assert manifest["known"] == {"못 맞힘": 1, "가끔": 1, "모름": 1}
+    for shape in ("ga", "na"):
+        lines = [json.loads(line) for line in (tmp_path / "round1" / f"round-{shape}.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert [line["id"] for line in lines] == ["a2", "a3", "b2"]  # 두 모양에 같은 예시
+        assert lines[0]["messages"][1]["content"] == f"a2 {'가' if shape == 'ga' else '나'}"
+    passed, planned, planned_passed = pipeline.yields([first, second])
+    assert passed == {"fact": 4, "table": 1, "refuse_guide": 1} and planned["fact"] == 6

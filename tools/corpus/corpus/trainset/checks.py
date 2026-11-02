@@ -10,27 +10,15 @@ import re
 from collections import defaultdict
 
 from ..evalset.scoring import REFUSAL_PHRASES, _number_in_context, normalize, numbers_with_units
+from .evidence import CITE, PHONE, evidence_blocks, missing_guidance  # noqa: F401 (review가 checks.evidence_blocks·PHONE을 씀)
 from .plan import KINDS
 from .prompts import REFUSAL
 
-CITE = re.compile(r"\[출처\s*(\d+)\]")
-PHONE = re.compile(r"(?<!\d)\d{2,4}-\d{3,4}-\d{4}(?!\d)")
 RESIDENT_NUMBER = re.compile(r"(?<!\d)\d{6}-[1-4]\d{6}(?!\d)")
 MOBILE = re.compile(r"(?<!\d)01[016789]-?\d{3,4}-?\d{4}(?!\d)")
-BLOCK_HEAD = re.compile(r"^\[출처 (\d+)\]\s*$", re.M)
 TABLE_FACT = re.compile(r"^\s*\d+\.\s*(?P<table>[^:\n]+):\s*(?P<row>.+?) 행 정보는 (?P<rest>.+?)이다\.?\s*$", re.M)
 MIN_OVERLAP = 0.6
 MIN_QUESTION_CHARS = 5  # 글자·숫자만 셈. 2026-10-21 첫 묶음에서 초안 모델이 질문을 "..."로 낸 적이 있다
-
-
-def evidence_blocks(prompt: str) -> dict[int, str]:
-    """프롬프트의 [검색 근거]를 [출처 N] 블록마다 나눈다."""
-    start = prompt.find("[검색 근거]")
-    end = prompt.find("[사용자 질문]", start + 1)
-    evidence = prompt[start:end] if start >= 0 else prompt
-    heads = list(BLOCK_HEAD.finditer(evidence))
-    return {int(head.group(1)): evidence[head.end(): heads[index + 1].start() if index + 1 < len(heads) else len(evidence)]
-            for index, head in enumerate(heads)}
 
 
 def table_facts(text: str) -> list[tuple[str, str, str, str]]:
@@ -102,14 +90,84 @@ def shape_check(kind: str, target: str, shape: str) -> tuple[bool, str]:
     return True, ""
 
 
+def answer_body(target: str, shape: str = "ga") -> str:
+    """목표 답에서 챗봇이 말하는 부분. 인용형(나)은 '답:' 줄 뒤만 본다."""
+    text = target.strip()
+    if shape == "na" and "답:" in text:
+        text = text.split("답:", 1)[1]
+    return text.strip()
+
+
+# 운영 거절 문장이 아닌 말투의 거절. 채점기의 거절 목록(REFUSAL_PHRASES)에 없어 답으로 잘못 보지 않도록 행동 판단에만 더한다
+REFUSAL_LIKE = ("확인이 어렵", "안내가 어렵", "알기 어렵", "파악이 어렵", "말씀드리기 어렵", "모르겠")
+
+
+def refusal_like(text: str) -> bool:
+    normalized = normalize(text)
+    return refuses(text) or any(normalize(phrase) in normalized for phrase in REFUSAL_LIKE)
+
+
+def _behavior(kind: str) -> str:
+    return "partial" if kind == "partial" else ("answer" if KINDS[kind].answerable else "refuse")
+
+
+def hint_in_prompt(hint: str, context: str) -> bool:
+    """질문을 만든 글의 답 근거가 프롬프트(근거 8개)에 남았는가. 값이 있으면 값으로, 없으면 글자 겹침으로 본다."""
+    hint_values = values(hint)
+    if hint_values:
+        return all(value_in(value, context) for value in hint_values)
+    return overlap(hint, context) >= MIN_OVERLAP
+
+
+def source_retrieved(record: dict) -> bool:
+    """질문을 만든 청크가 검색된 근거 8개 안에 있는가."""
+    sources = {(str(record.get("document_id")), str(chunk.get("chunk_index"))) for chunk in record.get("chunks") or []}
+    retrieved = {(str(item.get("document_id")), str(item.get("chunk_index"))) for item in record.get("retrieved") or []}
+    return bool(sources & retrieved)
+
+
+def decide_kind(record: dict) -> tuple[str, str]:
+    """예시 종류를 계획이 아니라 챗봇이 받은 근거 8개로 정한다(ADR-0041). (종류, 바꾼 이유)를 돌려준다.
+
+    계획(질문 재료 청크 하나로 정함)과 목표 답(근거 8개를 보고 씀)의 행동이 다르면 목표 답을 따른다.
+    단, 답 계획을 거절 쪽으로 바꾸는 것은 계획한 답 근거가 프롬프트에 오지 않았을 때만 한다 —
+    그 청크가 검색됐고 답 근거도 남았는데 거절했다면 목표 답이 틀린 것이라 바꾸지 않고 검사에서 떨어뜨린다.
+    목표 답이 맞는지는 이어지는 자동 검사와 Claude 판정이 다시 본다. 판단은 주 모양(가)의 목표 답으로 한다.
+    """
+    planned = record.get("kind_planned") or record["kind"]
+    body = answer_body(record.get("target_ga") or "", "ga")
+    if not body:
+        return planned, ""
+    behavior = "refuse" if body.startswith(REFUSAL) else ("partial" if refusal_like(body) else "answer")
+    planned_behavior = _behavior(planned)
+    if behavior == planned_behavior:
+        return planned, ""
+    if planned_behavior != "refuse" and behavior != "answer":
+        context = normalize("\n".join(evidence_blocks(record.get("prompt") or "").values()))
+        if source_retrieved(record) and hint_in_prompt(record.get("hint") or "", context):
+            return planned, ""
+    if behavior == "answer":
+        cited = set(CITE.findall(body))
+        kind = "multi" if len(cited) >= 2 else "fact"
+    else:
+        kind = "partial" if behavior == "partial" else "refuse_guide"
+    return kind, f"계획 {planned} → 받은 근거 기준 {kind}"
+
+
 def check(record: dict, shape: str = "ga") -> dict:
-    """예시 하나를 검사한다. record에는 plan·questions·attached·targets의 칸이 합쳐져 있다."""
-    kind, target = record["kind"], record.get(f"target_{shape}") or ""
+    """예시 하나를 검사한다. record에는 plan·questions·attached·targets의 칸이 합쳐져 있다.
+    종류는 먼저 받은 근거 8개 기준으로 정하고(decide_kind) 그 종류로 검사한다."""
+    planned = record.get("kind_planned") or record["kind"]
+    kind, kind_why = decide_kind(record)
+    target = record.get(f"target_{shape}") or ""
     question, hint, prompt = record.get("question") or "", record.get("hint") or "", record.get("prompt") or ""
     blocks = evidence_blocks(prompt)
     context = normalize("\n".join(blocks.values()))
     answerable = KINDS[kind].answerable
+    # 질문 재료 청크에 답이 있도록 계획한 예시만 답 근거·왕복 검색이 뜻이 있다(거절 계획에서 바뀐 예시는 답 근거가 없다)
+    planned_answer = KINDS[planned].answerable
     results: dict[str, dict] = {}
+    notes = [f"{kind_why} — 받은 근거에 정말 그 답이 있는지(없는지) 확인"] if kind_why else []
 
     def put(name: str, ok: bool, why: str = "") -> None:
         results[name] = {"ok": ok, "why": "" if ok else why}
@@ -127,29 +185,68 @@ def check(record: dict, shape: str = "ga") -> dict:
         outside = sorted(value for value in target_values if not value_in(value, cited_text))
         if target_values:
             put("출처 번호 대조", not outside, f"쓴 근거 번호의 글에 없는 값 {outside}")
-        else:
+        elif hint:
             put("출처 번호 대조", overlap(hint, cited_text) >= MIN_OVERLAP, "쓴 근거 번호의 글에 답 근거가 없음")
-        hint_values = values(hint)
-        if hint_values:
-            gone = sorted(value for value in hint_values if not value_in(value, context))
-            put("지워진 정답", not gone, f"답 근거의 값이 프롬프트에 없음 {gone}")
         else:
-            put("지워진 정답", overlap(hint, context) >= MIN_OVERLAP, "답 근거 글이 프롬프트에 없음")
-        sources = {(str(record.get("document_id")), str(chunk.get("chunk_index"))) for chunk in record.get("chunks") or []}
-        retrieved = {(str(item.get("document_id")), str(item.get("chunk_index"))) for item in record.get("retrieved") or []}
-        put("왕복 검색", bool(sources & retrieved), "질문을 만든 청크가 근거 8개 안에 없음")
+            # 값도 답 근거도 없는 답(거절 계획에서 바뀐 말글 답)은 글자 겹침으로 가를 수 없어 Claude 판정에 맡긴다
+            notes.append("값이 없는 답 — 쓴 근거 번호의 글에 그 내용이 있는지 확인")
+        if planned_answer:
+            hint_values = values(hint)
+            if hint_values:
+                gone = sorted(value for value in hint_values if not value_in(value, context))
+                put("지워진 정답", not gone, f"답 근거의 값이 프롬프트에 없음 {gone}")
+            else:
+                put("지워진 정답", overlap(hint, context) >= MIN_OVERLAP, "답 근거 글이 프롬프트에 없음")
+            put("왕복 검색", source_retrieved(record), "질문을 만든 청크가 근거 8개 안에 없음")
         put("모호한 표 근거", *ambiguous_table(target, prompt))
     # 질문과 답 사이에 줄을 넣는다 — 붙이면 질문 끝 숫자와 답 첫 숫자가 이어져 번호 경계를 못 찾는다
     both = f"{question}\n{target}"
     sensitive = RESIDENT_NUMBER.search(both) or MOBILE.search(both)
     put("개인정보", not sensitive, "주민등록번호·개인 휴대전화 형태")
-    notes = []
+    if kind != "refuse_offtopic":
+        # 목표 답 단계에서 한 번 다시 쓴 뒤에도 쓴 근거의 안내 줄(연락처·사이트·기간)이 빠졌으면 안내 빠짐을 의심한다(ADR-0046).
+        # 질문한 일과 관계있는 안내인지는 규칙으로 가를 수 없어 떨어뜨리지 않고 Claude 판정에 메모로 넘긴다
+        left = missing_guidance(target, prompt, refusal=answer_body(target, shape).startswith(REFUSAL))
+        if left:
+            listed = [f"[출처 {number}] {', '.join(lost)}" for number, _, lost in left[:3]]
+            notes.append(f"근거의 안내 {listed}가 목표 답에 없음 — 질문한 일과 관계있으면 안내 빠짐")
     if not answerable:
         ax_answer = record.get("ax_answer") or ""
         found = sorted(value for value in values(ax_answer, question) if value_in(value, context))
         if ax_answer and not refuses(ax_answer) and found:
             notes.append(f"학습 전 A.X가 근거의 값 {found}로 답함 — 근거에 답이 있는지 확인")
-    return {"checks": results, "drop": any(not result["ok"] for result in results.values()), "judge_notes": notes}
+    return {"kind": kind, "checks": results, "drop": any(not result["ok"] for result in results.values()),
+            "judge_notes": notes}
+
+
+def probe_score(record: dict, kind: str) -> dict:
+    """학습 전 A.X 답(운영 설정 1번 + 표본 추출)이 이 예시에서 맞는지 센다(ADR-0042, Meta Llama 3 §4.3.6의 knowledge probing).
+
+    규칙 채점이다. 거절 종류면 거절했으면 맞음. 답 종류면 거절하지 않고, 목표 답의 값(날짜·금액·연락처 등)을 하나 이상 말하고,
+    말한 값이 모두 근거에 있으면 맞음(평가 채점기의 '지어낸 값' 기준과 같다). 근거에 있는 다른 행·해의 값을 말한 경우는
+    못 가른다. 목표 답에 값이 없으면 '판단 못 함'으로 센다. 틀린 답은 2회차 선호 학습의 '나쁜 답' 후보로 남긴다.
+    """
+    answers = [answer for answer in [record.get("ax_answer"), *(record.get("ax_samples") or [])] if answer]
+    question = record.get("question") or ""
+    expected = values(record.get("target_ga") or "", question)
+    context = normalize("\n".join(evidence_blocks(record.get("prompt") or "").values()))
+    behavior = _behavior(kind)
+    correct, decided, wrong = 0, 0, []
+    for answer in answers:
+        refused = answer.strip().startswith(REFUSAL) or refusal_like(answer)
+        if behavior == "refuse":
+            ok = refused
+        elif not expected:
+            continue
+        else:
+            said = values(answer, question)
+            ok = bool(said & expected) and all(value_in(value, context) for value in said) and (
+                behavior == "partial" or not refused)
+        decided += 1
+        correct += ok
+        if not ok:
+            wrong.append(answer)
+    return {"n": len(answers), "decided": decided, "correct": correct, "wrong": wrong}
 
 
 def ambiguous_table(target: str, prompt: str) -> tuple[bool, str]:

@@ -1,8 +1,9 @@
 """명령줄: `python -m corpus trainset <명령>` — 학습 예시 만들기(설계 `docs/rag/m2/6단계-학습예시-설계-20261021.md`).
 
-    plan       묶음 고르기: 종류별 개수(1회차 비율을 --size로 줄이거나 늘림)만큼 데이터셋용 색인의 청크를 고른다
+    plan       묶음 고르기: 종류별 개수(1회차 비율을 --size로 줄이거나 늘림, --fill-from이면 모자란 종류만)만큼 데이터셋용 색인의 청크를 고른다
     questions  질문 초안(초안 모델, ADR-0040)
     attach     근거 붙이기: 데이터셋 AI 서버 /query(평가용 옵션)의 운영 프롬프트·근거 8개·학습 전 A.X 답
+    probe      학습 전 A.X 답을 같은 프롬프트로 여러 번(표본 추출) 받아 아는 정도를 잰다(ADR-0042)
     targets    목표 답 초안(ADR-0039). --shapes ga,na면 인용형도
     check      자동 검사(ADR-0037)와 중복 표시
     judge      Claude 판정(통과·탈락과 이유만, 저장소 밖 격리 폴더에서 `claude -p`)
@@ -10,6 +11,7 @@
     merge-review 화면이 내려받은 판정 기록을 합치고 Claude와 어긋난 수를 센다
     status     단계별·종류별 개수
     export     학습 파일(A.X 채팅 형식 JSONL)
+    export-round 1회차 학습 파일: 여러 묶음에서 종류 비율대로, 학습 전 A.X가 틀리던 예시 먼저, 모양마다 같은 예시
 
 데이터셋 AI 서버와 Ollama는 데스크탑 안쪽 주소에만 열려 있어 맥북에서는 SSH 터널로 부른다
 (`docs/development/local-gpu/데이터셋-색인-절차.md`).
@@ -25,7 +27,7 @@ from pathlib import Path
 import requests
 
 from . import judge, pipeline, review
-from .plan import ROUND1, boilerplate_lines, dataset_documents, plan, scale
+from .plan import ROUND1, boilerplate_lines, dataset_documents, fill_quotas, plan, scale
 
 DEFAULT_MODEL = "gemma4:12b-it-qat"
 
@@ -73,6 +75,15 @@ def cmd_plan(args) -> int:
     boilerplate = boilerplate_lines(chunks)
     print(f"문서 {len(documents)} · 청크를 받은 문서 {len(chunks)} · 상투문 줄 {len(boilerplate)}")
     quotas = scale(ROUND1, args.size)
+    if args.fill_from:
+        # 판정을 마친 묶음의 통과 수를 1회차 목표에서 빼고 모자란 종류만 배정한다(ADR-0041 결정 6)
+        passed, planned, planned_passed = pipeline.yields([_batch_dir(args).parent / name
+                                                           for name in args.fill_from.split(",") if name])
+        quotas = fill_quotas(ROUND1, passed, planned, planned_passed, args.size)
+        print(f"통과 {dict(passed)} · 계획 {dict(planned)} · 계획 종류별 통과 {dict(planned_passed)}")
+        if not quotas:
+            print("1회차 목표를 다 채웠다 — 새 묶음이 필요 없다")
+            return 1
     items = plan(documents, quotas, lambda document_id: chunks.get(document_id, []), args.batch, args.seed, skip,
                  boilerplate)
     pipeline.write(batch_dir, "plan", items, mode="w")
@@ -92,6 +103,13 @@ def cmd_questions(args) -> int:
 
 def cmd_attach(args) -> int:
     counts = pipeline.run_attach(_batch_dir(args), requests.Session(), args.ai_url, args.limit)
+    print(dict(counts))
+    return 0 if not counts.get("error") else 1
+
+
+def cmd_probe(args) -> int:
+    counts = pipeline.run_probe(_batch_dir(args), requests.Session(), args.ollama_url, args.samples, args.temperature,
+                                args.limit)
     print(dict(counts))
     return 0 if not counts.get("error") else 1
 
@@ -157,6 +175,17 @@ def cmd_export(args) -> int:
     return 0
 
 
+def cmd_export_round(args) -> int:
+    train = Path(args.root).parent / "train"
+    shapes = tuple(shape for shape in args.shapes.split(",") if shape)
+    manifest = pipeline.export_round([train / name for name in args.batches.split(",") if name], Path(args.out_dir),
+                                     args.size, shapes)
+    print(json.dumps({key: value for key, value in manifest.items() if key != "ids"}, ensure_ascii=False, indent=1))
+    if manifest["size"] < args.size:
+        print(f"통과한 예시가 모자라 {manifest['size']}개만 골랐다 — 묶음을 더 만든다")
+    return 0
+
+
 def add_parser(commands) -> None:
     trainset = commands.add_parser("trainset", help="학습 예시 만들기(M2 6단계)")
     sub = trainset.add_subparsers(dest="trainset_command", required=True)
@@ -173,6 +202,7 @@ def add_parser(commands) -> None:
     planning.add_argument("--skip-batches", help="쉼표로 묶음 이름: 그 묶음에서 쓴 문서 묶음은 고르지 않는다")
     planning.add_argument("--chunk-cache", default="chunks-dataset.jsonl",
                           help="문서별 청크 캐시 파일 이름(Assets/train/ 아래). 데이터셋 색인을 다시 만들면 지운다")
+    planning.add_argument("--fill-from", help="쉼표로 판정을 마친 묶음 이름: 그 통과 수를 1회차 목표에서 빼고 모자란 종류만 배정")
     planning.set_defaults(func=cmd_plan)
 
     questions = with_batch("questions", "질문 초안")
@@ -185,6 +215,13 @@ def add_parser(commands) -> None:
     attaching.add_argument("--ai-url", default="http://localhost:18100")
     attaching.add_argument("--limit", type=int)
     attaching.set_defaults(func=cmd_attach)
+
+    probing = with_batch("probe", "학습 전 A.X 답 여러 번 받기(아는 정도, ADR-0042)")
+    probing.add_argument("--ollama-url", default="http://localhost:11535")
+    probing.add_argument("--samples", type=int, default=pipeline.PROBE_SAMPLES)
+    probing.add_argument("--temperature", type=float, default=pipeline.PROBE_TEMPERATURE)
+    probing.add_argument("--limit", type=int)
+    probing.set_defaults(func=cmd_probe)
 
     targets = with_batch("targets", "목표 답 초안")
     targets.add_argument("--ollama-url", default="http://localhost:11535")
@@ -222,3 +259,10 @@ def add_parser(commands) -> None:
     exporting.add_argument("--verdicts", help="판정 JSON({예시 번호: '통과'|'탈락'}). 주면 통과만")
     exporting.add_argument("--use-judge", action="store_true", help="묶음의 판정(사람 > Claude)으로 통과만")
     exporting.set_defaults(func=cmd_export)
+
+    round_export = sub.add_parser("export-round", help="1회차 학습 파일(여러 묶음에서 종류 비율대로, A.X가 틀리던 예시 먼저)")
+    round_export.add_argument("--batches", required=True, help="쉼표로 묶음 이름(앞 묶음이 질문 중복에서 남는다)")
+    round_export.add_argument("--size", type=int, default=200)
+    round_export.add_argument("--shapes", default="ga,na")
+    round_export.add_argument("--out-dir", required=True)
+    round_export.set_defaults(func=cmd_export_round)

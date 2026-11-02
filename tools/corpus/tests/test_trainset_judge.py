@@ -178,3 +178,8 @@ def test_pick_for_judge_keeps_kind_ratio():
     small = [record["kind"] for record in pipeline.pick_for_judge(records, 10)]
     # 10개 비율로 사실 2 · 표 2 · 거절 + 확인처 2, 없는 종류의 자리(4)는 계획 순서대로 남은 예시(사실)로 채움
     assert len(small) == 10 and small.count("table") == 2 and small.count("refuse_guide") == 2 and small.count("fact") == 6
+
+
+def test_judge_prompt_accepts_real_user_phrasing():
+    # 질문 말투를 실제 사용자처럼 바꿨으므로(ADR-0044) 판정 지침도 검색어형·줄임말을 탈락시키지 않는다
+    assert "검색어처럼 낱말만" in judge.PROMPT and "공식 명칭" in judge.PROMPT

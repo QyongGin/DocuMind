@@ -10,10 +10,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Callable
 
-from . import checks, clients, prompts
+from . import checks, clients, evidence, prompts
 from .plan import KINDS, ROUND1, USERS, scale
 
-STEPS = ("plan", "questions", "attached", "targets", "checked", "judged", "human")
+STEPS = ("plan", "questions", "attached", "probes", "targets", "checked", "judged", "human")
 QUESTION_OPTIONS = {"temperature": 0.7, "num_ctx": 4096, "num_predict": 400}
 TARGET_OPTIONS = {"temperature": 0.2, "num_ctx": 12288, "num_predict": 700}
 
@@ -115,6 +115,35 @@ def run_attach(batch_dir: Path, session, ai_url: str, limit: int | None = None,
     return counts
 
 
+# 학습 전 A.X를 같은 운영 프롬프트로 여러 번 답하게 해 예시마다 아는 정도를 잰다(ADR-0042).
+# 운영 설정은 temperature 0이라 같은 답만 나와, 표본 추출로 받는다. 0.7은 판단값이다(높으면 엉뚱한 답, 낮으면 같은 답이 많음)
+PROBE_SAMPLES = 4
+PROBE_TEMPERATURE = 0.7
+
+
+def run_probe(batch_dir: Path, session, ollama_url: str, samples: int = PROBE_SAMPLES,
+              temperature: float = PROBE_TEMPERATURE, limit: int | None = None,
+              log: Callable[[str], None] = print) -> Counter:
+    """학습 전 A.X 답을 운영 프롬프트로 여러 번 받는다. 모델·문맥 길이·답 길이는 근거를 붙일 때 AI 서버가 알려 준 운영값을 쓴다."""
+    counts = Counter()
+    for record in _todo(batch_dir, "probes", lambda r: bool(r.get("prompt")), limit):
+        runtime = record.get("runtime") or {}
+        model = runtime.get("llm_model") or "ax40light:q4km"
+        options = {"temperature": temperature, "num_ctx": runtime.get("num_ctx") or 12288,
+                   "num_predict": runtime.get("num_predict") or 512}
+        try:
+            outs = [clients.generate(session, ollama_url, model, record["prompt"], **options) for _ in range(samples)]
+            result = {"id": record["id"], "ax_samples": [out["text"].strip() for out in outs],
+                      "probe_generation": {"model": model, **options, "samples": samples}}
+            counts["probed"] += 1
+        except (ValueError, KeyError, OSError) as error:
+            result = {"id": record["id"], "error": str(error)}
+            counts["error"] += 1
+        write(batch_dir, "probes", [result])
+        log(f"A.X 표본 {record['id']}: {'실패 ' + result['error'] if 'error' in result else len(result['ax_samples'])}")
+    return counts
+
+
 def run_targets(batch_dir: Path, session, ollama_url: str, model: str, shapes: tuple[str, ...] = ("ga",),
                 limit: int | None = None, log: Callable[[str], None] = print) -> Counter:
     """목표 답 초안. 답이 있는 종류에만 답 근거를 함께 준다(거절 종류는 근거만 보고 거절해야 한다)."""
@@ -124,10 +153,24 @@ def run_targets(batch_dir: Path, session, ollama_url: str, model: str, shapes: t
         result = {"id": record["id"], "target_generation": {"model": model, **TARGET_OPTIONS}}
         try:
             for shape in shapes:
-                out = clients.generate(session, ollama_url, model, prompts.target_prompt(record, record["prompt"], hint, shape),
-                                       **TARGET_OPTIONS)
-                result[f"target_{shape}"] = out["text"].strip()
-                result["target_generation"][shape] = out["generation"]
+                task = prompts.target_prompt(record, record["prompt"], hint, shape)
+                out = clients.generate(session, ollama_url, model, task, **TARGET_OPTIONS)
+                text, generation = out["text"].strip(), out["generation"]
+                # 답이 쓴 근거의 안내 줄이 빠졌으면 검사 결과를 주고 한 번 다시 쓴다(ADR-0046). 엉뚱한 근거 종류는
+                # 질문이 문서에서 오지 않아 근거의 확인처가 질문과 무관하다
+                planned = record.get("kind_planned") or record["kind"]
+                refusal = checks.answer_body(text, shape).startswith(prompts.REFUSAL)
+                missing = [] if planned == "refuse_offtopic" else evidence.missing_guidance(text, record["prompt"], refusal)
+                if missing:
+                    fixed = clients.generate(session, ollama_url, model, prompts.guidance_fix_prompt(task, text, missing),
+                                             **TARGET_OPTIONS)
+                    generation = {**generation, "guidance_fix": {
+                        "draft": text, "missing": [f"[출처 {number}] {', '.join(lost)}" for number, _, lost in missing],
+                        "generation": fixed["generation"]}}
+                    text = fixed["text"].strip()
+                    counts["guidance_fix"] += 1
+                result[f"target_{shape}"] = text
+                result["target_generation"][shape] = generation
             counts["made"] += 1
         except (ValueError, KeyError, OSError) as error:
             result = {"id": record["id"], "error": str(error)}
@@ -143,8 +186,13 @@ def run_checks(batch_dir: Path, shapes: tuple[str, ...] = ("ga",)) -> Counter:
     duplicate_of = checks.duplicates(records)
     results, counts = [], Counter()
     for record in records:
-        result = {"id": record["id"], "duplicate_of": duplicate_of.get(record["id"]),
-                  "result": {shape: checks.check(record, shape) for shape in shapes if record.get(f"target_{shape}")}}
+        # 종류는 계획이 아니라 받은 근거로 정해 덮어쓴다(ADR-0041). 계획은 kind_planned에 남겨 다시 돌려도 같은 결과가 나오게 한다
+        planned = record.get("kind_planned") or record["kind"]
+        kind, _ = checks.decide_kind(record)
+        result = {"id": record["id"], "kind": kind, "kind_planned": planned, "duplicate_of": duplicate_of.get(record["id"]),
+                  "result": {shape: checks.check(record, shape) for shape in shapes if record.get(f"target_{shape}")},
+                  "probe": checks.probe_score(record, kind)}
+        counts["종류 바꿈"] += kind != planned
         # 모양마다 따로 남긴다: 중복이 아니고 그 모양의 자동 검사를 모두 통과
         result["keep"] = {shape: result["duplicate_of"] is None and not shape_result["drop"]
                           for shape, shape_result in result["result"].items()}
@@ -176,7 +224,7 @@ def pick_for_judge(records: list[dict], size: int) -> list[dict]:
 
 
 def status(batch_dir: Path) -> dict:
-    """단계별 개수와 종류별 통과 수."""
+    """단계별 개수와 종류별 통과 수. 종류는 자동 검사 뒤에는 받은 근거로 정한 종류다(ADR-0041)."""
     records = merged(batch_dir)
     by_kind: dict[str, Counter] = {}
     for record in records:
@@ -186,18 +234,96 @@ def status(batch_dir: Path) -> dict:
         counter["attached"] += bool(record.get("prompt"))
         counter["target"] += bool(record.get("target_ga"))
         counter["keep"] += bool((record.get("keep") or {}).get("ga"))
+        counter["종류 바꿈"] += bool(record.get("kind_planned")) and record["kind"] != record["kind_planned"]
     return {kind: dict(counter) for kind, counter in by_kind.items()}
 
 
+def final_verdict(record: dict) -> str | None:
+    """예시의 최종 판정: 사람 판정이 있으면 사람, 없으면 Claude(ADR-0037). 판정 전이면 None."""
+    return record.get("human") or record.get("verdict")
+
+
 def verdicts(batch_dir: Path) -> dict[str, str]:
-    """예시마다 최종 판정: 사람 판정이 있으면 사람, 없으면 Claude(ADR-0037). 판정 전이면 빠진다."""
-    return {record["id"]: record.get("human") or record["verdict"] for record in merged(batch_dir)
-            if record.get("human") or record.get("verdict")}
+    """묶음의 예시별 최종 판정. 판정 전이면 빠진다."""
+    return {record["id"]: final_verdict(record) for record in merged(batch_dir) if final_verdict(record)}
+
+
+def yields(batch_dirs: list[Path]) -> tuple[Counter, Counter, Counter]:
+    """판정한 묶음들에서 종류별 통과 수(받은 근거로 정한 종류), 계획 수, 계획한 종류별 통과 수. 다음 묶음 계획(plan.fill_quotas)에 쓴다.
+    판정 전인 묶음을 넣으면 수율이 낮게 잡히므로 판정을 마친 묶음만 넣는다."""
+    passed, planned, planned_passed = Counter(), Counter(), Counter()
+    for batch_dir in batch_dirs:
+        for record in merged(batch_dir):
+            kind_planned = record.get("kind_planned") or record["kind"]
+            planned[kind_planned] += 1
+            if final_verdict(record) == "통과":
+                passed[record["kind"]] += 1
+                planned_passed[kind_planned] += 1
+    return passed, planned, planned_passed
+
+
+def known_rate(record: dict) -> float:
+    """학습 전 A.X가 여러 번 받은 답 중 맞힌 비율(ADR-0042). 값으로 하나도 가르지 못했으면 0.5(모름)."""
+    probe = record.get("probe") or {}
+    return probe["correct"] / probe["decided"] if probe.get("decided") else 0.5
+
+
+def pick_round(batch_dirs: list[Path], size: int, shapes: tuple[str, ...] = ("ga", "na")) -> list[dict]:
+    """1회차 학습 예시 고르기. 최종 판정 '통과'이고 모든 모양이 자동 검사를 통과한 예시에서 종류 비율(ROUND1)대로 고른다.
+    종류 안에서는 학습 전 A.X가 틀리던 예시를 먼저 넣고(ADR-0042 쓰임 ①), 모자란 종류의 자리는 남은 예시로 같은 순서로 채운다.
+    묶음을 넘어 질문이 겹치면 앞 묶음 것만 쓴다. 모든 모양에 같은 예시를 써서 모양 비교를 같은 문항 짝으로 한다(ADR-0039)."""
+    candidates = [record for batch_dir in batch_dirs for record in merged(batch_dir)
+                  if final_verdict(record) == "통과" and all((record.get("keep") or {}).get(shape) for shape in shapes)]
+    duplicate_of = checks.duplicates(candidates)
+    candidates = [record for record in candidates if record["id"] not in duplicate_of]
+    order = {record["id"]: number for number, record in enumerate(candidates)}
+
+    def priority(record: dict) -> tuple[float, int]:
+        return known_rate(record), order[record["id"]]
+
+    chosen = []
+    for kind, count in scale(ROUND1, size).items():
+        chosen += sorted((record for record in candidates if record["kind"] == kind), key=priority)[:count]
+    picked = {record["id"] for record in chosen}
+    chosen += sorted((record for record in candidates if record["id"] not in picked), key=priority)[:size - len(chosen)]
+    return sorted(chosen, key=lambda record: order[record["id"]])
+
+
+def training_line(record: dict, shape: str) -> dict:
+    """학습 파일 한 줄(A.X 채팅 형식): 사용자 = 운영 프롬프트, 답 = 목표 답. A.X는 시스템 메시지 없이 사용자 한 턴으로 답한다
+    (deploy/models 틀)."""
+    return {"id": record["id"],
+            "messages": [{"role": "user", "content": record["prompt"]},
+                         {"role": "assistant", "content": record[f"target_{shape}"]}],
+            "meta": {key: record.get(key) for key in ("kind", "kind_planned", "user_actual", "style", "ledger_id", "group_id")}
+                    | {"drafter": (record.get("drafter") or {}).get("model"), "shape": shape}}
+
+
+def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple[str, ...] = ("ga", "na")) -> dict:
+    """1회차 학습 파일: 모양마다 round-<모양>.jsonl(같은 예시), 고른 예시의 종류·A.X 아는 정도를 manifest.json에 남긴다."""
+    chosen = pick_round(batch_dirs, size, shapes)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for shape in shapes:
+        with (out_dir / f"round-{shape}.jsonl").open("w", encoding="utf-8") as out:
+            for record in chosen:
+                out.write(json.dumps(training_line(record, shape), ensure_ascii=False) + "\n")
+
+    def known(record: dict) -> str:
+        probe = record.get("probe") or {}
+        if not probe.get("decided"):
+            return "모름"
+        return "다 맞힘" if probe["correct"] == probe["decided"] else ("못 맞힘" if probe["correct"] == 0 else "가끔")
+
+    manifest = {"size": len(chosen), "batches": [Path(batch_dir).name for batch_dir in batch_dirs], "shapes": list(shapes),
+                "kinds": dict(Counter(record["kind"] for record in chosen)),
+                "known": dict(Counter(known(record) for record in chosen)), "ids": [record["id"] for record in chosen]}
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    return manifest
 
 
 def export(batch_dir: Path, out_file: Path, shape: str = "ga", verdicts: dict[str, str] | None = None) -> int:
-    """학습 파일(A.X 채팅 형식): 사용자 = 운영 프롬프트, 답 = 목표 답. 자동 검사 통과(중복 아님)이고,
-    판정(verdicts)을 주면 '통과'인 예시만. A.X는 시스템 메시지 없이 사용자 한 턴으로 답한다(deploy/models 틀)."""
+    """한 묶음의 학습 파일(training_line 형식). 자동 검사 통과(중복 아님)이고, 판정(verdicts)을 주면 '통과'인 예시만."""
     kept = 0
     out_file = Path(out_file)
     out_file.parent.mkdir(parents=True, exist_ok=True)
@@ -207,12 +333,6 @@ def export(batch_dir: Path, out_file: Path, shape: str = "ga", verdicts: dict[st
                 continue
             if verdicts is not None and verdicts.get(record["id"]) != "통과":
                 continue
-            out.write(json.dumps({
-                "id": record["id"],
-                "messages": [{"role": "user", "content": record["prompt"]},
-                             {"role": "assistant", "content": record[f"target_{shape}"]}],
-                "meta": {key: record.get(key) for key in ("kind", "user_actual", "style", "ledger_id", "group_id")}
-                        | {"drafter": (record.get("drafter") or {}).get("model"), "shape": shape},
-            }, ensure_ascii=False) + "\n")
+            out.write(json.dumps(training_line(record, shape), ensure_ascii=False) + "\n")
             kept += 1
     return kept
