@@ -11,7 +11,7 @@
     merge-review 화면이 내려받은 판정 기록을 합치고 Claude와 어긋난 수를 센다
     status     단계별·종류별 개수
     export     학습 파일(A.X 채팅 형식 JSONL)
-    export-round 1회차 학습 파일: 여러 묶음에서 종류 비율대로, 학습 전 A.X가 틀리던 예시 먼저, 모양마다 같은 예시
+    export-round 1회차 학습 파일: 여러 묶음에서 종류 비율대로, 학습 전 A.X가 틀리던 예시 먼저(모양은 결론 먼저 한 벌, ADR-0050)
 
 데이터셋 AI 서버와 Ollama는 데스크탑 안쪽 주소에만 열려 있어 맥북에서는 SSH 터널로 부른다
 (`docs/development/local-gpu/데이터셋-색인-절차.md`).
@@ -271,6 +271,6 @@ def add_parser(commands) -> None:
     round_export = sub.add_parser("export-round", help="1회차 학습 파일(여러 묶음에서 종류 비율대로, A.X가 틀리던 예시 먼저)")
     round_export.add_argument("--batches", required=True, help="쉼표로 묶음 이름(앞 묶음이 질문 중복에서 남는다)")
     round_export.add_argument("--size", type=int, default=200)
-    round_export.add_argument("--shapes", default="ga,na")
+    round_export.add_argument("--shapes", default="ga", help="쉼표로 모양(기본 ga 한 벌, ADR-0050 결정 7). 여럿이면 같은 예시")
     round_export.add_argument("--out-dir", required=True)
     round_export.set_defaults(func=cmd_export_round)

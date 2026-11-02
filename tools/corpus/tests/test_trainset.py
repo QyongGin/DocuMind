@@ -550,8 +550,8 @@ def test_pick_round_balances_kinds_prefers_what_ax_misses_and_shares_ids_across_
         {"id": "b3", "kind": "fact", "q": "가나대학 졸업 학점?", "verdict": "통과", "human": "탈락", "probe": probe(0, 5)}])
     # 3개면 1회차 비율로 사실·표·절차 하나씩. 절차는 없어 남은 예시 중 아는 정도가 낮은 b2(모름 0.5)가 a1(다 맞힘)보다 먼저
     # b1은 a1과 질문이 겹쳐 빠지고, a4는 탈락, a5는 모양 '나'가 자동 검사를 못 넘어, b3은 사람이 탈락으로 바꿔 빠진다
-    assert [record["id"] for record in pipeline.pick_round([first, second], 3)] == ["a2", "a3", "b2"]
-    manifest = pipeline.export_round([first, second], tmp_path / "round1", 3)
+    assert [record["id"] for record in pipeline.pick_round([first, second], 3, ("ga", "na"))] == ["a2", "a3", "b2"]
+    manifest = pipeline.export_round([first, second], tmp_path / "round1", 3, ("ga", "na"))
     assert manifest["kinds"] == {"fact": 1, "table": 1, "refuse_guide": 1}
     assert manifest["known"] == {"못 맞힘": 1, "가끔": 1, "모름": 1}
     for shape in ("ga", "na"):
@@ -560,6 +560,38 @@ def test_pick_round_balances_kinds_prefers_what_ax_misses_and_shares_ids_across_
         assert lines[0]["messages"][1]["content"] == f"a2 {'가' if shape == 'ga' else '나'}"
     passed, planned, planned_passed = pipeline.yields([first, second])
     assert passed == {"fact": 4, "table": 1, "refuse_guide": 1} and planned["fact"] == 6
+
+
+# ADR-0050 결정 4·7: 1회차는 결론 먼저 모양 한 벌, 거절 문장 뒤에 출처 번호만 있으면 학습 파일에서 지운다
+def test_training_line_drops_citations_only_after_a_bare_refusal():
+    def content(target):
+        return pipeline.training_line(record(target_ga=target), "ga")["messages"][1]["content"]
+
+    assert content(f"{prompts.REFUSAL}\n\n[출처 1][출처 2]") == prompts.REFUSAL
+    guide = f"{prompts.REFUSAL} 휴학 문의는 학사지원팀(02-000-0000)입니다.\n[출처 1]"
+    assert content(guide) == guide  # 확인처가 나온 근거 번호는 남긴다
+    partial = f"8월 29일까지 신청하면 됩니다. 수수료는 {prompts.REFUSAL}\n[출처 1]"
+    assert content(partial) == partial  # 일부만 없는 답도 그대로
+    assert content(record()["target_ga"]) == record()["target_ga"]
+
+
+def test_export_round_defaults_to_one_shape_and_counts_removed_citations(tmp_path):
+    folder = tmp_path / "c"
+    rows = [("c1", "fact", "8월 29일까지 신청하면 됩니다.\n[출처 1]"), ("c2", "refuse_guide", f"{prompts.REFUSAL}\n\n[출처 1][출처 2]")]
+    pipeline.write(folder, "plan", [{"id": i, "kind": kind} for i, kind, _ in rows], mode="w")
+    pipeline.write(folder, "questions", [{"id": i, "question": f"가나대학 질문 {i}", "possible": True} for i, _, _ in rows])
+    pipeline.write(folder, "attached", [{"id": i, "prompt": PROMPT} for i, _, _ in rows])
+    pipeline.write(folder, "targets", [{"id": i, "target_ga": target} for i, _, target in rows])  # 인용형(na)은 만들지 않았다
+    pipeline.write(folder, "checked", [{"id": i, "kind": kind, "keep": {"ga": True}} for i, kind, _ in rows])
+    pipeline.write(folder, "judged", [{"id": i, "verdict": "통과"} for i, _, _ in rows])
+    manifest = pipeline.export_round([folder], tmp_path / "round1", 2)
+    assert manifest["shapes"] == ["ga"] and sorted(manifest["ids"]) == ["c1", "c2"]
+    assert manifest["removed_refusal_citations"] == {"ga": 1}
+    assert not (tmp_path / "round1" / "round-na.jsonl").exists()
+    lines = {json.loads(line)["id"]: json.loads(line)
+             for line in (tmp_path / "round1" / "round-ga.jsonl").read_text(encoding="utf-8").splitlines()}
+    assert lines["c2"]["messages"][1]["content"] == prompts.REFUSAL
+    assert lines["c1"]["messages"][1]["content"] == rows[0][2]
 
 
 # ADR-0048 결정 3·4: 답 근거가 든 블록은 코드가 짚고, 왕복 검사는 그 블록 기준, 표 질문은 사용자 말로
