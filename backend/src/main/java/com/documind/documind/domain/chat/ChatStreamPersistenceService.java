@@ -16,6 +16,7 @@ public class ChatStreamPersistenceService {
 
     private final ChatMessageRepository chatMessageRepository;
     private final ChatSessionRepository chatSessionRepository;
+    private final ChatMessageTraceRepository chatMessageTraceRepository;
 
     /**
      * 스트리밍 정상 완료 시 답변과 출처를 저장하고 세션의 마지막 활동 시각을 갱신한다.
@@ -30,6 +31,17 @@ public class ChatStreamPersistenceService {
     public void completeMessage(Long messageId, Long sessionId, String answer, String rawAnswer, String sourcesJson) {
         chatMessageRepository.findById(messageId).ifPresent(message -> message.complete(answer, rawAnswer, sourcesJson));
         chatSessionRepository.updateUpdatedAt(sessionId, LocalDateTime.now());
+    }
+
+    /**
+     * 답의 처리 기록(ADR-0052)을 저장한다. 답 저장과 다른 트랜잭션이라 기록 저장이 실패해도 답은 남는다.
+     *
+     * @param messageId 기록이 속한 답. completeMessage로 먼저 저장(커밋)돼 있어야 한다
+     * @param traceJson AI 서버가 보낸 처리 기록 JSON
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void saveTrace(Long messageId, String traceJson) {
+        chatMessageTraceRepository.save(ChatMessageTrace.of(messageId, traceJson, LocalDateTime.now()));
     }
 
     /**

@@ -134,13 +134,17 @@ class FastApiClientTest {
         server.createContext("/query", exchange -> {
             contentType.set(exchange.getRequestHeaders().getFirst(HttpHeaders.CONTENT_TYPE));
             requestBody.set(readBody(exchange));
-            sendJson(exchange, "{\"answer\":\"답변\",\"sources\":[{\"document_id\":7,\"source\":\"sample.pdf\"}]}");
+            sendJson(exchange, "{\"answer\":\"답변\",\"sources\":[{\"document_id\":7,\"source\":\"sample.pdf\"}],"
+                    + "\"trace\":{\"prompt\":\"프롬프트\",\"seconds\":{\"total\":1.5}}}");
         });
 
         FastApiQueryResponse response = fastApiClient.query("질문", 5, "관리자 정책");
 
         assertEquals("답변", response.getAnswer());
         assertEquals(1, response.getSources().size());
+        // 처리 기록(ADR-0052)을 요청하고 받은 기록을 그대로 읽는다
+        assertTrue(requestBody.get().contains("\"include_trace\":true"));
+        assertEquals("프롬프트", response.getTrace().get("prompt"));
         assertTrue(contentType.get().startsWith(MediaType.APPLICATION_JSON_VALUE));
         assertTrue(requestBody.get().contains("\"question\":\"질문\""));
         assertTrue(requestBody.get().contains("\"top_k\":5"));
@@ -240,6 +244,7 @@ class FastApiClientTest {
                 .block(Duration.ofSeconds(3));
 
         assertEquals(List.of("{\"token\":\"안녕\"}", "{\"done\":true,\"sources\":[]}"), events);
+        assertTrue(requestBody.get().contains("\"include_trace\":true"));
         assertTrue(contentType.get().startsWith(MediaType.APPLICATION_JSON_VALUE));
         assertTrue(requestBody.get().contains("\"question\":\"질문\""));
         assertTrue(requestBody.get().contains("\"top_k\":5"));
