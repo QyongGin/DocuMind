@@ -66,6 +66,8 @@ export function openChatStream({ question, sessionKey, topK, auth = false, onTok
               answer: data.answer,
               messageId: data.messageId,
               sources: data.sources ?? [],
+              references: data.references ?? [],
+              guidance: data.guidance ?? null,
             })
             closeStream()
           } else if (data.error) {
