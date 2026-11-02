@@ -564,6 +564,28 @@ def test_pick_round_balances_kinds_prefers_what_ax_misses_and_shares_ids_across_
     assert passed == {"fact": 4, "table": 1, "refuse_guide": 1} and planned["fact"] == 6
 
 
+def test_pick_round_all_passed_with_kind_caps_and_citation_limit(tmp_path):
+    # 2회차: 비율 없이 통과한 예시를 모두 쓰되 거절 종류는 상한까지만, 출처 번호가 너무 많은 목표 답은 뺀다
+    folder = tmp_path / "r2"
+    rows = [("r1", "fact", "가나대학 휴학은 8월 29일까지입니다.\n[출처 1]"),
+            ("r2", "table", "가나대학 등록금은 1,000원입니다.\n[출처 1][출처 2][출처 3][출처 4]"),
+            ("r3", "refuse_guide", f"{prompts.REFUSAL}\n[출처 1]"),
+            ("r4", "refuse_guide", prompts.REFUSAL),
+            ("r5", "multi", "가나대학 셔틀은 8시, 기숙사는 9시에 엽니다.\n[출처 1][출처 2]")]
+    pipeline.write(folder, "plan", [{"id": i, "kind": kind} for i, kind, _ in rows], mode="w")
+    pipeline.write(folder, "questions", [{"id": i, "question": f"가나대학 질문 {i}", "possible": True} for i, _, _ in rows])
+    pipeline.write(folder, "attached", [{"id": i, "prompt": PROMPT} for i, _, _ in rows])
+    pipeline.write(folder, "targets", [{"id": i, "target_ga": target} for i, _, target in rows])
+    pipeline.write(folder, "checked", [{"id": i, "kind": kind, "keep": {"ga": True}} for i, kind, _ in rows])
+    pipeline.write(folder, "judged", [{"id": i, "verdict": "통과"} for i, _, _ in rows])
+    picked = pipeline.pick_round([folder], 0, caps={"refuse_guide": 1}, max_citations=3)
+    # r2는 출처 번호 4개라 빠지고, 거절 안내는 앞선 r3 하나만(r3의 번호는 거절 뒤라 학습 파일에서 지워져 0개)
+    assert [record["id"] for record in picked] == ["r1", "r3", "r5"]
+    assert [record["id"] for record in pipeline.pick_round([folder], 0)] == ["r1", "r2", "r3", "r4", "r5"]
+    manifest = pipeline.export_round([folder], tmp_path / "round2", 0, caps={"refuse_guide": 1}, max_citations=3)
+    assert manifest["size"] == 3 and manifest["caps"] == {"refuse_guide": 1} and manifest["max_citations"] == 3
+
+
 # ADR-0050 결정 4·7: 1회차는 결론 먼저 모양 한 벌, 거절 문장 뒤에 출처 번호만 있으면 학습 파일에서 지운다
 def test_training_line_drops_citations_only_after_a_bare_refusal():
     def content(target):

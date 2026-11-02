@@ -184,10 +184,11 @@ def cmd_export(args) -> int:
 def cmd_export_round(args) -> int:
     train = Path(args.root).parent / "train"
     shapes = tuple(shape for shape in args.shapes.split(",") if shape)
+    caps = {kind: int(count) for kind, count in (item.split("=") for item in args.cap.split(",") if item)} if args.cap else None
     manifest = pipeline.export_round([train / name for name in args.batches.split(",") if name], Path(args.out_dir),
-                                     args.size, shapes)
+                                     args.size, shapes, caps, args.max_citations)
     print(json.dumps({key: value for key, value in manifest.items() if key != "ids"}, ensure_ascii=False, indent=1))
-    if manifest["size"] < args.size:
+    if args.size and manifest["size"] < args.size:
         print(f"통과한 예시가 모자라 {manifest['size']}개만 골랐다 — 묶음을 더 만든다")
     if manifest["old_refusal_left"]:
         print(f"지난 거절 문장이나 '(없는 것)' 자리표시가 {manifest['old_refusal_left']}줄에 남았다 — 입력 규칙의 글자가 다른 묶음이 섞였다. "
@@ -274,7 +275,9 @@ def add_parser(commands) -> None:
 
     round_export = sub.add_parser("export-round", help="1회차 학습 파일(여러 묶음에서 종류 비율대로, A.X가 틀리던 예시 먼저)")
     round_export.add_argument("--batches", required=True, help="쉼표로 묶음 이름(앞 묶음이 질문 중복에서 남는다)")
-    round_export.add_argument("--size", type=int, default=200)
+    round_export.add_argument("--size", type=int, default=200, help="고를 예시 수(1회차 비율대로). 0이면 통과한 예시를 모두 쓴다")
+    round_export.add_argument("--cap", help="쉼표로 종류별 상한(예: refuse_guide=40,refuse_offtopic=15). --size 0일 때 쓴다")
+    round_export.add_argument("--max-citations", type=int, help="목표 답의 출처 번호가 이보다 많은 예시를 뺀다")
     round_export.add_argument("--shapes", default="ga", help="쉼표로 모양(기본 ga 한 벌, ADR-0050 결정 7). 여럿이면 같은 예시")
     round_export.add_argument("--out-dir", required=True)
     round_export.set_defaults(func=cmd_export_round)

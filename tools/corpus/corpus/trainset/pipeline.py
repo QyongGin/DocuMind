@@ -335,19 +335,35 @@ def known_rate(record: dict) -> float:
     return probe["correct"] / probe["decided"] if probe.get("decided") else 0.5
 
 
-def pick_round(batch_dirs: list[Path], size: int, shapes: tuple[str, ...] = ("ga",)) -> list[dict]:
-    """1회차 학습 예시 고르기. 최종 판정 '통과'이고 고른 모양이 모두 자동 검사를 통과한 예시에서 종류 비율(ROUND1)대로 고른다.
+def pick_round(batch_dirs: list[Path], size: int, shapes: tuple[str, ...] = ("ga",), caps: dict[str, int] | None = None,
+               max_citations: int | None = None) -> list[dict]:
+    """회차 학습 예시 고르기. 최종 판정 '통과'이고 고른 모양이 모두 자동 검사를 통과한 예시에서 종류 비율(ROUND1)대로 고른다.
     종류 안에서는 학습 전 A.X가 틀리던 예시를 먼저 넣고(ADR-0042 쓰임 ①), 모자란 종류의 자리는 남은 예시로 같은 순서로 채운다.
     묶음을 넘어 질문이 겹치면 앞 묶음 것만 쓴다. 모양은 결론 먼저 한 벌이 기본이다(ADR-0050 결정 7 — 인용형 비교는 하지 않음).
-    모양을 여럿 주면 모든 모양에 같은 예시를 쓴다."""
+    모양을 여럿 주면 모든 모양에 같은 예시를 쓴다.
+
+    size가 0이면 비율 없이 통과한 예시를 모두 쓰고, caps(종류별 상한)만 지킨다(2회차: 거절 비중 줄이기).
+    max_citations를 주면 학습 파일에 쓸 목표 답의 출처 번호가 그보다 많은 예시를 뺀다(관계없는 출처를 다는 버릇).
+    """
     candidates = [record for batch_dir in batch_dirs for record in merged(batch_dir)
                   if final_verdict(record) == "통과" and all((record.get("keep") or {}).get(shape) for shape in shapes)]
     duplicate_of = checks.duplicates(candidates)
     candidates = [record for record in candidates if record["id"] not in duplicate_of]
+    if max_citations is not None:
+        candidates = [record for record in candidates
+                      if all(len(CITATION.findall(training_target(record[f"target_{shape}"]))) <= max_citations
+                             for shape in shapes)]
     order = {record["id"]: number for number, record in enumerate(candidates)}
 
     def priority(record: dict) -> tuple[float, int]:
         return known_rate(record), order[record["id"]]
+
+    if not size:
+        chosen = []
+        for kind in sorted({record["kind"] for record in candidates}):
+            pool = sorted((record for record in candidates if record["kind"] == kind), key=priority)
+            chosen += pool[:caps[kind]] if caps and kind in caps else pool
+        return sorted(chosen, key=lambda record: order[record["id"]])
 
     chosen = []
     for kind, count in scale(ROUND1, size).items():
@@ -396,10 +412,11 @@ def training_line(record: dict, shape: str) -> dict:
                     | {"drafter": (record.get("drafter") or {}).get("model"), "shape": shape}}
 
 
-def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple[str, ...] = ("ga",)) -> dict:
-    """1회차 학습 파일: 모양마다 round-<모양>.jsonl(같은 예시), 고른 예시의 종류·A.X 아는 정도·거절 뒤 출처 번호를 지운 수·
-    거절 문장을 새 문장으로 바꾼 수를 manifest.json에 남긴다."""
-    chosen = pick_round(batch_dirs, size, shapes)
+def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple[str, ...] = ("ga",),
+                 caps: dict[str, int] | None = None, max_citations: int | None = None) -> dict:
+    """회차 학습 파일: 모양마다 round-<모양>.jsonl(같은 예시), 고른 예시의 종류·A.X 아는 정도·거절 뒤 출처 번호를 지운 수·
+    거절 문장을 새 문장으로 바꾼 수를 manifest.json에 남긴다. size·caps·max_citations는 pick_round와 같다."""
+    chosen = pick_round(batch_dirs, size, shapes, caps, max_citations)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     for shape in shapes:
@@ -414,6 +431,7 @@ def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple
         return "다 맞힘" if probe["correct"] == probe["decided"] else ("못 맞힘" if probe["correct"] == 0 else "가끔")
 
     manifest = {"size": len(chosen), "batches": [Path(batch_dir).name for batch_dir in batch_dirs], "shapes": list(shapes),
+                "caps": caps or {}, "max_citations": max_citations,
                 "kinds": dict(Counter(record["kind"] for record in chosen)),
                 "known": dict(Counter(known(record) for record in chosen)),
                 "removed_refusal_citations": {shape: sum(training_target(record[f"target_{shape}"])
