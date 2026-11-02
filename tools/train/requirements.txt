@@ -1,0 +1,8 @@
+# 학습 서버(AWS g5.xlarge, CUDA)에서만 쓴다. PyTorch는 Deep Learning AMI에 깔린 것을 쓴다(가상환경을 --system-site-packages로 만든다).
+# 실제로 깔린 판은 실행 기록(run_manifest.json)의 pip_freeze에 남는다.
+trl==1.17.1
+transformers==5.22.1
+peft
+bitsandbytes
+accelerate
+datasets

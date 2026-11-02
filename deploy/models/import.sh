@@ -32,7 +32,8 @@ if ollama_cli show "$OLLAMA_NAME" > /dev/null 2>&1; then
 fi
 
 # 채팅 틀은 저장소 파일을 쓴다. GGUF 안의 Jinja 틀은 Ollama가 그대로 쓰지 못한다.
-sed "s#__GGUF__#$gguf#" "$dir/Modelfile.tmpl" \
+# 학습한 모델은 기반 모델의 틀을 그대로 쓴다(recipe.env의 TEMPLATE_DIR)
+sed "s#__GGUF__#$gguf#" "${TEMPLATE_DIR:-$dir}/Modelfile.tmpl" \
   | docker run --rm -i -v "$VOLUME":/work --entrypoint sh "$OLLAMA_IMAGE" -c "cat > /work/$NAME/Modelfile"
 ollama_cli create "$OLLAMA_NAME" -f "/work/$NAME/Modelfile"
 
