@@ -98,6 +98,26 @@ class DocumentUploadApiTest {
     }
 
     @Test
+    @DisplayName("업로드 API - 게시 정보(사이트·게시판·제목·첨부의 게시글)를 받아 저장한다")
+    void upload_bindsOriginFields() throws Exception {
+        mockMvc.perform(multipart("/api/documents")
+                        .file(new MockMultipartFile("file", "report.pdf", "application/pdf", PDF_BYTES))
+                        .param("ledgerId", "www/bbs/11/1/a2")
+                        .param("originSite", "www")
+                        .param("originSiteName", "학교")
+                        .param("originBoard", "학사(11)")
+                        .param("originTitle", "report.pdf")
+                        .param("originParentTitle", "2학기 수강신청 안내")
+                        .param("originParentUrl", "https://www.example.ac.kr/bbs/11/1")
+                        .header("Authorization", bearer()))
+                .andExpect(status().isOk());
+
+        Document saved = documentRepository.findAll().get(0);
+        assertEquals(new DocumentOrigin("www", "학교", "학사(11)", "report.pdf", "2학기 수강신청 안내",
+                "https://www.example.ac.kr/bbs/11/1"), saved.getOrigin());
+    }
+
+    @Test
     @DisplayName("업로드 API - 출처 형식이 틀리면 400과 어느 칸인지 알려 준다")
     void upload_rejectsInvalidSource() throws Exception {
         mockMvc.perform(multipart("/api/documents")

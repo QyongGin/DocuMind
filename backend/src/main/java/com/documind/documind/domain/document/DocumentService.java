@@ -26,8 +26,12 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -38,6 +42,9 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class DocumentService {
+
+    // 게시 정보 채우기 한 번의 최대 개수(서비스 색인 문서 수백 개를 몇 번에 나눠 보낸다)
+    static final int MAX_ORIGIN_UPDATES = 1000;
 
     private final DocumentRepository documentRepository;
     private final UserRepository userRepository;
@@ -90,6 +97,25 @@ public class DocumentService {
      */
     @Transactional
     public DocumentUploadResponse upload(MultipartFile file, Long categoryId, DocumentSource source, String username) {
+        return upload(file, categoryId, source, DocumentOrigin.EMPTY, username);
+    }
+
+    /**
+     * 문서를 출처 정보와 게시 정보(사이트·게시판·제목·첨부의 게시글)와 함께 업로드한다.
+     *
+     * <p>게시 정보는 답 화면의 '참고한 문서'에만 쓰고 AI 서버에는 넘기지 않는다(ADR-0051 결정 2).</p>
+     *
+     * @param file       업로드할 파일 (PDF/HWP/HWPX/DOCX/PPTX/XLSX/HTML)
+     * @param categoryId 연결할 카테고리 PK. 미분류면 null
+     * @param source     문서 대장 정보. 없으면 {@link DocumentSource#EMPTY}
+     * @param origin     게시 정보. 없으면 {@link DocumentOrigin#EMPTY}
+     * @param username   업로드한 관리자 계정명
+     * @return 업로드 결과 (document_id, 파일명, 파일 크기, 청크 수)
+     * @throws CustomException 형식이 틀리거나 같은 파일이 있으면(DUPLICATE_DOCUMENT, 409) 실패
+     */
+    @Transactional
+    public DocumentUploadResponse upload(MultipartFile file, Long categoryId, DocumentSource source,
+                                         DocumentOrigin origin, String username) {
         long processingStartNanos = System.nanoTime();
 
         // 파일 형식 검증: 브라우저 MIME 대신 확장자 + 파일 앞부분 서명으로 확인한다
@@ -122,6 +148,7 @@ public class DocumentService {
                 uploader, category, fileName, originalName,
                 file.getSize(), fileType.getMimeType(), source, contentSha256
         );
+        document.applyOrigin(origin);
         saveNewDocument(document);
         FastApiDocumentMetadata metadata = toFastApiMetadata(document);
 
@@ -271,6 +298,33 @@ public class DocumentService {
         } catch (IOException ignored) {
             // 트랜잭션 롤백 시 임시 파일 정리에 실패해도 사용자 응답을 덮어쓰지 않는다.
         }
+    }
+
+    /**
+     * 이미 올린 문서의 게시 정보를 대장 ID로 채운다(ADR-0051 결정 2). 같은 대장 ID의 살아 있는 문서는 모두 바꾼다.
+     *
+     * @param updates 대장 ID별 게시 정보. 한 번에 {@value #MAX_ORIGIN_UPDATES}개까지
+     * @return 바꾼 문서 수와, 살아 있는 문서가 없는 대장 ID
+     * @throws CustomException 대장 ID가 없거나 형식이 틀리거나, 개수가 많거나 게시 정보 형식이 틀리면 INVALID_DOCUMENT_SOURCE
+     */
+    @Transactional
+    public DocumentOriginUpdateResponse updateOrigins(List<DocumentOriginUpdateRequest> updates) {
+        if (updates == null || updates.isEmpty() || updates.size() > MAX_ORIGIN_UPDATES) {
+            throw new CustomException(ErrorCode.INVALID_DOCUMENT_SOURCE,
+                    "게시 정보는 한 번에 1~" + MAX_ORIGIN_UPDATES + "개를 보냅니다.");
+        }
+        Map<String, DocumentOrigin> originByLedgerId = new LinkedHashMap<>();
+        for (DocumentOriginUpdateRequest update : updates) {
+            originByLedgerId.put(update.requiredLedgerId(), update.toOrigin());
+        }
+        List<Document> documents = documentRepository.findAllBySourceLedgerIdInAndIsActiveTrue(originByLedgerId.keySet());
+        Set<String> found = new HashSet<>();
+        for (Document document : documents) {
+            document.applyOrigin(originByLedgerId.get(document.getSourceLedgerId()));
+            found.add(document.getSourceLedgerId());
+        }
+        List<String> missing = originByLedgerId.keySet().stream().filter(id -> !found.contains(id)).toList();
+        return new DocumentOriginUpdateResponse(documents.size(), missing);
     }
 
     /**

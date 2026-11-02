@@ -94,6 +94,26 @@ public class Document {
     @Column(length = 64)
     private String contentSha256;
 
+    // 게시된 곳(ADR-0051 결정 2). 답 화면의 '참고한 문서'를 만든다. 대장 값 그대로이고 화면 문구는 답 변환이 만든다
+    @Column(length = 50)
+    private String originSite;
+
+    @Column(length = 100)
+    private String originSiteName;
+
+    @Column(length = 100)
+    private String originBoard;
+
+    @Column(length = 500)
+    private String originTitle;
+
+    // 첨부 파일이면 그 게시글(참고한 문서는 게시글로 연결한다). 게시글이 대장에 없으면 null
+    @Column(length = 500)
+    private String originParentTitle;
+
+    @Column(length = 1000)
+    private String originParentUrl;
+
     // 문서 자동 요약 결과. 고도화 단계에서 사용하므로 현재는 NULL 유지
     @Column(columnDefinition = "TEXT")
     private String summary;
@@ -171,6 +191,29 @@ public class Document {
      */
     public DocumentSource getSource() {
         return new DocumentSource(sourceLedgerId, sourceUrl, sourcePostedAt, academicYear);
+    }
+
+    /**
+     * 게시 정보(사이트·게시판·제목·첨부의 게시글)를 값 객체로 돌려준다.
+     *
+     * @return 게시 정보. 없으면 모든 칸이 null
+     */
+    public DocumentOrigin getOrigin() {
+        return new DocumentOrigin(originSite, originSiteName, originBoard, originTitle, originParentTitle, originParentUrl);
+    }
+
+    /**
+     * 게시 정보를 바꾼다. 업로드 때와, 이미 올린 문서를 대장으로 채울 때 쓴다.
+     *
+     * @param origin 게시 정보. 없으면 {@link DocumentOrigin#EMPTY}
+     */
+    public void applyOrigin(DocumentOrigin origin) {
+        this.originSite = origin.site();
+        this.originSiteName = origin.siteName();
+        this.originBoard = origin.board();
+        this.originTitle = origin.title();
+        this.originParentTitle = origin.parentTitle();
+        this.originParentUrl = origin.parentUrl();
     }
 
     /**
