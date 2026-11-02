@@ -110,6 +110,15 @@ def test_refusal_appended_after_all_core_facts_is_correct():
     assert score(listed, "편집한 사진은 반려되고 나머지는 확인할 수 없습니다")["label"] == "애매"  # 핵심 하나 빠짐
 
 
+def test_new_refusal_sentence_is_a_refusal():
+    """2026-11-02부터의 운영 거절 문장(ADR-0050)도 거절로 본다. 옛 문장으로 낸 지난 실행 기록도 그대로 채점한다."""
+    key = item("ev-0001")
+    assert score(key, "학교 홈페이지 안내에서 찾지 못했습니다.")["label"] == "모름"
+    assert score(unanswerable_item("ev-0009"), "학교 홈페이지 안내에서 찾지 못했습니다.")["label"] == "맞음"
+    partial = score(key, "전형료는 30,000원입니다. 실기 추가 전형료는 학교 홈페이지 안내에서 찾지 못했습니다.")
+    assert (partial["label"], partial["appended_refusal"]) == ("맞음", True)
+
+
 def test_bare_table_number_in_context_is_not_invented():
     """표 칸에는 단위 없이 '50'만 있어도 답의 '50명'은 지어낸 숫자가 아니다. 다른 수(500)에 붙은 50은 아니다."""
     key = item("ev-0001", facts=[{"name": "정원", "values": ["50명"]}], forbidden=[])

@@ -282,7 +282,7 @@ def cmd_run(args) -> int:
     try:
         summary = runner.run(args.file, args.out, args.ai_url, args.index, args.top_k, system_prompt, args.version,
                              args.ids.split(",") if args.ids else None, args.limit, timeout=args.timeout,
-                             repo=Path(__file__).resolve().parents[4])
+                             repo=Path(__file__).resolve().parents[4], as_of=args.as_of)
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 1
@@ -416,6 +416,8 @@ def add_parser(commands, default_file: Path) -> None:
     asked.add_argument("--ids", help="이 문항만(쉼표로 구분, 시험용)")
     asked.add_argument("--limit", type=int, help="앞에서부터 이만큼만(시험용)")
     asked.add_argument("--timeout", type=float, default=600.0, help="질문 하나의 제한 시간(초)")
+    asked.add_argument("--as-of", type=lambda value: date.fromisoformat(value).isoformat(),
+                       help="프롬프트 '오늘' 줄 날짜 고정(YYYY-MM-DD, AI 서버 날짜 줄이 켜졌을 때). 다른 날 잰 실행과 짝 비교할 때")
     asked.set_defaults(func=cmd_run)
 
     graded = with_file("score-run", "실행 채점과 지표")

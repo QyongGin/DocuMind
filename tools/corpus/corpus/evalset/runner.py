@@ -23,7 +23,8 @@ from . import schema
 MANIFEST = "manifest.json"
 ANSWERS = "answers.jsonl"
 DEFAULT_TOP_K = 8  # 백엔드·프론트·AI 서버 운영 기본값(.env.example, M2 2단계 2026-10-15)
-FIXED = ("evalset_sha256", "index", "top_k", "system_prompt_sha256", "retrieval_mode")
+# as_of가 없는 옛 실행 기록은 None으로 읽혀, 날짜를 고정하지 않은 실행과 같은 조건이다
+FIXED = ("evalset_sha256", "index", "top_k", "system_prompt_sha256", "retrieval_mode", "as_of")
 # AI 서버의 검색 순서는 순위 융합 하나다(ADR-0032, 규칙 경로는 #169에서 지움). 실행 기록에는 계속 남겨,
 # 규칙 경로로 돈 옛 실행 폴더(값이 rules이거나 칸이 없는 #168 전 기록)에 지금 답을 이어 붙이지 않게 한다.
 RETRIEVAL_MODE = "rrf"
@@ -68,7 +69,7 @@ def read_answers(run_dir: Path) -> dict[str, dict]:
 
 
 def new_manifest(evalset_path: Path, items: list[dict], index: str, top_k: int, system_prompt: str | None,
-                 ai_url: str, version: str | None, repo: Path, started_at: str) -> dict:
+                 ai_url: str, version: str | None, repo: Path, started_at: str, as_of: str | None = None) -> dict:
     return {
         "evalset": str(evalset_path),
         "evalset_version": version,
@@ -78,6 +79,8 @@ def new_manifest(evalset_path: Path, items: list[dict], index: str, top_k: int, 
         "system_prompt": system_prompt,  # None이면 AI 서버 기본 프롬프트(백엔드 기본값과 같음)
         "system_prompt_sha256": sha256(system_prompt or ""),
         "retrieval_mode": RETRIEVAL_MODE,
+        # 프롬프트 '오늘' 줄의 날짜를 고정했으면 그 날짜(ADR-0047). 없으면 AI 서버가 묻는 날의 한국 시간 날짜를 쓴다
+        "as_of": as_of,
         "ai_url": ai_url,
         **git_commit(repo),
         "runtime": None,  # 첫 응답의 eval_trace.runtime(모델·온도·문맥·출력 상한)
@@ -90,14 +93,16 @@ def new_manifest(evalset_path: Path, items: list[dict], index: str, top_k: int, 
 def run(evalset_path: str | Path, run_dir: str | Path, ai_url: str, index: str, top_k: int = DEFAULT_TOP_K,
         system_prompt: str | None = None, version: str | None = None, ids: list[str] | None = None,
         limit: int | None = None, session=None, timeout: float = 600.0, repo: str | Path | None = None,
-        now=lambda: datetime.now().isoformat(timespec="seconds"), clock=time.perf_counter, log=print) -> dict:
-    """질문을 차례로 묻는다(동시에 묻지 않음: GPU 하나, 같은 순서·같은 조건). 돌려주는 것: 물음·건너뜀·실패 수."""
+        now=lambda: datetime.now().isoformat(timespec="seconds"), clock=time.perf_counter, log=print,
+        as_of: str | None = None) -> dict:
+    """질문을 차례로 묻는다(동시에 묻지 않음: GPU 하나, 같은 순서·같은 조건). 돌려주는 것: 물음·건너뜀·실패 수.
+    as_of(YYYY-MM-DD)를 주면 프롬프트 '오늘' 줄을 그 날짜로 고정한다 — 다른 날에 잰 실행과 짝 비교할 때 쓴다."""
     evalset_path, run_dir = Path(evalset_path), Path(run_dir)
     items = schema.load(evalset_path)
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = run_dir / MANIFEST
     fresh = new_manifest(evalset_path, items, index, top_k, system_prompt, ai_url.rstrip("/"), version,
-                         Path(repo) if repo else evalset_path.parent, now())
+                         Path(repo) if repo else evalset_path.parent, now(), as_of)
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         # retrieval_mode가 없는 옛 실행 기록은 규칙 경로(rules)로 돈 것이다
@@ -120,6 +125,8 @@ def run(evalset_path: str | Path, run_dir: str | Path, ai_url: str, index: str, 
             try:
                 request = {"question": item["question"], "top_k": top_k, "system_prompt": system_prompt,
                            "include_eval_trace": True}
+                if as_of:  # 주지 않으면 요청을 전과 똑같이 보낸다
+                    request["as_of"] = as_of
                 response = session.post(f"{manifest['ai_url']}/query", timeout=timeout, json=request)
                 response.raise_for_status()
                 body = response.json()

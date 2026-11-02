@@ -371,7 +371,7 @@
     "expected_pages": [36],
     "expected_source_keywords": [],
     "expected_answer_keywords": ["비면접학과", "30,000원", "면접학과", "50,000원"],
-    "forbidden_answer_keywords": ["확인할 수 없습니다", "문서에 없습니다", "임의"],
+    "forbidden_answer_keywords": ["확인할 수 없습니다", "찾지 못했습니다", "문서에 없습니다", "임의"],
     "unsupported": false,
     "top_k": 5,
     "comparison_top_k": 3
@@ -405,7 +405,7 @@
     "expected_pages": [43],
     "expected_source_keywords": [],
     "expected_answer_keywords": ["지원동기", "AI시대", "서비스인", "객실승무원", "최근 항공 산업"],
-    "forbidden_answer_keywords": ["명시되어 있지", "확인할 수 없습니다", "학교에 직접 문의"],
+    "forbidden_answer_keywords": ["명시되어 있지", "확인할 수 없습니다", "찾지 못했습니다", "학교에 직접 문의"],
     "unsupported": false,
     "top_k": 5,
     "comparison_top_k": 3
@@ -498,7 +498,7 @@
     "expected_source_keywords": [],
     "forbidden_source_content_keywords": ["전년도 입시결과", "컴퓨터정보공학과 53 4.6 4 5"],
     "expected_answer_keywords": [],
-    "unsupported_answer_keywords": ["확인할 수 없습니다", "명시되어 있지 않습니다", "문서에 없습니다"],
+    "unsupported_answer_keywords": ["확인할 수 없습니다", "찾지 못했습니다", "명시되어 있지 않습니다", "문서에 없습니다"],
     "forbidden_answer_keywords": ["올해 합격 등급컷은", "정확한 등급컷은", "1등급", "2등급", "3등급", "4등급", "5등급", "추정", "전년도 입시결과를 참고"],
     "unsupported": true,
     "top_k": 5,

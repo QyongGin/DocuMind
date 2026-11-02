@@ -226,7 +226,7 @@ def run_targets(batch_dir: Path, session, ollama_url: str, model: str, shapes: t
                 # 답이 쓴 근거의 안내 줄이 빠졌으면 검사 결과를 주고 한 번 다시 쓴다(ADR-0046). 엉뚱한 근거 종류는
                 # 질문이 문서에서 오지 않아 근거의 확인처가 질문과 무관하다
                 planned = record.get("kind_planned") or record["kind"]
-                refusal = checks.answer_body(text, shape).startswith(prompts.REFUSAL)
+                refusal = checks.answer_body(text, shape).startswith(prompts.REFUSALS)
                 missing = [] if planned == "refuse_offtopic" else evidence.missing_guidance(text, record["prompt"], refusal)
                 if missing:
                     fixed = clients.generate(session, ollama_url, model, prompts.guidance_fix_prompt(task, text, missing),
@@ -358,27 +358,47 @@ def pick_round(batch_dirs: list[Path], size: int, shapes: tuple[str, ...] = ("ga
 
 
 CITATION = re.compile(r"\[출처 \d+\]")
+# 내보낸 뒤에 남으면 안 되는 글: 지난 거절 문장과 2026-11-02 한때 규칙의 '(없는 것)' 자리표시
+LEFTOVERS = (*prompts.LEGACY_REFUSALS, "(없는 것)")
+
+
+def current_refusal(text: str) -> str:
+    """목표 답의 지난 거절 문장을 지금 문장으로 글자 그대로 바꾼다(ADR-0050 2026-11-02 변경). 지금 문장은 답이 없을 때와
+    일부만 없을 때('수수료는 …')에 같이 쓰여 자리와 상관없이 바꾼다. 지금 문장으로 만든 답은 그대로다."""
+    for legacy in prompts.LEGACY_REFUSALS:
+        text = text.replace(legacy, prompts.REFUSAL)
+    return text
+
+
+def current_rules(prompt: str) -> str:
+    """학습 입력(운영 프롬프트)의 지난 거절 규칙 9·11을 지금 운영 규칙으로 바꾼다. 목표 답의 문장과 입력 규칙이 같아야 한다."""
+    for legacy in prompts.LEGACY_REFUSAL_RULES:
+        for old, new in zip(legacy, prompts.REFUSAL_RULES):
+            prompt = prompt.replace(old, new)
+    return prompt
 
 
 def training_target(text: str) -> str:
-    """학습 파일에 쓰는 목표 답. 거절 문장 뒤에 출처 번호만 있으면 번호를 지운다(ADR-0050 결정 4) — 답이 없는데 출처를 다는
-    버릇을 학습하지 않게. 거절 뒤에 확인처 문장이 있으면 그 번호는 확인처가 나온 근거라 남긴다."""
+    """학습 파일에 쓰는 목표 답. 옛 거절 문장은 새 문장으로 바꾸고, 거절 문장 뒤에 출처 번호만 있으면 번호를 지운다
+    (ADR-0050 결정 4) — 답이 없는데 출처를 다는 버릇을 학습하지 않게. 거절 뒤에 확인처 문장이 있으면 그 번호는 확인처가
+    나온 근거라 남긴다."""
+    text = current_refusal(text)
     return prompts.REFUSAL if CITATION.sub("", text).strip() == prompts.REFUSAL else text
 
 
 def training_line(record: dict, shape: str) -> dict:
     """학습 파일 한 줄(A.X 채팅 형식): 사용자 = 운영 프롬프트, 답 = 목표 답. A.X는 시스템 메시지 없이 사용자 한 턴으로 답한다
-    (deploy/models 틀)."""
+    (deploy/models 틀). 옛 거절 문장은 입력 규칙과 목표 답에서 함께 새 문장으로 바꾼다."""
     return {"id": record["id"],
-            "messages": [{"role": "user", "content": record["prompt"]},
+            "messages": [{"role": "user", "content": current_rules(record["prompt"])},
                          {"role": "assistant", "content": training_target(record[f"target_{shape}"])}],
             "meta": {key: record.get(key) for key in ("kind", "kind_planned", "user_actual", "style", "ledger_id", "group_id")}
                     | {"drafter": (record.get("drafter") or {}).get("model"), "shape": shape}}
 
 
 def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple[str, ...] = ("ga",)) -> dict:
-    """1회차 학습 파일: 모양마다 round-<모양>.jsonl(같은 예시), 고른 예시의 종류·A.X 아는 정도·거절 뒤 출처 번호를 지운 수를
-    manifest.json에 남긴다."""
+    """1회차 학습 파일: 모양마다 round-<모양>.jsonl(같은 예시), 고른 예시의 종류·A.X 아는 정도·거절 뒤 출처 번호를 지운 수·
+    거절 문장을 새 문장으로 바꾼 수를 manifest.json에 남긴다."""
     chosen = pick_round(batch_dirs, size, shapes)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -396,8 +416,16 @@ def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple
     manifest = {"size": len(chosen), "batches": [Path(batch_dir).name for batch_dir in batch_dirs], "shapes": list(shapes),
                 "kinds": dict(Counter(record["kind"] for record in chosen)),
                 "known": dict(Counter(known(record) for record in chosen)),
-                "removed_refusal_citations": {shape: sum(training_target(record[f"target_{shape}"]) != record[f"target_{shape}"]
-                                                         for record in chosen) for shape in shapes},
+                "removed_refusal_citations": {shape: sum(training_target(record[f"target_{shape}"])
+                                                         != current_refusal(record[f"target_{shape}"]) for record in chosen)
+                                              for shape in shapes},
+                # 지난 거절 문장을 지금 문장으로 바꾼 목표 답·입력 수와, 바꾼 뒤에도 지난 문장이나 자리표시가 남은 줄 수(0이어야
+                # 한다 — 규칙 글자가 다른 지난 프롬프트가 섞이면 입력과 목표 답의 문장이 어긋난다)
+                "reworded_refusals": {"targets": {shape: sum(current_refusal(record[f"target_{shape}"]) != record[f"target_{shape}"]
+                                                            for record in chosen) for shape in shapes},
+                                      "prompts": sum(current_rules(record["prompt"]) != record["prompt"] for record in chosen)},
+                "old_refusal_left": sum(any(mark in json.dumps(training_line(record, shape), ensure_ascii=False) for mark in LEFTOVERS)
+                                        for record in chosen for shape in shapes),
                 "ids": [record["id"] for record in chosen]}
     (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
     return manifest

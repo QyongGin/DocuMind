@@ -1,7 +1,9 @@
 """학습 예시 만들기(`trainset`): 묶음 고르기·지시문·호출·자동 검사·이어서 돌리기·학습 파일. 가나대학 합성 데이터로."""
 
+import ast
 import json
 import random
+from pathlib import Path
 
 import pytest
 
@@ -592,6 +594,91 @@ def test_export_round_defaults_to_one_shape_and_counts_removed_citations(tmp_pat
              for line in (tmp_path / "round1" / "round-ga.jsonl").read_text(encoding="utf-8").splitlines()}
     assert lines["c2"]["messages"][1]["content"] == prompts.REFUSAL
     assert lines["c1"]["messages"][1]["content"] == rows[0][2]
+
+
+# ADR-0050 2026-11-02 변경: 거절 문장은 모델이 학습으로 바로 쓴다. 옛 문장으로 만든 묶음은 내보낼 때 목표 답과 입력 규칙을
+# 함께 바꾼다 — 둘이 어긋나면 규칙과 다르게 답하는 버릇을 배운다
+MAIN_PY = Path(__file__).resolve().parents[3] / "ai-server" / "main.py"
+
+
+def operating_rules() -> str:
+    """운영 프롬프트의 필수 답변 규칙(ai-server main.py의 MANDATORY_RAG_PROMPT). 서버 코드를 부르지 않고 글자만 읽는다."""
+    for node in ast.parse(MAIN_PY.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and any(getattr(target, "id", "") == "MANDATORY_RAG_PROMPT" for target in node.targets):
+            return ast.literal_eval(node.value)
+    raise AssertionError("MANDATORY_RAG_PROMPT를 찾지 못함")
+
+
+def with_rules(rules: str) -> str:
+    return PROMPT.replace("\n\n[검색 근거]", f"\n\n{rules}\n\n[검색 근거]")
+
+
+def legacy_operating_rules(legacy: tuple[str, str]) -> str:
+    """지금 운영 규칙에서 거절 규칙 9·11만 지난 규칙으로 되돌린 글(지난 묶음의 학습 입력 모양)."""
+    rules = operating_rules()
+    for old, new in zip(legacy, prompts.REFUSAL_RULES):
+        rules = rules.replace(new, old)
+    return rules
+
+
+def test_refusal_rules_are_the_operating_rules():
+    rules = operating_rules().splitlines()
+    assert all(rule in rules for rule in prompts.REFUSAL_RULES)  # 학습 입력에 넣는 규칙이 운영 규칙과 글자까지 같다
+    assert not any(legacy in rule for rule in rules for legacy in prompts.LEGACY_REFUSALS)
+    assert all(prompts.REFUSAL in rule for rule in prompts.REFUSAL_RULES)
+
+
+@pytest.mark.parametrize("legacy", range(len(prompts.LEGACY_REFUSAL_RULES)))
+def test_training_line_rewords_legacy_refusal_in_answer_and_rules(legacy):
+    """옛 운영 문장으로 만든 묶음과 2026-11-02 한때 문장으로 만든 묶음 모두 목표 답과 입력 규칙을 지금 문장으로 바꾼다."""
+    old = prompts.LEGACY_REFUSALS[legacy]
+
+    def line(target):
+        out = pipeline.training_line(record(prompt=with_rules(legacy_operating_rules(prompts.LEGACY_REFUSAL_RULES[legacy])),
+                                            target_ga=target), "ga")
+        return out["messages"][0]["content"], out["messages"][1]["content"]
+
+    prompt, bare = line(f"{old}\n\n[출처 1][출처 2]")
+    assert prompt == with_rules(operating_rules()) and bare == prompts.REFUSAL
+    guide = f"{old} 휴학 문의는 학사지원팀(02-000-0000)입니다.\n[출처 1]"
+    assert line(guide)[1] == guide.replace(old, prompts.REFUSAL)
+    partial = f"8월 29일까지 신청하면 됩니다. 수수료는 {old}\n[출처 1]"
+    assert line(partial)[1] == partial.replace(old, prompts.REFUSAL)  # 일부만 없음도 같은 문장
+    new = partial.replace(old, prompts.REFUSAL)
+    assert line(new)[1] == new  # 지금 문장으로 만든 답은 그대로
+
+
+def test_checks_take_current_and_legacy_refusal():
+    for refusal in prompts.REFUSALS:
+        assert checks.shape_check("refuse_offtopic", refusal, "ga") == (True, "")
+        assert checks.shape_check("refuse_guide", f"{refusal} 학사지원팀에 문의하세요.", "ga")[0] is False  # 번호 없는 확인처
+    partial = f"8월 29일까지입니다. 수수료는 {prompts.REFUSAL}\n[출처 1]"
+    assert checks.shape_check("partial", partial, "ga") == (True, "")  # 지금 문장도 '없는 것을 밝힘'
+    assert checks.shape_check("fact", partial, "ga")[0] is False  # 답 예시에 섞인 거절
+
+
+def test_export_round_rewords_old_batches_and_counts_left_overs(tmp_path):
+    folder = tmp_path / "old"
+    old = prompts.LEGACY_REFUSALS[0]
+    rows = [("o1", "partial", f"8월 29일까지 신청하면 됩니다. 수수료는 {old}\n[출처 1]"),
+            ("o2", "refuse_guide", f"{old}\n\n[출처 1]")]
+    pipeline.write(folder, "plan", [{"id": i, "kind": kind} for i, kind, _ in rows], mode="w")
+    pipeline.write(folder, "questions", [{"id": i, "question": f"가나대학 질문 {i}", "possible": True} for i, _, _ in rows])
+    pipeline.write(folder, "attached", [{"id": i, "prompt": with_rules(legacy_operating_rules(prompts.LEGACY_REFUSAL_RULES[0]))}
+                                        for i, _, _ in rows])
+    pipeline.write(folder, "targets", [{"id": i, "target_ga": target} for i, _, target in rows])
+    pipeline.write(folder, "checked", [{"id": i, "kind": kind, "keep": {"ga": True}} for i, kind, _ in rows])
+    pipeline.write(folder, "judged", [{"id": i, "verdict": "통과"} for i, _, _ in rows])
+    manifest = pipeline.export_round([folder], tmp_path / "round1", 2)
+    assert manifest["reworded_refusals"] == {"targets": {"ga": 2}, "prompts": 2}
+    assert manifest["removed_refusal_citations"] == {"ga": 1} and manifest["old_refusal_left"] == 0
+    # 규칙 글자가 다른 지난 프롬프트는 바꾸지 못한다 — 남은 줄을 세어 내보내기를 멈추게 한다
+    pipeline.write(folder, "attached", [{"id": "o1", "prompt": with_rules(f"9. '{old}'라고 답한다.")}])
+    assert pipeline.export_round([folder], tmp_path / "round2", 2)["old_refusal_left"] == 1
+    # 목표 답에 규칙의 '(없는 것)' 자리표시를 그대로 베낀 줄도 센다
+    pipeline.write(folder, "attached", [{"id": "o1", "prompt": PROMPT}])
+    pipeline.write(folder, "targets", [{"id": "o1", "target_ga": f"8월 29일까지입니다. (없는 것)은 {prompts.REFUSAL}\n[출처 1]"}])
+    assert pipeline.export_round([folder], tmp_path / "round3", 2)["old_refusal_left"] == 1
 
 
 # ADR-0048 결정 3·4: 답 근거가 든 블록은 코드가 짚고, 왕복 검사는 그 블록 기준, 표 질문은 사용자 말로
