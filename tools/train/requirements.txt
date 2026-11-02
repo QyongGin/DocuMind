@@ -1,8 +1,24 @@
-# 학습 서버(AWS g5.xlarge, CUDA)에서만 쓴다. PyTorch는 Deep Learning AMI에 깔린 것을 쓴다(가상환경을 --system-site-packages로 만든다).
+# 학습 서버(AWS Deep Learning AMI GPU PyTorch 2.13, Ubuntu 26.04)의 /opt/pytorch 환경에 더하는 학습 라이브러리.
+# PyTorch와 CUDA 라이브러리는 AMI에 깔린 것을 쓰고, 이 AMI에 없던 것만 판을 고정해 둔다.
+# pip install --no-deps -r 로 깐다: 의존성을 pip에 맡기면 PyTorch가 요구하는 cuBLAS 13.1이 AMI의 cuBLAS 13.8
+# (pip 기록 없이 깔린 파일)을 덮어써 TransformerEngine이 깨진다(2026-11-03).
 # 실제로 깔린 판은 실행 기록(run_manifest.json)의 pip_freeze에 남는다.
 trl==1.17.1
 transformers==5.22.1
-peft
-bitsandbytes
-accelerate
-datasets
+peft==0.21.2
+bitsandbytes==0.50.2
+accelerate==1.15.0
+datasets==5.1.0
+huggingface_hub==2.4.0
+hf-xet==1.8.0
+tokenizers==0.23.3
+safetensors==0.8.0
+fsspec==2026.7.0
+multiprocess==0.70.19
+xxhash==4.0.2
+regex==2026.9.29
+httpx2==2.16.0
+httpcore2==2.16.0
+truststore==0.10.5
+typer==0.27.3
+shellingham==1.5.4
