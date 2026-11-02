@@ -74,7 +74,8 @@ public record DocumentSource(String ledgerId, String url, LocalDate postedAt, In
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    private static boolean isHttpUrl(String value) {
+    // 게시 정보(DocumentOrigin)의 게시글 주소도 같은 규칙으로 검사한다
+    static boolean isHttpUrl(String value) {
         if (value.length() > MAX_URL_LENGTH) {
             return false;
         }

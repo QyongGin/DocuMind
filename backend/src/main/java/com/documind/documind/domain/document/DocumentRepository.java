@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -28,6 +29,14 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
      * @return is_active=true인 문서. 없으면 empty
      */
     Optional<Document> findByIdAndIsActiveTrue(Long id);
+
+    /**
+     * 대장 ID가 주어진 것 중 하나인 살아 있는 문서를 모두 찾는다(게시 정보 채우기, ADR-0051).
+     *
+     * @param ledgerIds 문서 대장 ID들
+     * @return is_active=true이고 대장 ID가 맞는 문서
+     */
+    List<Document> findAllBySourceLedgerIdInAndIsActiveTrue(Collection<String> ledgerIds);
 
     /**
      * 같은 파일 지문(SHA-256)을 가진, 살아 있고 실패하지 않은 문서를 찾는다(같은 파일 막기, #126 결정 2·4).
