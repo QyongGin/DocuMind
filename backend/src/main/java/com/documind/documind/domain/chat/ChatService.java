@@ -93,7 +93,6 @@ public class ChatService {
                 .sessionId(session.getId())
                 .messageId(message.getId())
                 .answer(screenAnswer.text())
-                .sources(enrichedSources)
                 .references(screenAnswer.references())
                 .guidance(screenAnswer.guidance())
                 .build();
@@ -332,7 +331,6 @@ public class ChatService {
                 .messageId(message.getId())
                 .question(message.getQuestion())
                 .answer(screenAnswer == null ? null : screenAnswer.text())
-                .sources(sources)
                 .references(screenAnswer == null ? List.of() : screenAnswer.references())
                 .guidance(screenAnswer == null ? null : screenAnswer.guidance())
                 .feedbackScore(feedbackScore)
