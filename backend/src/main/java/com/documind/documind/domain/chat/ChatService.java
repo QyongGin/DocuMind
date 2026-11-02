@@ -14,6 +14,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -81,7 +84,7 @@ public class ChatService {
         String sourceDocsJson = serializeSources(enrichedSources);
 
         // 5. 메시지에 화면용 답·모델 원문·sourceDocs를 채움. @Transactional dirty checking으로 자동 UPDATE
-        message.complete(screenAnswer.text(), fastApiResponse.getAnswer(), sourceDocsJson);
+        message.complete(screenAnswer.text(), fastApiResponse.getAnswer(), sourceDocsJson, screenAnswer.refusedOnly());
 
         // 6. 세션의 마지막 활동 시각 갱신. 사이드바 목록의 최신 활동 순 정렬에 사용
         chatSessionRepository.updateUpdatedAt(session.getId(), LocalDateTime.now());
@@ -307,10 +310,28 @@ public class ChatService {
                 rawAnswerOf(message),
                 screenAnswer == null ? null : screenAnswer.text(),
                 screenAnswer == null ? List.of() : screenAnswer.citedSources(),
-                screenAnswer != null && screenAnswer.guidance() != null,
+                screenAnswer != null && screenAnswer.refusedOnly(),
                 sources,
                 trace
         );
+    }
+
+    /**
+     * 관리자 '못 답한 질문' 목록(거절 문장만 나간 답의 질문)을 최근 것부터 한 쪽씩 조회한다(ADR-0052 결정 5).
+     *
+     * @param page 쪽 번호(0부터)
+     * @param size 쪽 크기
+     * @return 질문, 질문 시각, 개발자 정보를 열 답 ID
+     */
+    @Transactional(readOnly = true)
+    public UnansweredQuestionsResponse getUnansweredQuestions(int page, int size) {
+        Page<ChatMessage> messages = chatMessageRepository.findByRefusedTrue(
+                PageRequest.of(page, size, Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"))));
+        List<UnansweredQuestionsResponse.Item> items = messages.stream()
+                .map(message -> new UnansweredQuestionsResponse.Item(
+                        message.getId(), message.getQuestion(), message.getCreatedAt()))
+                .toList();
+        return new UnansweredQuestionsResponse(items, messages.getTotalElements(), page, size);
     }
 
     // 원문 칸이 생기기 전 메시지와 중단된 답은 저장한 답을 원문으로 쓴다

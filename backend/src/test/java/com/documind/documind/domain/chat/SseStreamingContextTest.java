@@ -13,6 +13,7 @@ import java.io.IOException;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -45,7 +46,8 @@ class SseStreamingContextTest {
                 eq(SESSION_ID),
                 eq("안녕하세요"),
                 eq("안녕하세요"),
-                eq("[{\"source\":\"guide.pdf\"}]")
+                eq("[{\"source\":\"guide.pdf\"}]"),
+                eq(false)
         );
         verify(persistenceService, never()).savePartialAnswer(any(), any());
     }
@@ -63,7 +65,7 @@ class SseStreamingContextTest {
 
         verify(subscription).dispose();
         verify(persistenceService).savePartialAnswer(MESSAGE_ID, "부분답변");
-        verify(persistenceService, never()).completeMessage(any(), any(), any(), any(), any());
+        verify(persistenceService, never()).completeMessage(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     @Test
@@ -80,7 +82,7 @@ class SseStreamingContextTest {
 
         verify(subscription).dispose();
         verify(persistenceService).savePartialAnswer(MESSAGE_ID, "부분");
-        verify(persistenceService, never()).completeMessage(any(), any(), any(), any(), any());
+        verify(persistenceService, never()).completeMessage(any(), any(), any(), any(), any(), anyBoolean());
         verify(emitter).complete();
     }
 
@@ -97,7 +99,8 @@ class SseStreamingContextTest {
                 SESSION_ID,
                 "검색 결과가 없습니다.",
                 "검색 결과가 없습니다.",
-                "[]"
+                "[]",
+                false
         );
     }
 
@@ -115,7 +118,8 @@ class SseStreamingContextTest {
                 SESSION_ID,
                 "휴학 신청은 8월 29일까지입니다.",
                 "휴학 신청은 8월 29일까지입니다.\n\n[출처 1]",
-                "[]"
+                "[]",
+                false
         );
         verify(emitter, times(3)).send(any(SseEmitter.SseEventBuilder.class));
     }
@@ -138,7 +142,7 @@ class SseStreamingContextTest {
         assertTrue(streamed.contains("신청은 [참고] 메뉴에서 합니다."), streamed);
         assertFalse(streamed.contains("출처"), streamed);
         verify(persistenceService).completeMessage(MESSAGE_ID, SESSION_ID, "신청은 [참고] 메뉴에서 합니다.",
-                "신청은 [참고] 메뉴에서 합니다. [출처 2]", "[]");
+                "신청은 [참고] 메뉴에서 합니다. [출처 2]", "[]", false);
     }
 
     @Test
@@ -151,7 +155,7 @@ class SseStreamingContextTest {
                 + "\"seconds\":{\"total\":1.5}}}");
 
         var order = inOrder(persistenceService);
-        order.verify(persistenceService).completeMessage(eq(MESSAGE_ID), eq(SESSION_ID), any(), any(), any());
+        order.verify(persistenceService).completeMessage(eq(MESSAGE_ID), eq(SESSION_ID), any(), any(), any(), anyBoolean());
         order.verify(persistenceService).saveTrace(MESSAGE_ID,
                 "{\"prompt\":\"[검색 근거] 가나대학\",\"seconds\":{\"total\":1.5}}");
         ArgumentCaptor<SseEmitter.SseEventBuilder> events = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
@@ -170,12 +174,27 @@ class SseStreamingContextTest {
                 + "\"sources\":[{\"source\":\"휴학 안내.pdf\",\"content\":\"가나대학 휴학 청크 본문\"}]}");
 
         verify(persistenceService).completeMessage(eq(MESSAGE_ID), eq(SESSION_ID), any(), any(),
-                eq("[{\"source\":\"휴학 안내.pdf\",\"content\":\"가나대학 휴학 청크 본문\"}]"));
+                eq("[{\"source\":\"휴학 안내.pdf\",\"content\":\"가나대학 휴학 청크 본문\"}]"), eq(false));
         ArgumentCaptor<SseEmitter.SseEventBuilder> events = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
         verify(emitter).send(events.capture());
         String done = dataOf(events.getValue());
         assertTrue(done.contains("\"answer\":\"휴학 신청은 8월 29일까지입니다.\""), done);
         assertFalse(done.contains("sources") || done.contains("청크 본문"), done);
+    }
+
+    @Test
+    @DisplayName("거절 문장만 나간 답은 못 답한 질문으로 표시해 저장하고, 일부만 없는 답은 표시하지 않음")
+    void onToken_marksRefusalOnlyAnswer() {
+        SseStreamingContext refusal = createContext();
+        refusal.onToken("{\"done\":true,\"answer\":\"학교 홈페이지 안내에서 찾지 못했습니다.\",\"sources\":[]}");
+        verify(persistenceService).completeMessage(MESSAGE_ID, SESSION_ID, "학교 홈페이지 안내에서 찾지 못했습니다.",
+                "학교 홈페이지 안내에서 찾지 못했습니다.", "[]", true);
+
+        SseStreamingContext partial = createContext();
+        partial.onToken("{\"done\":true,\"answer\":\"통학버스는 20분 앞당겨 운행됩니다. 요금은 학교 홈페이지 안내에서 찾지 못했습니다.\","
+                + "\"sources\":[]}");
+        verify(persistenceService).completeMessage(eq(MESSAGE_ID), eq(SESSION_ID),
+                eq("통학버스는 20분 앞당겨 운행됩니다. 요금은 학교 홈페이지 안내에서 찾지 못했습니다."), any(), any(), eq(false));
     }
 
     @Test
@@ -187,7 +206,7 @@ class SseStreamingContextTest {
         context.onToken("{\"done\":true,\"answer\":\"휴학 신청은 8월 29일까지입니다.\",\"sources\":[],"
                 + "\"trace\":{\"prompt\":\"P\"}}");
 
-        verify(persistenceService).completeMessage(eq(MESSAGE_ID), eq(SESSION_ID), any(), any(), any());
+        verify(persistenceService).completeMessage(eq(MESSAGE_ID), eq(SESSION_ID), any(), any(), any(), anyBoolean());
         ArgumentCaptor<SseEmitter.SseEventBuilder> events = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
         verify(emitter).send(events.capture());
         String sent = dataOf(events.getValue());
@@ -220,7 +239,8 @@ class SseStreamingContextTest {
                 SESSION_ID,
                 SseStreamingContext.UPSTREAM_ERROR_MESSAGE,
                 SseStreamingContext.UPSTREAM_ERROR_MESSAGE,
-                "[]"
+                "[]",
+                false
         );
         verify(persistenceService, never()).savePartialAnswer(any(), any());
         verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
@@ -242,7 +262,8 @@ class SseStreamingContextTest {
                 SESSION_ID,
                 SseStreamingContext.STREAM_ERROR_MESSAGE,
                 SseStreamingContext.STREAM_ERROR_MESSAGE,
-                "[]"
+                "[]",
+                false
         );
         verify(persistenceService, never()).savePartialAnswer(any(), any());
         verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
