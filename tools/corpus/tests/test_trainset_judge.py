@@ -1,6 +1,7 @@
 """학습 예시 판정(`trainset judge`)·사람 표본 화면·판정 기록 합치기. Claude는 부르지 않고 가짜 실행기로."""
 
 import json
+import re
 import subprocess
 
 import pytest
@@ -75,6 +76,26 @@ def test_sample_keeps_failures_and_spreads_kinds():
     assert len(few) == 10 and sum(item["verdict"] == "통과" for item in few) == 3
 
 
+def test_sample_spreads_failures_across_kinds_too():
+    records = [judged(f"f-{n}", kind, "탈락") for n, kind in enumerate(["multi"] * 20 + ["table"] * 3 + ["refuse_guide"] * 3)]
+    records += [judged(f"p-{n}", "fact", "통과") for n in range(20)]
+    failed_kinds = [item["kind"] for item in review.sample(records, 30, seed=1) if item["verdict"] == "탈락"]
+    # 탈락 15개를 무작위로 뽑으면 '여러 근거'로 쏠린다 — 종류를 돌아가며 뽑아 표·거절 탈락을 다 담는다(ADR-0037 결정 2)
+    assert len(failed_kinds) == 15 and failed_kinds.count("table") == 3 and failed_kinds.count("refuse_guide") == 3
+
+
+def test_shown_lines_keep_marked_lines_with_neighbors_and_skip_head():
+    text = "문서: 가나대학 휴학 안내.html\n게시: 2026-08-10\n청크: 문서 내 1번째 청크\n\n1. 대상: 재학생\n2. 기간: 8월 18일 ~ 8월 29일\n3. 방법: 종합정보시스템\n4. 문의: 학사지원팀\n5. 기타: 없음"
+    start = text.index("8월 29일")
+    assert review.shown_lines(text, [[start, start + 6, "c0"]]) == [4, 5, 6]  # 칠한 줄과 앞뒤 줄
+    assert review.shown_lines(text, []) == []
+    assert review.block_head(text) == {"title": "가나대학 휴학 안내.html", "posted": "2026-08-10"}
+    # 같은 글이 '관련 근거'와 '발췌'에 되풀이되면 처음 한 번만, 칸 제목 줄은 빼고 보인다
+    repeated = "질문 의도 추출 정보:\n- 관련 근거: 기간: 8월 18일 ~ 8월 29일\n질문 관련 발췌:\n기간: 8월 18일 ~ 8월 29일"
+    marks = [[match.start(), match.start() + 6, "c0"] for match in re.finditer("8월 29일", repeated)]
+    assert review.shown_lines(repeated, marks) == [1]
+
+
 def test_page_embeds_examples_and_hides_nothing_needed():
     html = review.page([judged("r-1", "fact", "통과", target_ga="8월 29일까지입니다. </script>\n[출처 1]")], "r1-first")
     data = json.loads(html.split("const D=", 1)[1].split(";\nconst KEY", 1)[0])
@@ -82,6 +103,7 @@ def test_page_embeds_examples_and_hides_nothing_needed():
     assert data["batch"] == "r1-first" and example["claude"]["verdict"] == "통과"
     assert [block["cited"] for block in example["blocks"]] == [True, False]
     assert ("8월 29일까지", "c0") in painted(example["target"], example["target_marks"])
+    assert example["blocks"][0]["show"] and all("title" in block and "posted" in block for block in example["blocks"])
     assert html.count("</script>") == 1  # 데이터 속 닫는 태그가 화면의 스크립트를 끊지 않게(본래 닫는 태그 하나만)
 
 

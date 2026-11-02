@@ -3,86 +3,164 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>학습 예시 표본 판정</title>
+<title>학습 예시 확인</title>
 <style>
-:root{--bg:#fbfaf7;--card:#fff;--ink:#1d1d1b;--sub:#5f5e5a;--line:#e1e0d9;--ok:#0f6e56;--okbg:#e1f5ee;--no:#a32d2d;--nobg:#fcebeb;--hi:#faeeda;--row:#f7f1df}
-@media (prefers-color-scheme:dark){:root{--bg:#1a1a19;--card:#232321;--ink:#f0efec;--sub:#c3c2b7;--line:#383835;--ok:#5dcaa5;--okbg:#08362b;--no:#f09595;--nobg:#4a1b1b;--hi:#4a3305;--row:#33301f}}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
-main{max-width:860px;margin:0 auto;padding:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 16px}
-.meta{color:var(--sub);font-size:13px;margin-bottom:6px}
-.q{font-size:17px;font-weight:600;margin:4px 0 10px}
-.label{font-size:13px;color:var(--sub);margin:12px 0 4px}
-.target{white-space:pre-wrap;border-left:3px solid var(--line);padding:4px 0 4px 12px}
-details{border:1px solid var(--line);border-radius:8px;margin:6px 0;padding:6px 10px}
-details pre{white-space:pre-wrap;font:13px/1.55 ui-monospace,Menlo,monospace;margin:6px 0 0}
-summary{cursor:pointer;font-size:13px}
-.cited summary{font-weight:600}
-.choose{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
-button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:6px 14px;cursor:pointer}
-button.on.pass{background:var(--okbg);color:var(--ok);border-color:var(--ok)}
-button.on.fail{background:var(--nobg);color:var(--no);border-color:var(--no)}
-input.memo{flex:1;min-width:200px;font:inherit;border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--card);color:var(--ink)}
-.claude{display:none;margin-top:10px;padding:8px 12px;border-radius:8px;background:var(--hi);font-size:14px}
-.claude.show{display:block}
-.agree{font-weight:600}
-footer{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-mark{color:#1d1d1b;border-radius:3px;padding:0 1px}
-mark.c0{background:#fff176}mark.c1{background:#a7f3c4}mark.c2{background:#a5dcfa}mark.c3{background:#f9b8d4}
-mark.qw{background:none;color:inherit;border-bottom:2px solid #5b8fd6;border-radius:0}
-.row{background:var(--row)}
+:root{color-scheme:light;--blue:#3182F6;--blue-weak:#E8F3FF;--ink:#191F28;--sub:#4E5968;--mute:#8B95A1;--line:#E5E8EB;--bg1:#F9FAFB;--bg2:#F2F4F6;--ok:#0F7B4F;--okbg:#E6F6EE;--no:#D22030;--nobg:#FDECEE}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg2);color:var(--ink);font:16px/1.65 "Apple SD Gothic Neo",Pretendard,"Noto Sans KR",sans-serif;word-break:keep-all;overflow-wrap:anywhere;-webkit-font-smoothing:antialiased}
+main{max-width:760px;margin:0 auto;padding:0 16px 40px}
+.top{position:sticky;top:0;z-index:3;background:var(--bg2);padding:14px 0 10px}
+.top h1{font-size:20px;margin:0 0 8px}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden}.bar i{display:block;height:100%;background:var(--blue);width:0}
+.stat{display:flex;justify-content:space-between;font-size:13.5px;color:var(--sub);margin-top:6px}
+.card{background:#fff;border-radius:20px;padding:20px 20px 16px;margin-top:6px}
+.meta{font-size:13px;color:var(--mute)}
+.ask{font-size:14px;color:var(--blue);font-weight:600;margin-top:4px}
+.q{font-size:20px;font-weight:700;line-height:1.45;margin:4px 0 12px}
+.lbl{font-size:13px;color:var(--mute);margin:16px 0 6px}
+.target{white-space:pre-wrap;background:var(--bg1);border-radius:12px;padding:12px 14px}
+.cite{font-size:12px;color:var(--mute);background:var(--bg2);border-radius:4px;padding:0 4px}
+.legend{font-size:12.5px;color:var(--mute);margin-top:6px}
+.ev{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:8px 0}
+.ev .h{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:13.5px}
+.ev .n{font-weight:700}.ev .t{color:var(--sub)}
+.tag{font-size:12px;border-radius:6px;padding:1px 6px;background:var(--blue-weak);color:var(--blue);font-weight:600}
+.tag.used{background:var(--bg2);color:var(--sub)}
+.lines{font-size:14.5px;margin-top:6px}
+.lines div{white-space:pre-wrap}
+.gap{color:var(--mute);font-size:13px}
+.more{font:inherit;font-size:13px;color:var(--blue);background:none;border:0;padding:6px 0 0;cursor:pointer}
+.full{display:none;white-space:pre-wrap;font-size:13.5px;color:var(--sub);background:var(--bg1);border-radius:8px;padding:8px 10px;margin-top:6px}
+.full.on{display:block}
+details.rest summary{cursor:pointer;font-size:13.5px;color:var(--sub);padding:6px 0}
+.notes{font-size:13.5px;color:var(--sub);background:var(--bg1);border-radius:10px;padding:8px 12px}
+.check{font-size:14px;color:var(--sub);margin:14px 0 0;padding-left:20px}.check li{margin:2px 0}
+.choose{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.choose button{font:inherit;font-size:17px;font-weight:700;min-height:52px;border-radius:14px;border:2px solid var(--line);background:#fff;color:var(--ink);cursor:pointer}
+.choose .pass.on{background:var(--okbg);border-color:var(--ok);color:var(--ok)}
+.choose .fail.on{background:var(--nobg);border-color:var(--no);color:var(--no)}
+.key{font-size:12px;font-weight:500;color:var(--mute);margin-left:6px}
+.claude{display:none;margin-top:12px;border-radius:12px;padding:12px 14px;font-size:14.5px}
+.claude.same{display:block;background:var(--okbg)}.claude.diff{display:block;background:var(--nobg)}
+.memo{width:100%;font:inherit;font-size:15px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px;background:#fff}
+.nav{display:flex;justify-content:space-between;gap:10px;margin-top:14px}
+.nav button,.act button{font:inherit;font-size:15px;min-height:44px;padding:0 16px;border-radius:12px;border:0;background:var(--bg2);color:var(--sub);cursor:pointer}
+.nav button.next,.act .copy{background:var(--blue);color:#fff;font-weight:600}
+mark{color:inherit;border-radius:3px;padding:0 1px}
+mark.c0{background:#FFF1A8}mark.c1{background:#C8F2D6}mark.c2{background:#CFE6FF}mark.c3{background:#FAD3E4}
+mark.qw{background:none;border-bottom:2px solid var(--blue);border-radius:0}
 .miss{text-decoration:underline dotted var(--no) 2px;text-underline-offset:3px}
-.legend{font-size:13px;color:var(--sub);margin-top:4px}
+.big{font-size:36px;font-weight:800;letter-spacing:-0.02em;margin:4px 0}
+.act{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+textarea.out{width:100%;min-height:120px;font:13px/1.5 ui-monospace,Menlo,monospace;border:1px solid var(--line);border-radius:10px;padding:8px;margin-top:10px}
+@media (max-width:480px){.q{font-size:18px}.card{padding:16px 14px}}
 </style>
 </head>
 <body>
 <main>
-<h1 style="font-size:20px;font-weight:600">학습 예시 표본 판정</h1>
-<p class="meta">예시마다 질문·목표 답·챗봇이 받은 근거를 보고 <b>통과</b>(챗봇이 이 답을 배워도 됨) 또는 <b>탈락</b>을 고른다. Claude 판정은 고른 뒤에 보인다. 다 끝나면 아래 단추로 판정 기록을 내려받는다.</p>
-<p class="meta">목표 답의 글이 근거에 글자 그대로 있으면 답과 근거에 <mark class="c0">같은 색</mark>으로 칠하고, 그 근거 줄을 옅게 깔아 표의 행이 보이게 했다. 질문을 되풀이한 말은 칠하지 않는다. <span class="miss">점선 밑줄</span>은 근거에서 같은 글을 못 찾은 문장이다(바꿔 쓴 말인지, 근거에 없는 말인지 본다). 거절만 한 답이면 질문 낱말을 근거에서 <mark class="qw">파란 밑줄</mark>로 표시해, 정말 답이 없는지 찾기 쉽게 했다.</p>
-<div id="list"></div>
+<div class="top"><h1>학습 예시 확인</h1><div class="bar"><i id="bar"></i></div><div class="stat"><span id="prog"></span><span id="clock"></span></div></div>
+<div id="view"></div>
 </main>
-<footer><span id="count"></span><button id="save">판정 기록 내려받기</button></footer>
 <script>
 const D=/*__DATA__*/null;
 const KEY="trainset-review-"+D.batch;
+const X=D.examples;
 let state={};
 try{state=JSON.parse(localStorage.getItem(KEY)||"{}")}catch(e){state={}}
-const started=Date.now();
+function decided(x){return state[x.id]&&state[x.id].human}
+let cur=X.findIndex(x=>!decided(x));if(cur<0)cur=X.length;
+let shownAt=Date.now();
 function persist(){try{localStorage.setItem(KEY,JSON.stringify(state))}catch(e){}}
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c])}
 // 칠할 자리 [시작, 끝, 색]을 글에 입힌다. 자리는 겹치지 않고 줄을 넘지 않게 만들어져 온다
 function paint(text,marks){let html="",at=0;for(const [s,e,tag] of marks){html+=esc(text.slice(at,s))+(tag==="miss"?`<span class="miss">`:`<mark class="${tag}">`)+esc(text.slice(s,e))+(tag==="miss"?"</span>":"</mark>");at=e}return html+esc(text.slice(at))}
-function rows(html){return html.split("\n").map(line=>line.includes("<mark")?`<span class="row">${line}</span>`:line).join("\n")}
-function render(){
-  const list=document.getElementById("list");list.innerHTML="";
-  D.examples.forEach((x,i)=>{
-    const s=state[x.id]||{};
-    const card=document.createElement("div");card.className="card";
-    const blocks=x.blocks.map(b=>{const used=b.marks.length>0;const note=b.cited?" — 목표 답이 단 번호":(used?" — 번호는 안 달았지만 목표 답의 글이 있음":"");return `<details class="${b.cited?"cited":""}" ${b.cited||used?"open":""}><summary>[출처 ${b.n}]${note}</summary><pre>${rows(paint(b.text,b.marks))}</pre></details>`}).join("");
-    const missing=x.target_marks.some(m=>m[2]==="miss");
-    const agree=s.human?(s.human===x.claude.verdict?'<span class="agree" style="color:var(--ok)">일치</span>':'<span class="agree" style="color:var(--no)">어긋남</span>'):"";
-    card.innerHTML=`<div class="meta">${i+1} / ${D.examples.length} · ${esc(x.kind)} · 묻는 사람 ${esc(x.user)} · ${esc(x.id)}</div>
-<div class="q">${paint(x.question,x.question_marks)}</div>
-<div class="label">목표 답(챗봇이 배울 답)</div><div class="target">${paint(x.target,x.target_marks)}</div>
-${missing?`<div class="legend"><span class="miss">점선 밑줄</span>: 근거에서 같은 글을 못 찾은 문장</div>`:""}
-${x.notes.length?`<div class="label">자동 검사 메모</div><div>${x.notes.map(esc).join("<br>")}</div>`:""}
-<div class="label">챗봇이 받은 근거 8개</div>${blocks}
-<div class="choose"><button class="pass ${s.human==="통과"?"on":""}" data-v="통과">통과</button><button class="fail ${s.human==="탈락"?"on":""}" data-v="탈락">탈락</button><input class="memo" placeholder="탈락이면 이유 한 줄" value="${esc(s.memo||"")}"></div>
-<div class="claude ${s.human?"show":""}">Claude 판정: <b>${esc(x.claude.verdict)}</b>${x.claude.category?" · "+esc(x.claude.category):""} — ${esc(x.claude.reason)} ${agree}</div>`;
-    card.querySelectorAll("button[data-v]").forEach(btn=>btn.onclick=()=>{state[x.id]={...(state[x.id]||{}),human:btn.dataset.v};persist();render()});
-    card.querySelector("input.memo").onchange=e=>{state[x.id]={...(state[x.id]||{}),memo:e.target.value};persist()};
-    list.appendChild(card);
-  });
-  const done=D.examples.filter(x=>state[x.id]&&state[x.id].human);
-  const differ=done.filter(x=>state[x.id].human!==x.claude.verdict).length;
-  document.getElementById("count").textContent=`판정 ${done.length} / ${D.examples.length} · Claude와 어긋남 ${differ}`;
+function chips(html){return html.replace(/\[출처 (\d+)\]/g,'<span class="cite">[출처 $1]</span>')}
+function blockView(b){
+  const lines=paint(b.text,b.marks).split("\n");
+  let body="",prev=-2;
+  for(const n of b.show){if(prev>=0&&n>prev+1)body+='<div class="gap">⋯</div>';body+=`<div>${lines[n]||""}</div>`;prev=n}
+  const onlyQ=b.marks.length&&b.marks.every(m=>m[2]==="qw");
+  const tag=b.cited?'<span class="tag">답이 쓴 근거</span>':(b.marks.length?`<span class="tag used">${onlyQ?"질문 낱말 있음":"같은 글 있음"}</span>`:"");
+  return `<div class="ev"><div class="h"><span class="n">출처 ${b.n}</span><span class="t">${esc(b.title)}${b.posted?" · 게시 "+esc(b.posted):""}</span>${tag}</div>`+
+    (body?`<div class="lines">${body}</div>`:"")+`<button class="more" data-n="${b.n}">전체 보기</button><div class="full" id="full-${b.n}">${lines.join("\n")}</div></div>`;
 }
-function recordLines(){return D.examples.filter(x=>state[x.id]&&state[x.id].human).map(x=>JSON.stringify({id:x.id,human:state[x.id].human,memo:state[x.id].memo||"",claude:x.claude.verdict})).join("\n")+"\n"}
-document.getElementById("save").onclick=()=>{
-  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([recordLines()],{type:"application/x-ndjson"}));
-  a.download=`판정기록-${D.batch}.jsonl`;a.click();
-};
+function render(){
+  const done=X.filter(decided).length;
+  document.getElementById("bar").style.width=(100*done/X.length)+"%";
+  document.getElementById("prog").textContent=cur<X.length?`${cur+1} / ${X.length} · 판정 ${done}개`:`판정 ${done} / ${X.length}`;
+  const view=document.getElementById("view");
+  if(cur>=X.length){view.innerHTML=summary();bindSummary();return}
+  const x=X[cur],s=state[x.id]||{};
+  const main=x.blocks.filter(b=>b.cited||b.marks.length).sort((a,b)=>(b.cited-a.cited)||(a.n-b.n));
+  const rest=x.blocks.filter(b=>!b.cited&&!b.marks.length);
+  const agree=s.human&&s.human===x.claude.verdict;
+  view.innerHTML=`<div class="card">
+<div class="meta">${esc(x.kind)} · 묻는 사람 ${esc(x.user)}${x.today?" · 기준일 "+esc(x.today):""}</div>
+<div class="ask">이 답을 챗봇이 배워도 되나요?</div>
+<div class="q">${paint(x.question,x.question_marks)}</div>
+<div class="lbl">목표 답(챗봇이 배울 답)</div>
+<div class="target">${chips(paint(x.target,x.target_marks))}</div>
+<div class="legend">[출처 N]: 학습 데이터에만 있는 표시예요. 사용자 화면에서는 지우고 그 문서를 「참고한 문서」로 보여요.</div>
+<div class="legend">같은 색: 답과 근거에 똑같이 있는 글${x.target_marks.some(m=>m[2]==="miss")?' · <span class="miss">점선 밑줄</span>: 근거에서 같은 글을 못 찾은 문장':""}${x.question_marks.length?" · 파란 밑줄: 질문 낱말":""}</div>
+<div class="lbl">근거(관계있는 줄만)</div>
+${main.map(blockView).join("")||'<div class="notes">답과 같은 글이 있는 근거가 없어요. 아래 근거를 펼쳐 보세요.</div>'}
+${rest.length?`<details class="rest"><summary>나머지 근거 ${rest.length}개</summary>${rest.map(blockView).join("")}</details>`:""}
+${x.notes.length?`<div class="lbl">자동 검사 메모</div><div class="notes">${x.notes.map(esc).join("<br>")}</div>`:""}
+<ol class="check"><li>답의 날짜, 금액, 장소 같은 값이 근거와 같고, 출처 번호가 그 값이 있는 근거를 가리킨다</li><li>근거에 있는 신청 방법, 기한, 문의처를 빠뜨리지 않았다</li><li>근거에 없는 말이 없다. 거절이면 근거에 정말 답이 없다</li><li>실제 사람이 물을 만한 질문이다</li></ol>
+<div class="choose"><button class="pass ${s.human==="통과"?"on":""}" data-v="통과">통과<span class="key">1</span></button><button class="fail ${s.human==="탈락"?"on":""}" data-v="탈락">탈락<span class="key">2</span></button></div>
+<div class="claude ${s.human?(agree?"same":"diff"):""}"><b>${s.human?(agree?"Claude도 ":"Claude는 ")+esc(x.claude.verdict):""}</b>${x.claude.category?" · "+esc(x.claude.category):""}<div>${esc(x.claude.reason)}</div>${s.human&&!agree?`<input id="memo" class="memo" placeholder="어긋난 이유 한 줄(선택), Enter로 다음" value="${esc(s.memo||"")}">`:""}</div>
+<div class="nav"><button id="prev">◀ 이전</button><button class="next" id="next">다음 ▶</button></div>
+<div class="legend">키보드: 1 통과, 2 탈락, ← → 이동</div></div>`;
+  view.querySelectorAll("button[data-v]").forEach(btn=>btn.onclick=()=>choose(btn.dataset.v));
+  view.querySelectorAll("button.more").forEach(btn=>btn.onclick=()=>{const full=btn.nextElementSibling;full.classList.toggle("on");btn.textContent=full.classList.contains("on")?"접기":"전체 보기"});
+  document.getElementById("prev").onclick=prev;document.getElementById("next").onclick=next;
+  const memo=document.getElementById("memo");
+  if(memo){memo.oninput=e=>{state[x.id]={...state[x.id],memo:e.target.value};persist()};memo.focus()}
+}
+function choose(v){
+  const x=X[cur];if(!x)return;
+  const s=state[x.id]||{};
+  state[x.id]={...s,human:v,sec:(s.sec||0)+Math.round((Date.now()-shownAt)/1000)};shownAt=Date.now();persist();render();
+  if(v===x.claude.verdict)setTimeout(()=>{if(X[cur]===x&&state[x.id].human===v)next()},700);
+}
+function next(){const after=X.findIndex((x,i)=>i>cur&&!decided(x));cur=after>=0?after:(X.some(x=>!decided(x))?X.findIndex(x=>!decided(x)):X.length);shownAt=Date.now();render();window.scrollTo(0,0)}
+function prev(){if(cur>0){cur-=1;shownAt=Date.now();render();window.scrollTo(0,0)}}
+function totals(){
+  const done=X.filter(decided),differ=done.filter(x=>state[x.id].human!==x.claude.verdict);
+  const sec=done.reduce((n,x)=>n+(state[x.id].sec||0),0);
+  return {done,differ,min:Math.max(1,Math.round(sec/60))};
+}
+function resultText(){
+  const t=totals();
+  const lines=[`학습 예시 사람 확인 결과(${D.batch})`,`판정 ${t.done.length}/${X.length}, Claude와 어긋남 ${t.differ.length}개, 걸린 시간 약 ${t.min}분`];
+  for(const x of X){const s=state[x.id];if(s&&s.human)lines.push(`${x.id}: ${s.human}${s.human!==x.claude.verdict?` (Claude ${x.claude.verdict})`:""}${s.memo?` / 메모: ${s.memo}`:""}`)}
+  return lines.join("\n");
+}
+function summary(){
+  const t=totals();
+  const ok=t.differ.length<=1;
+  return `<div class="card"><div class="meta">판정 ${t.done.length}/${X.length} · 걸린 시간 약 ${t.min}분</div>
+<div class="big">Claude와 어긋남 ${t.differ.length}개</div>
+<p>${ok?"기준(1개 이하)을 넘었어요. 나머지 예시는 Claude 판정을 그대로 써요.":"기준(1개 이하)을 넘지 못했어요. 판정 지침을 고친 뒤 새 30개를 봐요."}</p>
+${t.differ.length?`<ol>${t.differ.map(x=>`<li>${esc(x.id)}: 나 ${esc(state[x.id].human)}, Claude ${esc(x.claude.verdict)}${state[x.id].memo?" — "+esc(state[x.id].memo):""}</li>`).join("")}</ol>`:""}
+<div class="act"><button class="copy" id="copy">결과 복사</button><button id="dl">판정 기록 내려받기</button><button id="back">◀ 예시 다시 보기</button></div>
+<textarea class="out" id="out" readonly>${esc(resultText())}</textarea>
+<div class="legend">결과 복사 뒤 채팅에 붙여 주세요. 복사가 안 되면 위 글을 직접 복사해요.</div></div>`;
+}
+function bindSummary(){
+  document.getElementById("copy").onclick=async()=>{const text=resultText();try{await navigator.clipboard.writeText(text);document.getElementById("copy").textContent="복사됨"}catch(e){const out=document.getElementById("out");out.focus();out.select()}};
+  document.getElementById("dl").onclick=()=>{
+    const body=X.filter(decided).map(x=>JSON.stringify({id:x.id,human:state[x.id].human,memo:state[x.id].memo||"",claude:x.claude.verdict,sec:state[x.id].sec||0})).join("\n")+"\n";
+    const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([body],{type:"application/x-ndjson"}));a.download=`판정기록-${D.batch}.jsonl`;a.click();
+  };
+  document.getElementById("back").onclick=()=>{cur=0;render()};
+}
+document.addEventListener("keydown",e=>{
+  if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"){if(e.key==="Enter"&&e.target.tagName==="INPUT"){e.preventDefault();next()}return}
+  if(e.key==="1")choose("통과");else if(e.key==="2")choose("탈락");
+  else if(e.key==="ArrowRight")next();else if(e.key==="ArrowLeft")prev();
+});
+setInterval(()=>{const t=totals();document.getElementById("clock").textContent=`걸린 시간 약 ${t.min}분`},5000);
 render();
 </script>
 </body>
