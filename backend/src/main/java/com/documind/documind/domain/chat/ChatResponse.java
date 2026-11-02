@@ -25,4 +25,7 @@ public class ChatResponse {
 
     // 거절 문장만 있는 답에 붙이는 정해 둔 안내. 그 밖에는 null
     private RefusalGuidance guidance;
+
+    // 답 글 속 링크와 그 자리. 화면은 이 자리를 누를 수 있는 링크로 보인다
+    private List<AnswerLink> links;
 }

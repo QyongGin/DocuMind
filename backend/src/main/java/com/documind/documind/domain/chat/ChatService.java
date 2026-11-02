@@ -98,6 +98,7 @@ public class ChatService {
                 .answer(screenAnswer.text())
                 .references(screenAnswer.references())
                 .guidance(screenAnswer.guidance())
+                .links(screenAnswer.links())
                 .build();
     }
 
@@ -354,6 +355,7 @@ public class ChatService {
                 .answer(screenAnswer == null ? null : screenAnswer.text())
                 .references(screenAnswer == null ? List.of() : screenAnswer.references())
                 .guidance(screenAnswer == null ? null : screenAnswer.guidance())
+                .links(screenAnswer == null ? List.of() : screenAnswer.links())
                 .feedbackScore(feedbackScore)
                 .createdAt(message.getCreatedAt())
                 .build();

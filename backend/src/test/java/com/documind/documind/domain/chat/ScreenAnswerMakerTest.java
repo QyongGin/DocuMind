@@ -123,6 +123,23 @@ class ScreenAnswerMakerTest {
         assertEquals("가나소프트웨어학과 홈페이지", ScreenAnswerMaker.siteLabel("가나소프트웨어학과"));
     }
 
+    @Test
+    @DisplayName("답 속 링크: 끝은 한글·괄호 앞에서 끊고 끝의 문장부호는 빼며, 자리는 답 글과 맞는다")
+    void answerLinks() {
+        String raw = "신청은 https://www.ganada.ac.kr/form이며, 결과는 (https://www.ganada.ac.kr/result)에서 봅니다. "
+                + "목록은 <https://www.ganada.ac.kr/list.do?bbs=11&page=2>를 보시고 자세한 안내는 https://www.ganada.ac.kr/bbs/11/1."
+                + "\n\n[출처 1]";
+
+        ScreenAnswer answer = maker.make(raw, sources());
+
+        assertEquals(List.of("https://www.ganada.ac.kr/form", "https://www.ganada.ac.kr/result",
+                        "https://www.ganada.ac.kr/list.do?bbs=11&page=2", "https://www.ganada.ac.kr/bbs/11/1"),
+                answer.links().stream().map(AnswerLink::url).toList());
+        // 화면은 답 글의 [start, end) 자리를 링크로 바꾼다
+        answer.links().forEach(link -> assertEquals(link.url(), answer.text().substring(link.start(), link.end())));
+        assertEquals(List.of(), ScreenAnswerMaker.findLinks("주소가 없는 답입니다. https:// 만 있습니다."));
+    }
+
     private void given(Document... documents) {
         when(documentRepository.findAllById(any())).thenAnswer(invocation -> {
             Collection<?> ids = invocation.getArgument(0);
