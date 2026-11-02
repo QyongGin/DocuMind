@@ -1,5 +1,6 @@
 package com.documind.documind.domain.chat;
 
+import com.documind.documind.domain.document.DocumentRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,6 +25,7 @@ class SseStreamingContextTest {
     private final ChatStreamPersistenceService persistenceService = mock(ChatStreamPersistenceService.class);
     private final SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher = mock(SourceDocumentMetadataEnricher.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final DocumentRepository documentRepository = mock(DocumentRepository.class);
 
     @Test
     @DisplayName("done 이벤트 수신 시 완성 답변을 저장하고 이후 연결 종료에서는 부분 답변을 저장하지 않음")
@@ -38,6 +40,7 @@ class SseStreamingContextTest {
         verify(persistenceService).completeMessage(
                 eq(MESSAGE_ID),
                 eq(SESSION_ID),
+                eq("안녕하세요"),
                 eq("안녕하세요"),
                 eq("[{\"source\":\"guide.pdf\"}]")
         );
@@ -57,7 +60,7 @@ class SseStreamingContextTest {
 
         verify(subscription).dispose();
         verify(persistenceService).savePartialAnswer(MESSAGE_ID, "부분답변");
-        verify(persistenceService, never()).completeMessage(any(), any(), any(), any());
+        verify(persistenceService, never()).completeMessage(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -74,7 +77,7 @@ class SseStreamingContextTest {
 
         verify(subscription).dispose();
         verify(persistenceService).savePartialAnswer(MESSAGE_ID, "부분");
-        verify(persistenceService, never()).completeMessage(any(), any(), any(), any());
+        verify(persistenceService, never()).completeMessage(any(), any(), any(), any(), any());
         verify(emitter).complete();
     }
 
@@ -90,8 +93,28 @@ class SseStreamingContextTest {
                 MESSAGE_ID,
                 SESSION_ID,
                 "검색 결과가 없습니다.",
+                "검색 결과가 없습니다.",
                 "[]"
         );
+    }
+
+    @Test
+    @DisplayName("done 이벤트에서 출처 번호를 지운 화면용 답을 저장·전송하고 모델 원문은 원문 칸에 저장함")
+    void onToken_withCitation_savesScreenAnswerAndRawAnswer() throws Exception {
+        SseStreamingContext context = createContext();
+
+        context.onToken("{\"token\":\"휴학 신청은 8월 29일까지입니다.\"}");
+        context.onToken("{\"token\":\"\\n\\n[출처 1]\"}");
+        context.onToken("{\"done\":true,\"sources\":[]}");
+
+        verify(persistenceService).completeMessage(
+                MESSAGE_ID,
+                SESSION_ID,
+                "휴학 신청은 8월 29일까지입니다.",
+                "휴학 신청은 8월 29일까지입니다.\n\n[출처 1]",
+                "[]"
+        );
+        verify(emitter, times(3)).send(any(SseEmitter.SseEventBuilder.class));
     }
 
     @Test
@@ -107,6 +130,7 @@ class SseStreamingContextTest {
         verify(persistenceService).completeMessage(
                 MESSAGE_ID,
                 SESSION_ID,
+                SseStreamingContext.UPSTREAM_ERROR_MESSAGE,
                 SseStreamingContext.UPSTREAM_ERROR_MESSAGE,
                 "[]"
         );
@@ -129,6 +153,7 @@ class SseStreamingContextTest {
                 MESSAGE_ID,
                 SESSION_ID,
                 SseStreamingContext.STREAM_ERROR_MESSAGE,
+                SseStreamingContext.STREAM_ERROR_MESSAGE,
                 "[]"
         );
         verify(persistenceService, never()).savePartialAnswer(any(), any());
@@ -145,7 +170,9 @@ class SseStreamingContextTest {
                 SESSION_ID,
                 objectMapper,
                 persistenceService,
-                sourceDocumentMetadataEnricher
+                sourceDocumentMetadataEnricher,
+                new ScreenAnswerMaker(documentRepository, "학교 홈페이지 안내에서 찾지 못했습니다.",
+                        "학과, 학년도, 학기를 넣어 다시 질문하기", "교내 전화번호 안내", "https://www.ganada.ac.kr/phone")
         );
     }
 }

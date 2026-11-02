@@ -22,12 +22,13 @@ public class ChatStreamPersistenceService {
      *
      * @param messageId 저장할 메시지 ID
      * @param sessionId 마지막 활동 시각을 갱신할 세션 ID
-     * @param answer 완성된 LLM 답변
+     * @param answer 화면용 답(출처 번호를 지운 것)
+     * @param rawAnswer 모델 원문 답(출처 번호 포함)
      * @param sourcesJson 답변 출처 JSON 문자열
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void completeMessage(Long messageId, Long sessionId, String answer, String sourcesJson) {
-        chatMessageRepository.findById(messageId).ifPresent(message -> message.complete(answer, sourcesJson));
+    public void completeMessage(Long messageId, Long sessionId, String answer, String rawAnswer, String sourcesJson) {
+        chatMessageRepository.findById(messageId).ifPresent(message -> message.complete(answer, rawAnswer, sourcesJson));
         chatSessionRepository.updateUpdatedAt(sessionId, LocalDateTime.now());
     }
 

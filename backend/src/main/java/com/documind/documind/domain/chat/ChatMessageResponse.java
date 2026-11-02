@@ -27,6 +27,12 @@ public class ChatMessageResponse {
     // 답변 근거 문서 목록. DB의 JSON 문자열을 역직렬화한 결과
     private List<Map<String, Object>> sources;
 
+    // 참고한 문서(답이 쓴 근거, ADR-0050). 화면은 sources 대신 이것을 보인다
+    private List<ReferenceDocument> references;
+
+    // 거절 문장만 있는 답에 붙이는 정해 둔 안내. 그 밖에는 null
+    private RefusalGuidance guidance;
+
     // 저장된 피드백 점수. 1=좋아요, -1=싫어요, null=미등록
     private Byte feedbackScore;
 

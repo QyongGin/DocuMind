@@ -34,6 +34,10 @@ public class ChatMessage {
     @Column(columnDefinition = "TEXT")
     private String answer;
 
+    // 모델 원문 답(출처 번호 포함, ADR-0051 결정 3). answer는 화면용 답이다. 이 칸이 생기기 전 메시지는 null
+    @Column(columnDefinition = "TEXT")
+    private String rawAnswer;
+
     // 답변 생성에 사용된 출처 문서 목록. JSON 타입으로 저장
     @Column(columnDefinition = "JSON")
     private String sourceDocs;
@@ -56,9 +60,21 @@ public class ChatMessage {
         return message;
     }
 
-    // LLM 응답 수신 후 answer와 sourceDocs를 저장. sourceDocs는 JSON 직렬화 문자열
+    // LLM 응답 수신 후 answer와 sourceDocs를 저장. sourceDocs는 JSON 직렬화 문자열. 원문과 화면용이 같은 경우(부분 답변·오류)
     public void complete(String answer, String sourceDocs) {
+        complete(answer, answer, sourceDocs);
+    }
+
+    /**
+     * 화면용 답과 모델 원문 답, 출처 목록을 저장한다(ADR-0051 결정 3).
+     *
+     * @param answer     화면용 답(출처 번호를 지운 것)
+     * @param rawAnswer  모델 원문 답
+     * @param sourceDocs 출처 목록 JSON
+     */
+    public void complete(String answer, String rawAnswer, String sourceDocs) {
         this.answer = answer;
+        this.rawAnswer = rawAnswer;
         this.sourceDocs = sourceDocs;
     }
 }
