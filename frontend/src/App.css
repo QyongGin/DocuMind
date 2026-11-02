@@ -3747,3 +3747,11 @@ button:disabled {
   justify-self: start;
   min-height: 40px;
 }
+
+/* 답 속 링크(ADR-0050 결정 5). 긴 주소도 폰 폭에서 줄을 바꾼다 */
+.answer-link {
+  color: var(--action-blue);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}

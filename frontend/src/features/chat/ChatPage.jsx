@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { env } from '../../config/env.js'
 import { logout } from '../../services/authApi.js'
@@ -149,6 +149,33 @@ function renderMarkdownInline(text) {
     })
 }
 
+// 답 글을 서버가 준 링크 자리([start, end), ADR-0050 결정 5)와 나머지로 나눠 링크는 누를 수 있게 그린다.
+// 자리가 글과 맞지 않거나 http(s) 주소가 아니면 링크로 그리지 않는다
+function renderAnswerWithLinks(text, links = []) {
+  const parts = []
+  let cursor = 0
+  ;[...links]
+    .sort((left, right) => left.start - right.start)
+    .forEach((link) => {
+      const isValid = link.start >= cursor && /^https?:\/\//.test(link.url) && text.slice(link.start, link.end) === link.url
+      if (!isValid) return
+      parts.push({ text: text.slice(cursor, link.start) })
+      parts.push({ link })
+      cursor = link.end
+    })
+  parts.push({ text: text.slice(cursor) })
+
+  return parts.map((part, index) =>
+    part.link ? (
+      <a key={`link-${index}`} className="answer-link" href={part.link.url} target="_blank" rel="noopener noreferrer">
+        {part.link.url}
+      </a>
+    ) : (
+      <Fragment key={`text-${index}`}>{renderAnswerText(part.text)}</Fragment>
+    )
+  )
+}
+
 function renderAnswerText(text) {
   return String(text)
     .split('\n')
@@ -180,6 +207,8 @@ function ChatPage() {
   // 화면용 답의 참고한 문서와 거절 안내(ADR-0050). 검색 후보는 관리자 개발자 정보(DevInfoPanel)가 관리자 API로 받는다
   const [references, setReferences] = useState([])
   const [guidance, setGuidance] = useState(null)
+  // 답 속 링크와 그 자리. 흐르는 동안은 비어 있고 답이 끝나면 서버가 준다
+  const [links, setLinks] = useState([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [feedback, setFeedback] = useState(null)
@@ -310,6 +339,7 @@ function ChatPage() {
       setAnswer(lastMessage.answer ?? '')
       setReferences(Array.isArray(lastMessage.references) ? lastMessage.references : [])
       setGuidance(lastMessage.guidance ?? null)
+      setLinks(Array.isArray(lastMessage.links) ? lastMessage.links : [])
       setFeedback(feedbackFromScore(lastMessage.feedbackScore))
     } catch (error) {
       setHistoryError(error.message)
@@ -411,6 +441,7 @@ function ChatPage() {
     setAnswer('')
     setReferences([])
     setGuidance(null)
+    setLinks([])
     setErrorMessage('')
     setFeedback(null)
     setFeedbackError('')
@@ -427,6 +458,7 @@ function ChatPage() {
         messageId: completedMessageId,
         references: nextReferences,
         guidance: nextGuidance,
+        links: nextLinks,
       }) => {
         flushBufferedAnswerTokens()
         if (completedAnswer) {
@@ -435,6 +467,7 @@ function ChatPage() {
         setMessageId(completedMessageId ?? null)
         setReferences(nextReferences)
         setGuidance(nextGuidance)
+        setLinks(nextLinks)
         setIsStreaming(false)
         loadHistory()
       },
@@ -503,6 +536,7 @@ function ChatPage() {
     setAnswer('')
     setReferences([])
     setGuidance(null)
+    setLinks([])
     setErrorMessage('')
     setFeedback(null)
     setFeedbackError('')
@@ -527,6 +561,7 @@ function ChatPage() {
       setAnswer('')
       setReferences([])
       setGuidance(null)
+      setLinks([])
       setFeedback(null)
       setFeedbackError('')
       setErrorMessage('')
@@ -718,7 +753,7 @@ function ChatPage() {
                     </div>
                     {answer ? (
                       <p>
-                        {renderAnswerText(answer)}
+                        {renderAnswerWithLinks(answer, isStreaming ? [] : links)}
                         {isStreaming && <span className="typing-caret" aria-hidden="true" />}
                       </p>
                     ) : (
