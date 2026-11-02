@@ -1,4 +1,5 @@
-"""`upload` 명령: 행 고르기, 파일 이름, 출처 칸, 이어 올리기, 409·실패·연속 실패 멈춤. 네트워크 없이 가짜 백엔드로."""
+"""`upload`·`origins` 명령: 행 고르기, 파일 이름, 출처·게시 정보 칸, 이어 올리기, 409·실패·연속 실패 멈춤,
+이미 올린 문서 게시 정보 채우기. 네트워크 없이 가짜 백엔드로."""
 
 import pytest
 
@@ -41,6 +42,9 @@ class FakeBackend:
         self.upload_results = upload_results or {}
         self.progress_steps = progress_steps or {}
         self.next_id = 100
+        self.origin_calls = []
+        self.origin_error = None
+        self.live_ledger_ids = None  # None이면 보낸 대장 ID가 모두 살아 있는 문서
 
     def post(self, url, json=None, files=None, data=None, timeout=None):
         if url.endswith("/api/auth/login"):
@@ -60,6 +64,17 @@ class FakeBackend:
                 return result
             self.next_id += 1
             return FakeResponse(200, {"success": True, "data": {"documentId": self.next_id, "processingStatus": "PROCESSING"}})
+        raise AssertionError(url)
+
+    def put(self, url, json=None, timeout=None):
+        if url.endswith("/api/admin/documents/origins"):
+            if self.origin_error is not None:
+                return self.origin_error
+            self.origin_calls.append(json)
+            ids = [item["ledgerId"] for item in json]
+            found = [i for i in ids if self.live_ledger_ids is None or i in self.live_ledger_ids]
+            return FakeResponse(200, {"success": True, "data": {"updated": len(found),
+                                                                "missingLedgerIds": [i for i in ids if i not in found]}})
         raise AssertionError(url)
 
     def get(self, url, timeout=None):
@@ -141,7 +156,8 @@ def test_upload_waits_records_and_resumes(ledger, tmp_path):
     first = backend.uploads[0]
     assert first["auth"] == "Bearer token"
     assert first["fields"] == {"ledgerId": "a/1", "sourceUrl": "https://www.example.ac.kr/a/1",
-                               "sourcePostedAt": "2026-08-01", "academicYear": "2026", "categoryId": "2"}
+                               "sourcePostedAt": "2026-08-01", "academicYear": "2026", "categoryId": "2",
+                               "originSite": "www", "originSiteName": "학교", "originTitle": "수강신청 안내.hwp"}
     assert backend.categories["입시"] == 2  # 없던 주제는 카테고리로 만들었다
     assert ledger.get("a/1")["uploaded_document_id"] == 101  # 서비스 대상은 대장 칸도 채운다
 
@@ -217,3 +233,72 @@ def test_wrong_password_and_expired_token_stop(ledger, tmp_path):
     uploader, _ = make_uploader(ledger, tmp_path, expired)
     with pytest.raises(upload.UploadStop, match="권한"):
         uploader.run(upload.select_rows(ledger.con, "service"))
+
+
+def test_site_names_use_main_names_and_page_title_suffix(ledger, tmp_path):
+    add_rows(ledger, tmp_path,
+             row("www/1", kind="page", title="총장인사말"),
+             row("cs/1", site="cs", kind="page", title="학과소개(가나소프트웨어학과)"),
+             row("cs/2", site="cs", kind="page", title="교과과정(가나소프트웨어학과)"),
+             row("cs/3", site="cs", kind="page", title="오시는 길"),
+             row("art/1", site="art", kind="page", title="공지사항"))
+    # 이름을 찾지 못한 사이트(art)는 빠진다
+    assert upload.site_names(ledger.con) == {"www": "학교", "ipsi": "입학", "cs": "가나소프트웨어학과"}
+
+
+def test_origin_links_attachment_to_its_post(ledger, tmp_path):
+    post = row("www/bbs/11/1", kind="post", board="학사(11)", title="2학기 수강신청 안내",
+               url="https://www.ganada.ac.kr/bbs/11/1")
+    attachment = row("www/bbs/11/1/a1", parent_id="www/bbs/11/1", board="학사(11)", title="수강신청서.hwp")
+    orphan = row("www/bbs/11/2/a1", parent_id="www/bbs/11/2", board="학사(11)", title="신청서.hwp")
+    add_rows(ledger, tmp_path, post, attachment, orphan)
+    origins = upload.Origins(ledger.con)
+
+    assert origins.of(attachment) == {"site": "www", "siteName": "학교", "board": "학사(11)", "title": "수강신청서.hwp",
+                                      "parentTitle": "2학기 수강신청 안내",
+                                      "parentUrl": "https://www.ganada.ac.kr/bbs/11/1"}
+    # 게시글이 대장에 없으면 게시글 칸을 비운다(화면이 첨부 파일 자체로 연결한다)
+    assert "parentTitle" not in origins.of(orphan)
+    assert "parentTitle" not in origins.of(post)
+    assert upload.origin_fields({"site": "www", "parentUrl": "https://x.example"}) == {
+        "originSite": "www", "originParentUrl": "https://x.example"}
+
+
+def test_upload_sends_origin_fields(ledger, tmp_path):
+    add_rows(ledger, tmp_path, row("a/1", board="학사(11)"))
+    backend = FakeBackend()
+    uploader, _ = make_uploader(ledger, tmp_path, backend)
+
+    uploader.run(upload.select_rows(ledger.con, "service"))
+
+    fields = backend.uploads[0]["fields"]
+    assert (fields["originSite"], fields["originSiteName"], fields["originBoard"], fields["originTitle"]) == (
+        "www", "학교", "학사(11)", "수강신청 안내.hwp")
+
+
+def test_fill_origins_sends_uploaded_documents_in_batches(ledger, tmp_path):
+    add_rows(ledger, tmp_path, row("a/1"), row("a/2"), row("a/3"))
+    backend = FakeBackend()
+    uploader, _ = make_uploader(ledger, tmp_path, backend)
+    uploader.record(row("a/1"), upload.Result("ready", 101))
+    uploader.record(row("a/2"), upload.Result("exists", 102))
+    uploader.record(row("a/3"), upload.Result("failed", reason="처리 실패"))
+    backend.live_ledger_ids = {"a/1"}  # a/2는 백엔드에서 지운 문서
+
+    updates = upload.origin_updates(ledger.con, "service")
+    result = upload.fill_origins(uploader.client, updates, batch=1)
+
+    # 실패한 행은 보내지 않는다
+    assert [item["ledgerId"] for item in updates] == ["a/1", "a/2"]
+    assert result == {"sent": 2, "updated": 1, "missing": ["a/2"]}
+    assert len(backend.origin_calls) == 2
+    assert backend.origin_calls[0][0]["siteName"] == "학교"
+
+
+def test_fill_origins_stops_when_a_batch_is_rejected(ledger, tmp_path):
+    backend = FakeBackend()
+    backend.origin_error = FakeResponse(400, {"success": False, "message": "게시글 주소는 http 또는 https로 시작해야 합니다."})
+    uploader, _ = make_uploader(ledger, tmp_path, backend)
+
+    with pytest.raises(upload.UploadStop, match="게시글 주소"):
+        upload.fill_origins(uploader.client, [{"ledgerId": "a/1"}])

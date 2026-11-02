@@ -8,6 +8,7 @@
     stats          대장 집계(형식·주제·개인정보·첨부 실측 크기)
     failures       실패 목록
     upload         대장 행을 서비스 백엔드 API로 올리기(관리자 비밀번호는 실행 때 입력, 이어 올리기)
+    origins        이미 올린 문서의 게시 정보(사이트·게시판·제목·첨부의 게시글)를 대장으로 채우기
     evalset        평가셋 자동 검증·이중 라벨링·분할·휴먼 리뷰·버전 고정(`python -m corpus evalset -h`)
 """
 
@@ -186,6 +187,39 @@ def cmd_upload(args) -> int:
         ledger.close()
 
 
+def cmd_origins(args) -> int:
+    if not args.base_url.startswith(("http://", "https://")):
+        print("--base-url은 http:// 또는 https://로 시작해야 합니다.", file=sys.stderr)
+        return 2
+    ledger = ledger_at(Path(args.root))
+    try:
+        updates = upload.origin_updates(ledger.con, args.set)
+        named = sum(1 for item in updates if item.get("siteName"))
+        parents = sum(1 for item in updates if item.get("parentTitle"))
+        print(f"대상 {args.set} · 주소 {args.base_url} · 이미 올린 문서 {len(updates)}개 "
+              f"(사이트 이름 {named} · 첨부의 게시글 {parents})")
+        if args.dry_run:
+            for item in updates[:3]:
+                print(f"  {item}")
+            return 0
+        if not args.yes and input("이 주소의 문서에 게시 정보를 채울까요? (y/N) ").strip().lower() != "y":
+            print("채우지 않았습니다.")
+            return 1
+        password = os.environ.get("DOCUMIND_ADMIN_PASSWORD") or getpass.getpass(f"{args.username} 비밀번호: ")
+        client = upload.BackendClient(args.base_url, requests.Session())
+        client.login(args.username, password)
+        result = upload.fill_origins(client, updates)
+        print(f"끝: 보냄 {result['sent']} · 바꾼 문서 {result['updated']} · 살아 있는 문서 없음 {len(result['missing'])}")
+        for ledger_id in result["missing"][:10]:
+            print(f"  없음: {ledger_id}")
+        return 0
+    except upload.UploadStop as stop:
+        print(str(stop), file=sys.stderr)
+        return 1
+    finally:
+        ledger.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="corpus",
@@ -244,6 +278,15 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--dry-run", action="store_true", help="고른 행 수와 파일 이름만 보여 준다(요청 없음)")
     up.add_argument("--yes", action="store_true", help="확인 질문 없이 바로 올린다")
     up.set_defaults(func=cmd_upload)
+
+    origins = commands.add_parser("origins", help="이미 올린 문서의 게시 정보를 대장으로 채우기(ADR-0051, 비밀번호는 실행 때 입력)")
+    origins.add_argument("--base-url", required=True, help="챗봇 화면 주소(예: http://데스크탑이름). /api로 백엔드를 부른다")
+    origins.add_argument("--set", choices=sorted(upload.SELECTIONS), required=True,
+                         help="올릴 때 쓴 대상(uploads 표의 ready·exists 행을 채운다)")
+    origins.add_argument("--username", default="admin", help="관리자 아이디(기본 admin)")
+    origins.add_argument("--dry-run", action="store_true", help="채울 문서 수와 앞의 몇 개만 보여 준다(요청 없음)")
+    origins.add_argument("--yes", action="store_true", help="확인 질문 없이 바로 채운다")
+    origins.set_defaults(func=cmd_origins)
 
     evalset_cli.add_parser(commands, DEFAULT_EVALSET)
     trainset_cli.add_parser(commands)

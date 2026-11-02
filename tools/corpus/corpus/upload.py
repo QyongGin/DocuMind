@@ -8,6 +8,8 @@
 - 결과는 대장의 `uploads` 표(대상·대장 ID·문서 번호·상태·이유, 스키마는 ledger.py)에 적어 다시 실행하면 이어 올린다
 - 409(같은 파일)는 'exists', 실패는 'failed'(이유 포함)로 적는다. 실패가 연속 5번이면 멈춘다
 - 파일 이름은 대장 제목에 내용 형식의 확장자를 붙인 것, 주제는 같은 이름의 카테고리(없으면 만든다)
+- 게시 정보(사이트·게시판·제목·첨부의 게시글)를 함께 보내 답 화면의 '참고한 문서'에 쓴다(ADR-0051). 이미 올린 문서는
+  `python -m corpus origins`가 관리자 API로 채운다
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import time
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -33,6 +36,11 @@ MIME_BY_FORMAT = {
 }
 KNOWN_EXTENSIONS = re.compile(r"\.(html?|pdf|hwpx?|docx|xlsx|pptx)$", re.IGNORECASE)
 MAX_CONSECUTIVE_FAILURES = 5
+# 대표 사이트 두 곳의 사람이 읽는 이름(docs/project/챗봇-답변-형식.md §3 '참고한 문서 만드는 법').
+# 학과 사이트는 그 사이트 페이지 제목 끝 괄호 안 이름을 쓴다(예: '학과소개(AI소프트웨어학과)')
+MAIN_SITE_NAMES = {"www": "학교", "ipsi": "입학"}
+TITLE_SITE_NAME = re.compile(r"\(([^()]+)\)\s*$")
+ORIGIN_BATCH = 500  # 게시 정보 채우기 한 번에 보내는 수(관리자 API는 1,000개까지 받는다)
 POLL_SECONDS = 2.0
 DOCUMENT_TIMEOUT_SECONDS = 30 * 60
 
@@ -112,6 +120,70 @@ def source_fields(row: dict) -> dict:
     return fields
 
 
+def site_names(con: sqlite3.Connection) -> dict[str, str]:
+    """사이트 코드마다 사람이 읽는 이름. 대표 사이트는 MAIN_SITE_NAMES, 그 밖의 사이트는 그 사이트 페이지 제목 끝
+    괄호 안 이름 중 가장 많은 것. 이름을 찾지 못한 사이트는 빠진다."""
+    names = dict(MAIN_SITE_NAMES)
+    found: dict[str, Counter] = defaultdict(Counter)
+    for site, title in con.execute("SELECT site, title FROM ledger WHERE kind = 'page'"):
+        match = TITLE_SITE_NAME.search(title or "")
+        if site not in MAIN_SITE_NAMES and match:
+            found[site][match.group(1).strip()] += 1
+    names.update({site: counts.most_common(1)[0][0] for site, counts in found.items()})
+    return names
+
+
+class Origins:
+    """대장 행의 게시 정보(사이트·게시판·제목·첨부의 게시글, ADR-0051). 업로드 칸과 이미 올린 문서 채우기가 같은 값을 쓴다."""
+
+    def __init__(self, con: sqlite3.Connection):
+        self.con = con
+        self.names = site_names(con)
+
+    def of(self, row: dict) -> dict:
+        """관리자 API 이름(site·siteName·board·title·parentTitle·parentUrl)으로 게시 정보. 값이 없는 칸은 뺀다.
+        첨부 파일은 대장에 있는 게시글의 제목과 주소를 붙인다(없으면 화면이 첨부 파일 자체로 연결한다)."""
+        parent = None
+        if row.get("kind") == "attach" and row.get("parent_id"):
+            parent = self.con.execute("SELECT title, url FROM ledger WHERE doc_id = ?", (row["parent_id"],)).fetchone()
+        parent_url = (parent[1] or "") if parent else ""
+        values = {"site": row.get("site"), "siteName": self.names.get(row.get("site")), "board": row.get("board"),
+                  "title": row.get("title"), "parentTitle": parent[0] if parent else None,
+                  "parentUrl": parent_url if parent_url.startswith(("http://", "https://")) else None}
+        return {key: value for key, value in values.items() if value}
+
+
+def origin_fields(origin: dict) -> dict:
+    """게시 정보를 업로드 API의 칸 이름(originSite·originSiteName 등)으로 바꾼다."""
+    return {"origin" + key[0].upper() + key[1:]: value for key, value in origin.items()}
+
+
+def origin_updates(con: sqlite3.Connection, target: str) -> list[dict]:
+    """이미 올린 문서(uploads 표에서 ready·exists)마다 대장 ID와 게시 정보. 관리자 API에 그대로 보낸다."""
+    con.row_factory = sqlite3.Row
+    rows = [dict(row) for row in con.execute(
+        "SELECT l.* FROM uploads u JOIN ledger l ON l.doc_id = u.doc_id "
+        "WHERE u.target = ? AND u.status IN ('ready', 'exists') ORDER BY l.doc_id", (target,))]
+    origins = Origins(con)
+    return [{"ledgerId": row["doc_id"], **origins.of(row)} for row in rows]
+
+
+def fill_origins(client: "BackendClient", updates: list[dict], batch: int = ORIGIN_BATCH) -> dict:
+    """게시 정보를 묶음으로 나눠 관리자 API로 채운다. 실패하면 UploadStop(앞 묶음은 이미 바뀐 채로 남는다).
+
+    돌려주는 값: 보낸 대장 ID 수, 바뀐 문서 수, 살아 있는 문서가 없는 대장 ID."""
+    updated, missing = 0, []
+    for start in range(0, len(updates), batch):
+        response = client.update_origins(updates[start:start + batch])
+        BackendClient._raise_for_auth(response)
+        if response.status_code != 200:
+            raise UploadStop(f"게시 정보를 채우지 못함({start + 1}번째부터): {_message(response)}")
+        data = response.json()["data"]
+        updated += data["updated"]
+        missing += data["missingLedgerIds"]
+    return {"sent": len(updates), "updated": updated, "missing": missing}
+
+
 class BackendClient:
     """백엔드 API(화면의 `/api` 경로)를 부른다. 요청 하나가 실패하면 예외 대신 응답을 그대로 돌려준다."""
 
@@ -154,6 +226,10 @@ class BackendClient:
     def progress(self, document_id: int):
         return self.session.get(f"{self.base_url}/api/documents/{document_id}/progress", timeout=30)
 
+    def update_origins(self, updates: list[dict]):
+        """이미 올린 문서의 게시 정보를 대장 ID로 채운다(관리자 API, ADR-0051)."""
+        return self.session.put(f"{self.base_url}/api/admin/documents/origins", json=updates, timeout=60)
+
     def chunks(self, document_id: int):
         """문서의 색인 청크(관리자 문서 점검 화면과 같은 API). 평가셋 색인 글 내보내기에 쓴다."""
         return self.session.get(f"{self.base_url}/api/documents/{document_id}/chunks", timeout=60)
@@ -182,6 +258,7 @@ class Uploader:
         self.log = log
         self.sleep = sleep
         self.clock = clock
+        self.origins = Origins(con)
 
     def done_ids(self, retry_failed: bool) -> set[str]:
         statuses = ("ready", "exists") if retry_failed else ("ready", "exists", "failed")
@@ -219,7 +296,7 @@ class Uploader:
         return Result("failed", document_id, "처리 시간 초과(30분)")
 
     def upload_one(self, row: dict, category_id: int | None) -> Result:
-        fields = source_fields(row)
+        fields = source_fields(row) | origin_fields(self.origins.of(row))
         if category_id is not None:
             fields["categoryId"] = str(category_id)
         filename = upload_filename(row["title"], row["format"])
