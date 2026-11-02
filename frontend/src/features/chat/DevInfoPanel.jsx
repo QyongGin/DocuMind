@@ -133,7 +133,8 @@ function DevInfoContent({ info }) {
   )
 }
 
-export function DevInfoPanel({ messageId }) {
+// className은 놓이는 자리의 바깥 모양(채팅 답 아래는 source-card, 관리자 목록은 그 목록의 모양)
+export function DevInfoPanel({ messageId, className = 'source-card' }) {
   const [isOpen, setIsOpen] = useState(false)
   const [info, setInfo] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -160,7 +161,7 @@ export function DevInfoPanel({ messageId }) {
   }
 
   return (
-    <section className="source-card dev-info" aria-label="개발자 정보">
+    <section className={`${className} dev-info`} aria-label="개발자 정보">
       <button
         type="button"
         className="dev-info__toggle"
