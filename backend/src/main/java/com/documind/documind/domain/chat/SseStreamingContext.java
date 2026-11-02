@@ -29,6 +29,7 @@ class SseStreamingContext {
     private final Long sessionId;
     private final ObjectMapper objectMapper;
     private final ChatStreamPersistenceService persistenceService;
+    private final ScreenAnswerMaker screenAnswerMaker;
     private final SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher;
     private final StringBuffer answerBuffer = new StringBuffer();
     private final Object persistenceLock = new Object();
@@ -42,7 +43,8 @@ class SseStreamingContext {
             Long sessionId,
             ObjectMapper objectMapper,
             ChatStreamPersistenceService persistenceService,
-            SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher
+            SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher,
+            ScreenAnswerMaker screenAnswerMaker
     ) {
         this.emitter = emitter;
         this.messageId = messageId;
@@ -50,6 +52,7 @@ class SseStreamingContext {
         this.objectMapper = objectMapper;
         this.persistenceService = persistenceService;
         this.sourceDocumentMetadataEnricher = sourceDocumentMetadataEnricher;
+        this.screenAnswerMaker = screenAnswerMaker;
     }
 
     /**
@@ -143,16 +146,18 @@ class SseStreamingContext {
     private void handleDoneEvent(String jsonData, JsonNode node) throws IOException {
         List<Map<String, Object>> enrichedSources = enrichDoneSources(node);
         String sourcesJson = objectMapper.writeValueAsString(enrichedSources);
-        String finalAnswer = node.has("answer")
+        String rawAnswer = node.has("answer")
                 ? node.get("answer").asText()
                 : currentAnswer();
-        String enrichedJsonData = replaceSources(jsonData, node, enrichedSources);
+        // 화면용 답(ADR-0051): 출처 번호를 지우고 참고한 문서·안내를 만들어 done 이벤트에 담는다. 화면은 흐른 글을 이 답으로 바꾼다
+        ScreenAnswer screenAnswer = screenAnswerMaker.make(rawAnswer, enrichedSources);
+        String enrichedJsonData = replaceSources(jsonData, node, enrichedSources, screenAnswer);
 
         synchronized (persistenceLock) {
             if (answerStored) {
                 return;
             }
-            persistenceService.completeMessage(messageId, sessionId, finalAnswer, sourcesJson);
+            persistenceService.completeMessage(messageId, sessionId, screenAnswer.text(), rawAnswer, sourcesJson);
             answerStored = true;
             normallyCompleted = true;
         }
@@ -168,8 +173,8 @@ class SseStreamingContext {
         return sourceDocumentMetadataEnricher.enrich(sources);
     }
 
-    private String replaceSources(String jsonData, JsonNode node, List<Map<String, Object>> sources)
-            throws JsonProcessingException {
+    private String replaceSources(String jsonData, JsonNode node, List<Map<String, Object>> sources,
+                                  ScreenAnswer screenAnswer) throws JsonProcessingException {
         if (!node.isObject()) {
             return jsonData;
         }
@@ -177,6 +182,9 @@ class SseStreamingContext {
         ObjectNode outbound = (ObjectNode) node.deepCopy();
         outbound.set("sources", objectMapper.valueToTree(sources));
         outbound.put("messageId", messageId);
+        outbound.put("answer", screenAnswer.text());
+        outbound.set("references", objectMapper.valueToTree(screenAnswer.references()));
+        outbound.set("guidance", objectMapper.valueToTree(screenAnswer.guidance()));
         return objectMapper.writeValueAsString(outbound);
     }
 
@@ -212,7 +220,8 @@ class SseStreamingContext {
     private void persistSafeErrorAnswer(String message) {
         synchronized (persistenceLock) {
             if (!answerStored) {
-                persistenceService.completeMessage(messageId, sessionId, message, "[]");
+                // 안전 오류 문장은 모델 원문이 아니지만 원문 칸도 같은 글로 둔다(기록을 다시 열 때 그대로 보인다)
+                persistenceService.completeMessage(messageId, sessionId, message, message, "[]");
                 answerStored = true;
             }
         }

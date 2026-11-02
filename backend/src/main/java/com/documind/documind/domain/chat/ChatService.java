@@ -41,6 +41,7 @@ public class ChatService {
     private final ChatFeedbackRepository chatFeedbackRepository;
     private final ChatStreamPersistenceService chatStreamPersistenceService;
     private final SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher;
+    private final ScreenAnswerMaker screenAnswerMaker;
     private final PromptConfigService promptConfigService;
     private final FastApiClient fastApiClient;
     private final EntityManager entityManager;
@@ -72,12 +73,14 @@ public class ChatService {
         String systemPrompt = promptConfigService.getCurrent().getSystemPrompt();
         FastApiQueryResponse fastApiResponse = fastApiClient.query(request.getQuestion(), topK, systemPrompt);
         List<Map<String, Object>> enrichedSources = sourceDocumentMetadataEnricher.enrich(fastApiResponse.getSources());
+        // 화면용 답(ADR-0051): 출처 번호를 지우고 답이 쓴 근거로 참고한 문서를, 거절 문장만 있으면 정해 둔 안내를 만든다
+        ScreenAnswer screenAnswer = screenAnswerMaker.make(fastApiResponse.getAnswer(), enrichedSources);
 
         // 4. sources 리스트를 JSON 문자열로 직렬화해 chat_messages.source_docs에 저장
         String sourceDocsJson = serializeSources(enrichedSources);
 
-        // 5. 메시지에 answer와 sourceDocs를 채움. @Transactional dirty checking으로 자동 UPDATE
-        message.complete(fastApiResponse.getAnswer(), sourceDocsJson);
+        // 5. 메시지에 화면용 답·모델 원문·sourceDocs를 채움. @Transactional dirty checking으로 자동 UPDATE
+        message.complete(screenAnswer.text(), fastApiResponse.getAnswer(), sourceDocsJson);
 
         // 6. 세션의 마지막 활동 시각 갱신. 사이드바 목록의 최신 활동 순 정렬에 사용
         chatSessionRepository.updateUpdatedAt(session.getId(), LocalDateTime.now());
@@ -85,8 +88,10 @@ public class ChatService {
         return ChatResponse.builder()
                 .sessionId(session.getId())
                 .messageId(message.getId())
-                .answer(fastApiResponse.getAnswer())
+                .answer(screenAnswer.text())
                 .sources(enrichedSources)
+                .references(screenAnswer.references())
+                .guidance(screenAnswer.guidance())
                 .build();
     }
 
@@ -130,14 +135,7 @@ public class ChatService {
 
         List<ChatMessageResponse> messageResponses = messages
                 .stream()
-                .map(m -> ChatMessageResponse.builder()
-                        .messageId(m.getId())
-                        .question(m.getQuestion())
-                        .answer(m.getAnswer())
-                        .sources(deserializeSources(m.getSourceDocs()))
-                        .feedbackScore(feedbackScores.get(m.getId()))
-                        .createdAt(m.getCreatedAt())
-                        .build())
+                .map(m -> toMessageResponse(m, feedbackScores.get(m.getId())))
                 .toList();
 
         return ChatSessionDetailResponse.builder()
@@ -282,6 +280,24 @@ public class ChatService {
         return trimmedQuestion.substring(0, SESSION_TITLE_MAX_LENGTH);
     }
 
+    // 기록을 다시 열어도 같은 모양: 저장한 모델 원문과 출처 목록으로 화면용 답을 다시 만든다(ADR-0051 결정 3).
+    // 원문 칸이 생기기 전 메시지와 중단된 답은 저장한 답을 원문으로 쓴다
+    private ChatMessageResponse toMessageResponse(ChatMessage message, Byte feedbackScore) {
+        List<Map<String, Object>> sources = deserializeSources(message.getSourceDocs());
+        String raw = message.getRawAnswer() != null ? message.getRawAnswer() : message.getAnswer();
+        ScreenAnswer screenAnswer = raw == null ? null : screenAnswerMaker.make(raw, sources);
+        return ChatMessageResponse.builder()
+                .messageId(message.getId())
+                .question(message.getQuestion())
+                .answer(screenAnswer == null ? null : screenAnswer.text())
+                .sources(sources)
+                .references(screenAnswer == null ? List.of() : screenAnswer.references())
+                .guidance(screenAnswer == null ? null : screenAnswer.guidance())
+                .feedbackScore(feedbackScore)
+                .createdAt(message.getCreatedAt())
+                .build();
+    }
+
     // sources 리스트를 JSON 문자열로 변환. 직렬화 실패 시 빈 배열 문자열로 폴백
     private String serializeSources(List<Map<String, Object>> sources) {
         if (sources == null) {
@@ -313,7 +329,8 @@ public class ChatService {
                 session.getId(),
                 objectMapper,
                 chatStreamPersistenceService,
-                sourceDocumentMetadataEnricher
+                sourceDocumentMetadataEnricher,
+                screenAnswerMaker
         );
 
         command.emitter().onCompletion(context::onClientDisconnect);

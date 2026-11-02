@@ -96,6 +96,25 @@ class ChatHistoryTest {
     }
 
     @Test
+    @DisplayName("기록을 다시 열면 저장한 모델 원문으로 화면용 답을 다시 만든다(출처 번호를 지우고, 거절 문장만 있으면 안내)")
+    void getSessionDetail_rebuildsScreenAnswerFromRawAnswer() {
+        ChatMessage cited = ChatMessage.create(session, "휴학 신청 기간");
+        // 저장한 화면용 답이 아니라 원문으로 다시 만드는지 보려고 화면용 답 칸에는 다른 글을 둔다
+        cited.complete("저장할 때의 화면용 답", "휴학 신청은 8월 29일까지입니다.\n\n[출처 1]", "[]");
+        chatMessageRepository.save(cited);
+        ChatMessage refused = ChatMessage.create(session, "기숙사 통금");
+        refused.complete("학교 홈페이지 안내에서 찾지 못했습니다.", "학교 홈페이지 안내에서 찾지 못했습니다. [출처 2]", "[]");
+        chatMessageRepository.save(refused);
+
+        List<ChatMessageResponse> messages = chatService.getSessionDetail(session.getId(), null, SESSION_KEY).getMessages();
+
+        assertEquals("휴학 신청은 8월 29일까지입니다.", messages.get(1).getAnswer());
+        assertNull(messages.get(1).getGuidance());
+        assertEquals("학교 홈페이지 안내에서 찾지 못했습니다.", messages.get(2).getAnswer());
+        assertEquals("교내 전화번호 안내", messages.get(2).getGuidance().contactLabel());
+    }
+
+    @Test
     @DisplayName("sessionKey가 null이면 빈 리스트 반환")
     void getSessions_withNullSessionKey_returnsEmptyList() {
         List<ChatSessionSummaryResponse> result = chatService.getSessions(null, null);
