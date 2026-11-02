@@ -8,7 +8,7 @@ type은 커밋과 같다: feat, fix, refactor, test, docs, chore
 
 ## 관련 이슈
 
-<!-- 이슈를 끝내면 Closes #번호, 일부만 처리하면 Related #번호 -->
+<!-- 작업은 이슈부터 시작한다. 이슈를 끝내면 Closes #번호, 일부만 처리했거나 끝난 작업을 묶은 상위 이슈면 Related #번호(없으면 CI가 실패) -->
 Closes #
 
 ## 배경
