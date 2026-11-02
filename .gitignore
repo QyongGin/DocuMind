@@ -25,7 +25,7 @@ ai-server/chroma_db/
 .env
 
 # 학교 문서 수집기 (수집 원본·대장은 Assets/corpus/에 두어 위에서 이미 제외)
-tools/corpus/.venv/
+tools/corpus/.venv
 tools/**/__pycache__/
 tools/**/.pytest_cache/
 tools/hwp-fixture/*.class
