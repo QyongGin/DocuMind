@@ -358,21 +358,23 @@ def pick_round(batch_dirs: list[Path], size: int, shapes: tuple[str, ...] = ("ga
 
 
 CITATION = re.compile(r"\[출처 \d+\]")
-# 답 맨 앞(인용형은 '답:' 뒤)에 온 옛 거절 문장. 그 밖의 자리는 '(없는 것)은 …'처럼 문장 안에 온 일부만 없음이다
-LEADING_OLD_REFUSAL = re.compile(r"(\A\s*|답:\s*)" + re.escape(prompts.OLD_REFUSAL))
+# 내보낸 뒤에 남으면 안 되는 글: 지난 거절 문장과 2026-11-02 한때 규칙의 '(없는 것)' 자리표시
+LEFTOVERS = (*prompts.LEGACY_REFUSALS, "(없는 것)")
 
 
 def current_refusal(text: str) -> str:
-    """목표 답의 옛 거절 문장을 새 문장으로 글자 그대로 바꾼다(ADR-0050 2026-11-02 변경). 답 맨 앞이면 '이 내용을' 꼴,
-    문장 안이면 일부만 없음 꼴. 새 문장으로 만든 답은 그대로다."""
-    text = LEADING_OLD_REFUSAL.sub(lambda match: match.group(1) + prompts.REFUSAL, text)
-    return text.replace(prompts.OLD_REFUSAL, prompts.PARTIAL_REFUSAL)
+    """목표 답의 지난 거절 문장을 지금 문장으로 글자 그대로 바꾼다(ADR-0050 2026-11-02 변경). 지금 문장은 답이 없을 때와
+    일부만 없을 때('수수료는 …')에 같이 쓰여 자리와 상관없이 바꾼다. 지금 문장으로 만든 답은 그대로다."""
+    for legacy in prompts.LEGACY_REFUSALS:
+        text = text.replace(legacy, prompts.REFUSAL)
+    return text
 
 
 def current_rules(prompt: str) -> str:
-    """학습 입력(운영 프롬프트)의 옛 거절 규칙 9·11을 지금 운영 규칙으로 바꾼다. 목표 답의 문장과 입력 규칙이 같아야 한다."""
-    for old, new in zip(prompts.OLD_REFUSAL_RULES, prompts.REFUSAL_RULES):
-        prompt = prompt.replace(old, new)
+    """학습 입력(운영 프롬프트)의 지난 거절 규칙 9·11을 지금 운영 규칙으로 바꾼다. 목표 답의 문장과 입력 규칙이 같아야 한다."""
+    for legacy in prompts.LEGACY_REFUSAL_RULES:
+        for old, new in zip(legacy, prompts.REFUSAL_RULES):
+            prompt = prompt.replace(old, new)
     return prompt
 
 
@@ -417,12 +419,12 @@ def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple
                 "removed_refusal_citations": {shape: sum(training_target(record[f"target_{shape}"])
                                                          != current_refusal(record[f"target_{shape}"]) for record in chosen)
                                               for shape in shapes},
-                # 옛 거절 문장을 새 문장으로 바꾼 목표 답·입력 수와, 바꾼 뒤에도 옛 문장이 남은 줄 수(0이어야 한다 — 규칙 글자가
-                # 다른 옛 프롬프트가 섞이면 입력과 목표 답의 문장이 어긋난다)
+                # 지난 거절 문장을 지금 문장으로 바꾼 목표 답·입력 수와, 바꾼 뒤에도 지난 문장이나 자리표시가 남은 줄 수(0이어야
+                # 한다 — 규칙 글자가 다른 지난 프롬프트가 섞이면 입력과 목표 답의 문장이 어긋난다)
                 "reworded_refusals": {"targets": {shape: sum(current_refusal(record[f"target_{shape}"]) != record[f"target_{shape}"]
                                                             for record in chosen) for shape in shapes},
                                       "prompts": sum(current_rules(record["prompt"]) != record["prompt"] for record in chosen)},
-                "old_refusal_left": sum(prompts.OLD_REFUSAL in json.dumps(training_line(record, shape), ensure_ascii=False)
+                "old_refusal_left": sum(any(mark in json.dumps(training_line(record, shape), ensure_ascii=False) for mark in LEFTOVERS)
                                         for record in chosen for shape in shapes),
                 "ids": [record["id"] for record in chosen]}
     (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
