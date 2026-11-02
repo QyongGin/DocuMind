@@ -119,6 +119,23 @@ def hint_in_prompt(hint: str, context: str) -> bool:
     return overlap(hint, context) >= MIN_OVERLAP
 
 
+def hint_blocks(hint: str, prompt: str) -> list[int]:
+    """질문을 만든 글의 답 근거(hint)가 든 근거 블록 번호(ADR-0048 결정 3). 값이 있으면 그 값이 모두 든 블록,
+    값이 없으면 글자 겹침이 MIN_OVERLAP 이상인 블록. 학과마다 같은 페이지처럼 거의 같은 문서면 여러 번호가 나온다."""
+    if not (hint or "").strip():
+        return []
+    hint_values = values(hint)
+    found = []
+    for number, text in evidence_blocks(prompt).items():
+        if hint_values:
+            normalized = normalize(text)
+            if all(value_in(value, normalized) for value in hint_values):
+                found.append(number)
+        elif overlap(hint, text) >= MIN_OVERLAP:
+            found.append(number)
+    return found
+
+
 def source_retrieved(record: dict) -> bool:
     """질문을 만든 청크가 검색된 근거 8개 안에 있는가."""
     sources = {(str(record.get("document_id")), str(chunk.get("chunk_index"))) for chunk in record.get("chunks") or []}
@@ -183,6 +200,9 @@ def check(record: dict, shape: str = "ga") -> dict:
     if answerable:
         cited_text = normalize("\n".join(blocks.get(number, "") for number in cited))
         outside = sorted(value for value in target_values if not value_in(value, cited_text))
+        # 답 근거가 든 블록 번호(ADR-0048 결정 3). 왕복 검사에만 쓰고 출처 번호 대조에는 쓰지 않는다 — 공고와 재공고처럼
+        # 같은 값이 든 다른 블록을 인용한 정상 답이 떨어졌다(기존 묶음에서 판정 통과 4개, ADR-0048 결과)
+        sources = hint_blocks(hint, prompt) if planned_answer else []
         if target_values:
             put("출처 번호 대조", not outside, f"쓴 근거 번호의 글에 없는 값 {outside}")
         elif hint:
@@ -197,8 +217,18 @@ def check(record: dict, shape: str = "ga") -> dict:
                 put("지워진 정답", not gone, f"답 근거의 값이 프롬프트에 없음 {gone}")
             else:
                 put("지워진 정답", overlap(hint, context) >= MIN_OVERLAP, "답 근거 글이 프롬프트에 없음")
-            put("왕복 검색", source_retrieved(record), "질문을 만든 청크가 근거 8개 안에 없음")
+            # 질문을 만든 청크가 근거 8개 밖이어도 답 근거가 다른 블록(거의 같은 문서·다른 청크)에 있으면 통과(ADR-0048 결정 3)
+            put("왕복 검색", source_retrieved(record) or bool(sources),
+                "질문을 만든 청크도, 답 근거가 든 근거 블록도 근거 8개 안에 없음")
         put("모호한 표 근거", *ambiguous_table(target, prompt))
+    refusal_info = record.get("refusal")
+    if planned == "refuse_guide" and refusal_info is not None:
+        # 답이 든 청크를 빼서 만든 답없음 예시(ADR-0048 결정 2): 근거에 답이 없음을 확인하고, 거절했는지,
+        # 확인처를 코드가 고른 블록(재료 문서·같은 게시글·같은 묶음)에서만 붙였는지 본다
+        put("답 근거 없음", not hint_blocks(hint, prompt), "답이 든 청크를 뺐는데 근거에 답 근거가 남음")
+        put("거절함", answer_body(target, shape).startswith(REFUSAL), "답이 없게 만든 근거인데 거절하지 않음")
+        allowed = set(refusal_info.get("contact_blocks") or [])
+        put("확인처 출처", cited <= allowed, f"재료·같은 게시글·같은 묶음 밖의 근거 {sorted(cited - allowed)}를 확인처로 붙임")
     # 질문과 답 사이에 줄을 넣는다 — 붙이면 질문 끝 숫자와 답 첫 숫자가 이어져 번호 경계를 못 찾는다
     both = f"{question}\n{target}"
     sensitive = RESIDENT_NUMBER.search(both) or MOBILE.search(both)

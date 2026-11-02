@@ -31,13 +31,20 @@ def parse_json(text: str) -> dict:
         return json.loads(match.group(0))
 
 
-def attach(session, ai_url: str, question: str, top_k: int = 8, timeout: float = 600.0) -> dict:
+def attach(session, ai_url: str, question: str, top_k: int = 8, timeout: float = 600.0,
+           exclude_ledger_ids: list[str] | None = None, exclude_chunk_ids: list[str] | None = None,
+           as_of: str | None = None) -> dict:
     """데이터셋 AI 서버에 질문을 묻고 운영 프롬프트·근거 8개·학습 전 A.X 답을 받는다.
 
     평가 실행기와 같은 요청이다(`evalset run`). 모델을 거치지 않는 우선 경로 답이면 프롬프트가 없어 실패로 돌려준다.
+    뺄 문서(대장 번호)·뺄 원문 청크·기준 날짜는 AI 서버의 평가 전용 칸이다(ADR-0047·0048). 주지 않으면 보내지 않는다.
     """
-    response = session.post(f"{ai_url.rstrip('/')}/query", timeout=timeout,
-                            json={"question": question, "top_k": top_k, "system_prompt": None, "include_eval_trace": True})
+    body = {"question": question, "top_k": top_k, "system_prompt": None, "include_eval_trace": True}
+    for key, value in (("exclude_ledger_ids", exclude_ledger_ids), ("exclude_chunk_ids", exclude_chunk_ids),
+                       ("as_of", as_of)):
+        if value:
+            body[key] = value
+    response = session.post(f"{ai_url.rstrip('/')}/query", timeout=timeout, json=body)
     response.raise_for_status()
     body = response.json()
     trace = body.get("eval_trace")
