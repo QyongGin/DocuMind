@@ -189,6 +189,9 @@ def cmd_export_round(args) -> int:
     print(json.dumps({key: value for key, value in manifest.items() if key != "ids"}, ensure_ascii=False, indent=1))
     if manifest["size"] < args.size:
         print(f"통과한 예시가 모자라 {manifest['size']}개만 골랐다 — 묶음을 더 만든다")
+    if manifest["old_refusal_left"]:
+        print(f"옛 거절 문장이 {manifest['old_refusal_left']}줄에 남았다 — 입력 규칙의 글자가 다른 묶음이 섞였다. 학습 파일로 쓰지 않는다")
+        return 1
     return 0
 
 
