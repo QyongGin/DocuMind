@@ -6,6 +6,7 @@ A.X 4.0 Light를 학습 서버(AWS g5.xlarge, A10G 24GB)에서 QLoRA로 학습�
 |---|---|
 | `data.py` | 학습 예시를 대화형 프롬프트·답 형식으로 바꾸고, 종류 비율대로 검증 몫을 고른다(같은 문서 묶음은 갈라지지 않게) |
 | `train_qlora.py` | 4비트 원본 + LoRA 어댑터로 답 부분만 학습한다. 채팅 틀이 서빙 틀과 같은지, 예시가 최대 길이 안인지 먼저 확인한다 |
+| `train_dpo.py` | 4회차: 3회차 어댑터를 이어 선호 쌍으로 학습한다(DPO + 선호 답 가능도). 같은 확인을 먼저 한다(7절) |
 | `merge_adapter.py` | 어댑터를 bf16 원본에 합쳐 Hugging Face 폴더로 저장한다(GPU에서) |
 | `../../deploy/models/convert.sh` | 합친 폴더를 운영 모델과 같은 도구(llama.cpp b11312)로 4비트 GGUF로 바꾼다(`SOURCE_DIR`) |
 | `../../deploy/models/import.sh` | 데스크탑 Ollama에 등록하고 채팅 틀을 확인한다 |
@@ -105,7 +106,63 @@ OLLAMA_LLM_MODEL=ax40light-r1:q4km AI_PROMPT_DATE_LINES_ENABLED=true DOCKER_CONF
 
 학습 전 기준선은 `Assets/eval/runs/20261102-m2-s6-refusal-sentence-asof1031`이다. 판정이 갈린 문항은 두 답을 나란히 놓고 같은 기준으로 다시 판정한다(`docs/rag/m2/거절문장-기준선-20261102.md` §4).
 
-## 7. 정리
+## 7. 4회차: 3회차 모델에 선호 학습(DPO)
+
+학습 몫 새 질문에 3회차 모델이 낸 틀린 답을 비선호 답, 판정을 통과한 목표 답을 선호 답으로 짝지어 3회차 어댑터를 이어 학습한다. 설계 `docs/rag/m2/4회차-학습-설계-20261103.md`, 결정 ADR-0053.
+
+### 7-1. 선호 쌍 만들기(맥북 `tools/corpus`)
+
+데스크탑에 데이터셋 스택을 올리고 SSH 터널을 연다(`docs/development/local-gpu/데이터셋-색인-절차.md`). 데이터셋 스택은 서비스 스택과 모델 볼륨을 함께 써서 3회차 모델 `ax40light-r3:q4km`을 그대로 부른다.
+
+1. 새 질문 묶음을 표 근거 40%, 답 없음 30%로 계획한다. 1~3회차에 쓴 문서 묶음은 빼고, 이어서 1~3회차와 같은 단계(질문 → 근거 → 목표 답 → 자동 검사 → Claude 판정)를 돈다.
+
+   ```bash
+   .venv/bin/python -m corpus trainset plan --batch r4-a --size 600 --kinds fact=10,procedure=9,table=40,multi=6,partial=5,refuse_guide=22,refuse_offtopic=8 --skip-batches r1-g,r1-h,r2-a,r2-b,r2-c,r3-a
+   ```
+
+2. 3회차 모델의 답을 문항마다 4번(온도 0.7) 받는다. 답은 `probes-ax40light-r3-q4km.jsonl`에 따로 쌓여 학습 전 A.X의 기록과 섞이지 않는다.
+
+   ```bash
+   .venv/bin/python -m corpus trainset probe --batch r4-a --model ax40light-r3:q4km
+   ```
+
+3. 규칙(거절 문장, 값 대조)으로 못 가른 답만 격리된 Claude가 판정한다. `claude -p`를 부르므로 사용자 터미널에서 돌린다.
+
+   ```bash
+   .venv/bin/python -m corpus trainset judge-probes --batch r4-a --probe-model ax40light-r3:q4km
+   ```
+
+4. 선호 쌍 파일을 쓴다. 판정 전인 답이 남았거나 지난 입력 규칙이 섞였으면 쓰지 않고 멈춘다. 지어내기 쌍이 과잉 거절 쌍보다 적으면 과잉 거절 쌍을 줄이고 그 수를 알려 준다(늘리려면 답 없는 질문 묶음을 더 만든다).
+
+   ```bash
+   .venv/bin/python -m corpus trainset pairs --batches r4-a --probe-model ax40light-r3:q4km --out-dir ../../Assets/train/round4
+   ```
+
+`manifest.json`의 쌍 종류(`types`)와 수를 보고, 1~3회차와 같은 반출 범위 검사(학습 몫, 개인정보, 평가 문서와 겹침 0)와 쌍 30개 원문 대조를 한 뒤 올린다.
+
+### 7-2. 학습(학습 서버)
+
+맥북에서 선호 쌍 파일과 3회차 어댑터 폴더를 올린다. 3회차 어댑터는 데스크탑 `~/incoming/adapters/`에 보관해 두었다.
+
+```bash
+scp Assets/train/round4/pairs.jsonl aws-train:~/data/
+ssh aws-train "mkdir -p ~/runs/r3" && scp -r <3회차 adapter 폴더> aws-train:~/runs/r3/adapter
+```
+
+20쌍으로 10걸음 한 바퀴 시험을 한 뒤 본 학습을 한다. 프롬프트와 답이 8,192토큰을 넘는 쌍이 있으면 학습 전에 멈춘다. 기준 모델은 TRL이 시작 어댑터를 "ref"로 복사해 고정한 것이고, 결과 폴더의 `adapter`에는 학습한 어댑터만 남는다. `run_manifest.json`의 `best_eval`에 검증 몫의 `eval_rewards/accuracies`(선호 답의 보상이 비선호 답보다 큰 쌍의 비율)가 남는다.
+
+```bash
+cd ~/DocuMind/tools/train
+python train_dpo.py --model ~/models/ax40light --adapter ~/runs/r3/adapter --data ~/data/pairs.jsonl --out ~/runs/r4-smoke --limit 20 --max-steps 10
+python train_dpo.py --model ~/models/ax40light --adapter ~/runs/r3/adapter --data ~/data/pairs.jsonl --out ~/runs/r4
+python merge_adapter.py --model ~/models/ax40light --adapter ~/runs/r4/adapter --out ~/merged/ax40light-r4
+cd ~/DocuMind
+MODEL_VOLUME=$HOME/model_work SOURCE_DIR=$HOME/merged/ax40light-r4 deploy/models/convert.sh deploy/models/ax40light-r4
+```
+
+데스크탑 등록(5절)과 전후 비교(6절)는 이름만 `ax40light-r4`로 바꿔 같은 절차로 한다. 새 평가 데이터 260문항도 같은 날 학습 전 모델과 짝 비교한다.
+
+## 8. 정리
 
 학습 서버의 학교 데이터와 결과물을 지우고 인스턴스를 중지한다(콘솔에서).
 
