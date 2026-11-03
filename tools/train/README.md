@@ -59,7 +59,7 @@ MODEL_VOLUME=$HOME/model_work_smoke SOURCE_DIR=$HOME/merged/smoke deploy/models/
 
 ## 4. 본 학습(학습 서버)
 
-180개를 3회차까지 학습하고, 검증 20개의 손실이 가장 낮은 회차를 남긴다. 결과 폴더의 `run_manifest.json`에 설정, 데이터 SHA256, 라이브러리 판, 시간, 최대 GPU 메모리가 남는다.
+180개를 3번 반복까지 학습하고, 검증 20개의 손실이 가장 낮은 반복의 체크포인트를 남긴다. 결과 폴더의 `run_manifest.json`에 설정, 데이터 SHA256, 라이브러리 판, 시간, 최대 GPU 메모리가 남는다.
 
 ```bash
 cd ~/DocuMind/tools/train

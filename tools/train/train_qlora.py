@@ -1,7 +1,7 @@
 """A.X 4.0 Light QLoRA 학습(ADR-0033, 이슈 #223). 학습 서버(AWS g5.xlarge, A10G 24GB)에서 돌린다.
 
 학습 예시를 대화형 프롬프트·답 형식으로 바꿔 답 부분만 학습한다. 원본은 4비트(NF4)로 올리고 LoRA 어댑터만 학습하며,
-회차(epoch)마다 검증 몫 손실을 재 가장 낮은 회차의 어댑터를 남긴다. 결과 폴더에 어댑터, 학습 기록, 실행 기록
+반복(epoch)마다 검증 몫 손실을 재 가장 낮은 반복의 어댑터를 남긴다. 결과 폴더에 어댑터, 학습 기록, 실행 기록
 (run_manifest.json: 설정, 데이터 SHA256, 라이브러리 판, 걸린 시간, 최대 GPU 메모리)을 둔다.
 
 사용 예(학습 서버, 저장소의 tools/train에서):
@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--limit", type=int, default=0, help="학습 몫을 앞에서 이만큼만 쓴다(한 바퀴 시험)")
-    parser.add_argument("--max-steps", type=int, default=-1, help="한 바퀴 시험: 이 걸음만 학습하고 회차별 검증은 하지 않는다")
+    parser.add_argument("--max-steps", type=int, default=-1, help="한 바퀴 시험: 이 걸음만 학습하고 반복별 검증은 하지 않는다")
     return parser.parse_args()
 
 
