@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       corpus: ${{ steps.diff.outputs.corpus }}
+      train: ${{ steps.diff.outputs.train }}
       ai: ${{ steps.diff.outputs.ai }}
       backend: ${{ steps.diff.outputs.backend }}
       frontend: ${{ steps.diff.outputs.frontend }}
@@ -37,7 +38,7 @@ jobs:
         run: |
           # 수동 실행이거나 이 워크플로를 고친 PR이면 모든 모듈을 돌린다.
           if [ -z "$BASE" ]; then
-            files="tools/corpus/ ai-server/ backend/ frontend/"
+            files="tools/corpus/ tools/train/ ai-server/ backend/ frontend/"
           else
             files=$(git diff --name-only "$BASE"...HEAD)
           fi
@@ -47,6 +48,7 @@ jobs:
           pick() { if [ "$all" = true ] || echo "$files" | grep -q "^$1"; then echo true; else echo false; fi; }
           {
             echo "corpus=$(pick tools/corpus/)"
+            echo "train=$(pick tools/train/)"
             echo "ai=$(pick ai-server/)"
             echo "backend=$(pick backend/)"
             echo "frontend=$(pick frontend/)"
@@ -67,6 +69,23 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: tools/corpus/requirements*.txt
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest -q
+
+  train:
+    name: 학습 도구 (tools/train)
+    needs: changes
+    if: needs.changes.outputs.train == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/train
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # 학습 라이브러리(GPU)는 학습 서버에서만 깐다. CI는 데이터 변환만 시험한다
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m pytest -q
 
@@ -149,7 +168,7 @@ jobs:
 
   ci-ok:
     name: ci-ok
-    needs: [changes, corpus, ai-server, backend, frontend, pr-rules]
+    needs: [changes, corpus, train, ai-server, backend, frontend, pr-rules]
     if: always()
     runs-on: ubuntu-latest
     steps:
