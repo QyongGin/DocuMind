@@ -81,15 +81,15 @@ gh pr merge <PR번호> --merge --subject "chore(release): <요약> (#<PR번호>)
 
 ## 6. 이슈 닫기
 
-- 기본 브랜치가 `main`이라서, `develop`에 머지한 PR의 `Closes #번호`로는 이슈가 자동으로 닫히지 않는다.
-- `develop → main` 릴리스 PR 본문에 그동안 머지된 이슈를 `Closes #번호`로 모아 적는다. `main`에 머지될 때 한꺼번에 닫힌다.
-- 머지 후 이슈가 실제로 닫혔는지 확인한다. PR을 만든 직후 `gh pr view <번호> --json closingIssuesReferences`로 연결을 먼저 확인한다.
-- **이 저장소에서는 main 대상 릴리스 PR에서도 `Closes`가 연결되지 않았다** (#120의 `Closes #111`, #122의 `Closes #18`, 2회 연속). 본문 바이트는 정상이었고 본문을 다시 저장해도 연결되지 않았으며, API로 보이는 저장소 설정에서도 원인을 찾지 못했다. 그래서 릴리스를 머지한 뒤 이슈를 코멘트와 함께 직접 닫는 것을 기본으로 한다.
+- `develop`에 머지된 PR 본문에 닫는 말(`Closes`·`Fixes`·`Resolves` + `#번호`)로 적은 이슈는 워크플로 `.github/workflows/close-linked-issues.yml`이 코멘트와 함께 닫는다(#229). 기본 브랜치가 `main`이라 GitHub의 자동 닫기는 `develop` 머지에서 동작하지 않기 때문이다.
+- `Related #번호`로 적은 이슈는 닫지 않는다. 상위 이슈는 하위 작업이 모두 끝나면 작업 범위 체크를 확인하고 직접 닫는다.
+- 머지 뒤 이슈가 닫혔는지 확인한다(`gh issue view <번호> --json state`). 워크플로가 실패했으면 직접 닫는다.
 
 ```bash
-gh issue close <번호> --comment "#<develop PR>로 develop에 반영됐고, #<릴리스 PR>로 main에 릴리스되어 닫습니다."
+gh issue close <번호> --comment "#<PR 번호>이 develop에 머지되어 닫습니다."
 ```
 
+- 릴리스 PR(`develop → main`)에는 이슈를 다시 모아 적지 않는다. 이슈는 `develop` 머지 때 닫혀 있다.
 - 마일스톤의 열린 이슈가 0개가 되면 마일스톤도 닫는다: `gh api -X PATCH repos/QyongGin/DocuMind/milestones/<번호> -f state=closed`
 
 ## 7. 되돌릴 수 없는 작업
