@@ -182,25 +182,34 @@ PROBE_SAMPLES = 4
 PROBE_TEMPERATURE = 0.7
 
 
+def probe_step(model: str | None = None) -> str:
+    """여러 번 받은 답을 둘 단계 이름. 모델을 주지 않으면 학습 전 A.X의 'probes', 주면 모델마다 따로 둔다
+    (예: 'probes-ax40light-r3-q4km'). 학습한 모델의 답이 학습 전 A.X의 아는 정도(ADR-0042)에 섞이지 않게 한다."""
+    return "probes" if not model else "probes-" + re.sub(r"[^0-9A-Za-z._-]+", "-", model)
+
+
 def run_probe(batch_dir: Path, session, ollama_url: str, samples: int = PROBE_SAMPLES,
               temperature: float = PROBE_TEMPERATURE, limit: int | None = None,
-              log: Callable[[str], None] = print) -> Counter:
-    """학습 전 A.X 답을 운영 프롬프트로 여러 번 받는다. 모델·문맥 길이·답 길이는 근거를 붙일 때 AI 서버가 알려 준 운영값을 쓴다."""
+              log: Callable[[str], None] = print, model: str | None = None) -> Counter:
+    """운영 프롬프트로 답을 여러 번 받는다. 문맥 길이·답 길이는 근거를 붙일 때 AI 서버가 알려 준 운영값을 쓴다.
+    model을 주지 않으면 운영값 모델(학습 전 A.X)의 답을 받고, 주면 그 모델(예: 3회차 모델)의 답을 모델별 단계 파일에
+    받는다(4회차 선호 쌍의 비선호 답 후보, ADR-0053)."""
+    step = probe_step(model)
     counts = Counter()
-    for record in _todo(batch_dir, "probes", lambda r: bool(r.get("prompt")), limit):
+    for record in _todo(batch_dir, step, lambda r: bool(r.get("prompt")), limit):
         runtime = record.get("runtime") or {}
-        model = runtime.get("llm_model") or "ax40light:q4km"
+        name = model or runtime.get("llm_model") or "ax40light:q4km"
         options = {"temperature": temperature, "num_ctx": runtime.get("num_ctx") or 12288,
                    "num_predict": runtime.get("num_predict") or 512}
         try:
-            outs = [clients.generate(session, ollama_url, model, record["prompt"], **options) for _ in range(samples)]
+            outs = [clients.generate(session, ollama_url, name, record["prompt"], **options) for _ in range(samples)]
             result = {"id": record["id"], "ax_samples": [out["text"].strip() for out in outs],
-                      "probe_generation": {"model": model, **options, "samples": samples}}
+                      "probe_generation": {"model": name, **options, "samples": samples}}
             counts["probed"] += 1
         except (ValueError, KeyError, OSError) as error:
             result = {"id": record["id"], "error": str(error)}
             counts["error"] += 1
-        write(batch_dir, "probes", [result])
+        write(batch_dir, step, [result])
         log(f"A.X 표본 {record['id']}: {'실패 ' + result['error'] if 'error' in result else len(result['ax_samples'])}")
     return counts
 
