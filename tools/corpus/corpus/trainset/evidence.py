@@ -22,11 +22,16 @@ MAX_CANDIDATES = 10
 MAX_LINE_CHARS = 120
 
 
-def evidence_blocks(prompt: str) -> dict[int, str]:
-    """프롬프트의 [검색 근거]를 [출처 N] 블록마다 나눈다."""
+def evidence_section(prompt: str) -> str:
+    """프롬프트의 [검색 근거] 부분([사용자 질문] 앞까지). 없으면 프롬프트 전체."""
     start = prompt.find("[검색 근거]")
     end = prompt.find("[사용자 질문]", start + 1)
-    evidence = prompt[start:end] if start >= 0 else prompt
+    return prompt[start:end] if start >= 0 else prompt
+
+
+def evidence_blocks(prompt: str) -> dict[int, str]:
+    """프롬프트의 [검색 근거]를 [출처 N] 블록마다 나눈다."""
+    evidence = evidence_section(prompt)
     heads = list(BLOCK_HEAD.finditer(evidence))
     return {int(head.group(1)): evidence[head.end(): heads[index + 1].start() if index + 1 < len(heads) else len(evidence)]
             for index, head in enumerate(heads)}

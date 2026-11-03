@@ -1,4 +1,5 @@
 """Claude 판정(ADR-0037): 자동 검사를 통과한 예시마다 통과·탈락과 이유 한 줄만 받는다. 글은 고치지 않는다.
+4회차 선호 쌍(ADR-0053)에서는 규칙으로 못 가른 3회차 답도 같은 방식으로 판정한다(run_answers).
 
 평가셋 이중 라벨링과 같은 격리 실행을 쓴다(`evalset.double_annotation`): 저장소 밖 임시 폴더의 작업 단위 안에서
 `claude -p`를 읽기 도구만 주고, 사용자 맞춤·MCP·대화 저장 없이 돌린다. Claude가 쓴 글은 학습 데이터에 들어가지 않는다(ADR-0010).
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..evalset.double_annotation import DEFAULT_MODEL, claude_command, claude_version, repo_marker, run_claude
+from .evidence import evidence_section
 from .plan import KINDS
 from .prompts import AMBIGUOUS_RULE
 
@@ -42,6 +44,24 @@ examples.json의 예시마다 '챗봇 입력'(챗봇이 받는 글: 답변 규�
 """
 
 
+# 3회차 답 판정(4회차 선호 쌍, ADR-0053). 새 평가 데이터 판정과 같은 판정 값·기준으로, 정답 자리에 판정을 통과한 목표 답을
+# 준다. 규칙(pairs.classify)으로 못 가른 답만 받는다
+ANSWER_GUIDE_VERSION = "2026-11-03"
+ANSWER_VERDICTS = ("맞음", "일부", "틀림", "거절 맞음", "과잉 거절", "근거 있음")
+ANSWER_PROMPT = """너는 대학 안내 챗봇의 답을 목표 답과 비교해 판정한다. 이 폴더 밖의 파일은 읽지 않는다. 답을 고쳐 쓰지 않는다.
+
+examples.json의 답마다 '종류'(답·일부만 있음·답 없음), '질문', '목표 답'(판정을 통과한 모범 답), '검색 근거'(챗봇이 받은 근거), '챗봇 답'이 있다.
+- 맞음: 결론이 목표 답과 같고 목표 답의 핵심 값이 모두 맞다(표기가 조금 달라도 같은 값이면 맞음). 종류가 일부만 있음이면 있는 것은 답하고 없는 것은 찾지 못했다고 했다.
+- 일부: 결론은 맞지만 핵심 값 일부가 빠졌다. 또는 찾지 못했다고 먼저 말하고 뒤에 목표 답의 결론을 붙였다.
+- 틀림: 목표 답과 다른 값·다른 대상·지어낸 내용을 결론으로 단정했다. 종류가 답 없음인데 값을 단정하거나, 일부만 있음에서 없는 것에 값을 단정해도 틀림.
+- 거절 맞음: 종류가 답 없음이고 찾지 못했다고 거절했다(다른 정보를 다른 것이라고 밝혀 덧붙여도 거절 맞음).
+- 과잉 거절: 종류가 답이나 일부만 있음인데 찾지 못했다고만 했다.
+- 근거 있음: 종류가 답 없음인데 검색 근거에 질문의 답이 분명히 있다. 챗봇 답과 상관없이 근거만 보고 정한다.
+
+출력은 JSON 하나만 쓴다: {"verdicts": [{"id": "답 번호", "verdict": "맞음·일부·틀림·거절 맞음·과잉 거절·근거 있음 중 하나", "reason": "판단 근거 한 줄"}]}. 모든 답을 판정한다.
+"""
+
+
 class JudgeError(Exception):
     """작업 단위를 만들거나 판정 결과를 읽지 못함."""
 
@@ -53,12 +73,23 @@ def example(record: dict) -> dict:
             "자동 검사 메모": (record.get("result") or {}).get("ga", {}).get("judge_notes") or []}
 
 
+def answer_example(record: dict, number: int, answer: str) -> dict:
+    """답 판정 세션에 주는 답 하나. 번호는 '<예시 번호>#<몇 번째 답>'이다. 근거는 운영 프롬프트의 [검색 근거]만 준다."""
+    kind = ("일부만 있음" if record["kind"] == "partial" else "답") if KINDS[record["kind"]].answerable else "답 없음"
+    return {"id": answer_id(record["id"], number), "종류": kind, "질문": record.get("question") or "",
+            "목표 답": record["target_ga"], "검색 근거": evidence_section(record["prompt"]), "챗봇 답": answer}
+
+
+def answer_id(item_id: str, number: int) -> str:
+    return f"{item_id}#{number}"
+
+
 def packets(records: list[dict], per_packet: int = PER_PACKET) -> list[list[dict]]:
     return [records[start:start + per_packet] for start in range(0, len(records), per_packet)]
 
 
-def parse_output(stdout: str, ids: list[str]) -> list[dict]:
-    """`claude -p --output-format json` 출력에서 판정 목록을 꺼내고, 모든 예시를 정해진 값으로 판정했는지 본다."""
+def parse_output(stdout: str, ids: list[str], allowed: tuple[str, ...] = VERDICTS) -> list[dict]:
+    """`claude -p --output-format json` 출력에서 판정 목록을 꺼내고, 모든 예시를 정해진 값(allowed)으로 판정했는지 본다."""
     try:
         envelope = json.loads(stdout)
     except json.JSONDecodeError as error:
@@ -76,7 +107,7 @@ def parse_output(stdout: str, ids: list[str]) -> list[dict]:
         raise JudgeError("verdicts는 목록이어야 함")
     by_id = {entry.get("id"): entry for entry in verdicts if isinstance(entry, dict)}
     missing = [item_id for item_id in ids if item_id not in by_id]
-    bad = [item_id for item_id, entry in by_id.items() if item_id in ids and entry.get("verdict") not in VERDICTS]
+    bad = [item_id for item_id, entry in by_id.items() if item_id in ids and entry.get("verdict") not in allowed]
     if missing or bad:
         raise JudgeError(f"판정이 빠짐 {missing} · 값이 틀림 {bad}")
     return [{"id": item_id, "verdict": by_id[item_id]["verdict"], "category": str(by_id[item_id].get("category") or ""),
@@ -85,19 +116,31 @@ def parse_output(stdout: str, ids: list[str]) -> list[dict]:
 
 def run(records: list[dict], work: Path, model: str = DEFAULT_MODEL, runner: Callable = run_claude,
         jobs: int = 2, per_packet: int = PER_PACKET) -> tuple[list[dict], list[tuple[str, str]]]:
-    """작업 단위마다 판정 세션을 돌린다. 돌려주는 것: 판정 목록, 실패한 작업 단위(이름, 이유). work는 저장소 밖이어야 한다."""
+    """자동 검사를 통과한 예시를 판정한다. 돌려주는 것: 판정 목록, 실패한 작업 단위(이름, 이유). work는 저장소 밖이어야 한다."""
+    return _run([example(record) for record in records], work, PROMPT, GUIDE_VERSION, VERDICTS, model, runner, jobs,
+                per_packet)
+
+
+def run_answers(items: list[dict], work: Path, model: str = DEFAULT_MODEL, runner: Callable = run_claude,
+                jobs: int = 2, per_packet: int = PER_PACKET) -> tuple[list[dict], list[tuple[str, str]]]:
+    """3회차 답을 판정한다. items는 answer_example로 만든 답이다. 돌려주는 것은 run과 같다."""
+    return _run(items, work, ANSWER_PROMPT, ANSWER_GUIDE_VERSION, ANSWER_VERDICTS, model, runner, jobs, per_packet)
+
+
+def _run(items: list[dict], work: Path, prompt: str, version: str, allowed: tuple[str, ...], model: str,
+         runner: Callable, jobs: int, per_packet: int) -> tuple[list[dict], list[tuple[str, str]]]:
+    """작업 단위마다 판정 세션을 돌린다. items는 세션에 줄 글(id 칸이 있어야 한다)이다."""
     work = Path(work)
     marker = repo_marker(work)
     if marker:
         raise JudgeError(f"작업 폴더가 저장소 안이다({marker}) — 저장소의 CLAUDE.md가 읽힌다")
-    label = f"{model} · Claude Code {claude_version(runner)} · 판정 지침 {GUIDE_VERSION}"
-    command = claude_command(model, PROMPT)
-    groups = packets(records, per_packet)
+    label = f"{model} · Claude Code {claude_version(runner)} · 판정 지침 {version}"
+    command = claude_command(model, prompt)
+    groups = packets(items, per_packet)
     for number, group in enumerate(groups, 1):
         folder = work / f"packet-{number:03d}"
         folder.mkdir(parents=True, exist_ok=True)
-        (folder / "examples.json").write_text(json.dumps([example(record) for record in group], ensure_ascii=False,
-                                                         indent=1), encoding="utf-8")
+        (folder / "examples.json").write_text(json.dumps(group, ensure_ascii=False, indent=1), encoding="utf-8")
 
     def execute(numbered):
         number, group = numbered
@@ -113,7 +156,7 @@ def run(records: list[dict], work: Path, model: str = DEFAULT_MODEL, runner: Cal
             try:
                 if error:
                     raise JudgeError(error)
-                verdicts = parse_output(completed.stdout or "", [record["id"] for record in group])
+                verdicts = parse_output(completed.stdout or "", [item["id"] for item in group], allowed)
             except JudgeError as problem:
                 failed.append((name, str(problem)))
                 continue

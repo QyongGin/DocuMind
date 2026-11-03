@@ -58,6 +58,25 @@ def scale(quotas: dict[str, int], total: int) -> dict[str, int]:
     return result
 
 
+def parse_kinds(text: str) -> dict[str, int]:
+    """'fact=10,table=40'처럼 쓴 종류별 개수(비율로 쓴다, 합이 100이면 퍼센트). 적지 않은 종류는 0개다.
+    4회차는 표 근거와 답 없는 질문의 비중을 1회차 비율과 다르게 둔다(ADR-0053)."""
+    counts = {}
+    for item in text.split(","):
+        if not item.strip():
+            continue
+        name, _, number = item.partition("=")
+        name = name.strip()
+        if name not in KINDS:
+            raise ValueError(f"없는 예시 종류 {name!r} — {', '.join(KINDS)} 중에서 쓴다")
+        if not number.strip().isdigit():
+            raise ValueError(f"{name}의 개수 {number!r}는 0 이상의 정수여야 한다")
+        counts[name] = int(number)
+    if not sum(counts.values()):
+        raise ValueError("종류별 개수의 합이 0이다")
+    return counts
+
+
 MIN_YIELD = 0.2  # 수율을 모르거나 아주 낮을 때 쓰는 바닥값(계획 5개에 통과 1개)
 
 
