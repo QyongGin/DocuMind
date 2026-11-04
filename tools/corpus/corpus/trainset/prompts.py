@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from .evidence import CONTACT, MAX_FIX_LINE_CHARS, evidence_blocks, guidance_candidates
+from .plan import REWORD
 
 # 거절 문장(ADR-0050 2026-11-02 변경): 모델이 학습으로 바로 쓰고 화면에도 그대로 보인다. 답이 없을 때도, 일부만 없을 때
 # ('(없는 것)은 …')도 같은 문장이다. 운영 규칙 9·11은 옛 모양 그대로 두고 따옴표 안 문장만 바꿨다 — '있는 것은 답하고' 지시를
@@ -63,11 +64,15 @@ STYLE_RULES = {
     "상황 설명형": "자기 상황을 짧게 한 마디 한 뒤 묻는다. 60자를 넘기지 않는다.",
     "쉬운 한국어": "한국어가 서툰 사람이 쓰듯 쉬운 낱말로 짧게 쓴다.",
 }
+# 말 바꾸기 표시(plan.REWORD)가 달린 예시에만 준다. 예시 낱말은 평가셋 질문에 없는 것으로 골랐다
+REWORD_RULE = ("질문의 핵심 낱말(제도·시설·서류·절차의 이름)은 글에 적힌 말을 그대로 쓰지 말고 묻는 사람이 평소 쓰는 다른 말로 "
+               "바꿔 쓴다(예: '학생식당' → '학교 밥집', '휴게실' → '쉬는 방'). 뜻은 글과 같아야 한다.")
 
 
 def question_prompt(item: dict) -> str:
-    """질문 초안 지시문. 엉뚱한 근거 종류는 글 없이 만든다."""
+    """질문 초안 지시문. 엉뚱한 근거 종류는 글 없이 만든다. 말 바꾸기 표시가 있으면 문서 낱말을 바꿔 묻게 한다."""
     kind = item["kind"]
+    reword_rule = f"\n- {REWORD_RULE}" if item.get("wording") == REWORD else ""
     # 상투문을 뺀 글(draft_text)을 준다 — 없으면(옛 계획) 청크 글 그대로
     texts = "\n\n".join(f"[글 {number}]\n{(chunk.get('draft_text') or chunk['content']).strip()}"
                          for number, chunk in enumerate(item["chunks"], 1))
@@ -89,7 +94,7 @@ def question_prompt(item: dict) -> str:
 - 묻는 사람: {item['user']}. 이 사람으로 쓴다. 이 사람이 이 글을 물을 일이 전혀 없을 때만 {users} 중 물을 만한 사람으로 바꾸고 '묻는 사람'에 적는다.
 - 말투: {STYLE_RULES[item['style']]}
 - 질문만 읽어도 무엇에 대한 질문인지 알 수 있게 대상(행사·전형·장학금·프로그램·학과 등)을 넣는다. '이 전형', '이 대회'처럼 가리키는 말만 쓰지 않는다.
-- 대상은 묻는 사람이 평소 부르는 짧은 이름으로 쓴다. 문서에 적힌 공식 명칭 전체, 기수·회차, 조항 번호처럼 묻는 사람이 모를 말은 그대로 옮기지 않는다.
+- 대상은 묻는 사람이 평소 부르는 짧은 이름으로 쓴다. 문서에 적힌 공식 명칭 전체, 기수·회차, 조항 번호처럼 묻는 사람이 모를 말은 그대로 옮기지 않는다.{reword_rule}
 - 실제 사람이 챗봇 입력창에 쓰듯 쓴다. '이 글', '위 문서', 문서 제목을 통째로 옮긴 말은 쓰지 않는다.
 - 글 가운데 개인정보 수집·이용 동의, 서명란, 서식 작성 안내 같은 양식 문구는 질문 재료로 쓰지 않는다.
 - {hint_rule}

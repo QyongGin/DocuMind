@@ -385,6 +385,39 @@ def test_styles_rotate_independently_of_users():
     assert {"짧은 구어", "검색어형"} <= set(STYLES) and all(style in prompts.STYLE_RULES for style in STYLES)
 
 
+def test_plan_marks_reword_share_without_changing_the_rest():
+    from corpus.trainset.plan import REWORD
+    quotas = {"fact": 2, "table": 2, "multi": 1, "refuse_offtopic": 1}
+    plain = plan(documents(), quotas, fetch_chunks, "r4", seed=7)
+    reworded = plan(documents(), quotas, fetch_chunks, "r4", seed=7, reword_share=1.0)
+    # 표시만 더하고 묶음·청크·사용자·말투는 그대로다(0이면 예전 계획과 같다)
+    assert [{key: value for key, value in item.items() if key != "wording"} for item in reworded] == plain
+    assert all("wording" not in item for item in plain)
+    assert sorted(item["kind"] for item in reworded if item.get("wording") == REWORD) == ["fact", "fact", "multi",
+                                                                                           "table", "table"]
+    assert all("wording" not in item for item in reworded if item["kind"] == "refuse_offtopic")  # 글이 없어 바꿀 낱말이 없다
+    half = plan(documents(), {"fact": 6}, fetch_chunks, "r4", seed=2, reword_share=0.5)
+    assert 0 < sum(item.get("wording") == REWORD for item in half) < len(half)
+    assert plan(documents(), {"fact": 6}, fetch_chunks, "r4", seed=2, reword_share=0.5) == half  # 씨앗이 같으면 같은 표시
+
+
+def test_question_prompt_asks_for_other_words_only_when_marked():
+    from corpus.trainset.plan import REWORD
+    item = {"kind": "fact", "user": "재학생", "style": "정중체", "title": "가나대학 안내", "chunks": [chunk(0)]}
+    assert prompts.REWORD_RULE not in prompts.question_prompt(item)
+    lines = prompts.question_prompt({**item, "wording": REWORD}).splitlines()
+    assert "- " + prompts.REWORD_RULE in lines
+    # 대상 이름 규칙 바로 다음 줄에 와서 다른 규칙 문장을 깨지 않는다
+    assert lines[lines.index("- " + prompts.REWORD_RULE) - 1].startswith("- 대상은 묻는 사람이 평소 부르는 짧은 이름")
+
+
+@pytest.mark.parametrize("share", ["1.5", "-0.1", "half"])
+def test_plan_rejects_reword_share_outside_zero_to_one(tmp_path, share):
+    from corpus.cli import main
+    with pytest.raises(SystemExit):
+        main(["--root", str(tmp_path / "corpus"), "trainset", "plan", "--batch", "r4", "--reword-share", share])
+
+
 def test_target_prompt_lists_guidance_candidates_from_evidence():
     text = prompts.target_prompt({"kind": "fact"}, PROMPT, "8월 18일부터 8월 29일까지")
     assert "[근거에 있는 안내 후보]" in text and "- [출처 1]" in text and "02-000-0000" in text.split("\n[챗봇이 받는 입력]\n")[0]  # 후보는 입력 앞(지시문 안)에

@@ -32,8 +32,8 @@ from pathlib import Path
 import requests
 
 from . import judge, pairs, pipeline, review, timeline
-from .plan import (ROUND1, boilerplate_lines, dataset_documents, document_family, fill_quotas, parse_kinds, plan,
-                   scale)
+from .plan import (REWORD, ROUND1, boilerplate_lines, dataset_documents, document_family, fill_quotas, parse_kinds,
+                   plan, scale)
 
 DEFAULT_MODEL = "gemma4:12b-it-qat"
 
@@ -47,6 +47,16 @@ def _kinds(text: str) -> dict[str, int]:
         return parse_kinds(text)
     except ValueError as error:
         raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _share(text: str) -> float:
+    try:
+        share = float(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"0~1 사이 수가 아니다: {text}") from error
+    if not 0 <= share <= 1:
+        raise argparse.ArgumentTypeError(f"0~1 사이 수가 아니다: {text}")
+    return share
 
 
 def load_chunks(documents: list[dict], ai_url: str, cache: Path) -> dict[int, list[dict]]:
@@ -99,13 +109,13 @@ def cmd_plan(args) -> int:
             print("목표를 다 채웠다 — 새 묶음이 필요 없다")
             return 1
     items = plan(documents, quotas, lambda document_id: chunks.get(document_id, []), args.batch, args.seed, skip,
-                 boilerplate)
+                 boilerplate, reword_share=args.reword_share)
     pipeline.write(batch_dir, "plan", items, mode="w")
     made = {}
     for item in items:
         made[item["kind"]] = made.get(item["kind"], 0) + 1
     print(f"계획 {len(items)}개 (목표 {quotas}) → {pipeline.path(batch_dir, 'plan')}")
-    print(f"종류별: {made}")
+    print(f"종류별: {made} · 말 바꾸기 {sum(item.get('wording') == REWORD for item in items)}개")
     return 0
 
 
@@ -265,6 +275,8 @@ def add_parser(commands) -> None:
                           help="문서별 청크 캐시 파일 이름(Assets/train/ 아래). 데이터셋 색인을 다시 만들면 지운다")
     planning.add_argument("--fill-from", help="쉼표로 판정을 마친 묶음 이름: 그 통과 수를 목표(--kinds, 없으면 1회차)에서 빼고 "
                                               "모자란 종류만 배정")
+    planning.add_argument("--reword-share", type=_share, default=0.0,
+                          help="글 있는 예시 중 질문의 핵심 낱말을 문서와 다른 말로 쓰게 할 몫(0~1, 기본 0)")
     planning.set_defaults(func=cmd_plan)
 
     questions = with_batch("questions", "질문 초안")
