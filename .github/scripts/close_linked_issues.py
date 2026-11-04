@@ -10,8 +10,12 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 BASE = "develop"
+# 머지 직후에는 커밋과 PR의 연결이 늦게 잡혀 빈 목록이 올 수 있다. develop은 PR로만 바뀌므로 빈 목록이면 잠시 뒤 다시 묻는다
+RETRIES = 3
+RETRY_SECONDS = 10
 # 번호 뒤에 한글 조사가 바로 붙어도("Closes #31을") 찾도록 번호 끝에는 경계를 두지 않는다
 CLOSING = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*#(\d+)", re.IGNORECASE)
 
@@ -34,6 +38,16 @@ def gh_api(path: str):
     return json.loads(out)
 
 
+def find_merged_prs(repo: str, sha: str) -> list[dict]:
+    """커밋으로 develop에 머지된 PR. 못 찾으면 RETRY_SECONDS 뒤 다시 묻고, RETRIES번째에도 없으면 빈 목록."""
+    for attempt in range(1, RETRIES + 1):
+        pulls = merged_prs(gh_api(f"repos/{repo}/commits/{sha}/pulls"), sha)
+        if pulls or attempt == RETRIES:
+            return pulls
+        time.sleep(RETRY_SECONDS)
+    return []
+
+
 def issue_state(repo: str, number: int) -> tuple[str, bool]:
     """(상태, PR인지)를 돌려준다. 이슈 API는 PR도 이슈로 돌려주므로 pull_request 칸으로 가른다."""
     data = gh_api(f"repos/{repo}/issues/{number}")
@@ -43,9 +57,10 @@ def issue_state(repo: str, number: int) -> tuple[str, bool]:
 def main() -> int:
     repo, sha = os.environ["REPO"], os.environ["COMMIT_SHA"]
     dry_run = os.environ.get("DRY_RUN") == "1"
-    pulls = merged_prs(gh_api(f"repos/{repo}/commits/{sha}/pulls"), sha)
+    pulls = find_merged_prs(repo, sha)
     if not pulls:
-        print(f"{sha[:7]}: {BASE}에 머지한 PR 없음")
+        # 경고로 남겨 Actions 화면에 보이게 한다. PR로 머지한 커밋이면 Closes 이슈를 직접 닫는다
+        print(f"::warning::{sha[:7]}: {BASE}에 머지한 PR을 찾지 못함")
         return 0
     failed = 0
     for pull in pulls:
