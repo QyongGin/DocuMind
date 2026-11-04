@@ -81,7 +81,7 @@ gh pr merge <PR번호> --merge --subject "chore(release): <요약> (#<PR번호>)
 
 ## 6. 이슈 닫기
 
-- `develop`에 머지된 PR 본문에 닫는 말(`Closes`·`Fixes`·`Resolves` + `#번호`)로 적은 이슈는 워크플로 `.github/workflows/close-linked-issues.yml`이 코멘트와 함께 닫는다(#229). 기본 브랜치가 `main`이라 GitHub의 자동 닫기는 `develop` 머지에서 동작하지 않기 때문이다.
+- `develop`에 머지된 PR 본문에 닫는 말(`Closes`·`Fixes`·`Resolves` + `#번호`)로 적은 이슈는 워크플로 `.github/workflows/close-linked-issues.yml`이 코멘트와 함께 닫는다(#229). 기본 브랜치가 `main`이라 GitHub의 자동 닫기는 `develop` 머지에서 동작하지 않기 때문이다. 워크플로는 `develop`에 커밋이 들어올 때(`push`) 그 커밋을 머지한 PR의 본문을 읽는다. `pull_request_target`은 기본 브랜치(`main`)의 워크플로 파일로 돌아서 쓰지 않는다.
 - `Related #번호`로 적은 이슈는 닫지 않는다. 상위 이슈는 하위 작업이 모두 끝나면 작업 범위 체크를 확인하고 직접 닫는다.
 - 머지 뒤 이슈가 닫혔는지 확인한다(`gh issue view <번호> --json state`). 워크플로가 실패했으면 직접 닫는다.
 

@@ -1,28 +1,27 @@
 # develop에 머지된 PR이 본문에 `Closes #번호`로 적은 이슈를 닫는다(이슈 #229, CONTRIBUTING.md 6장).
 # 기본 브랜치가 main이라 develop 머지에서는 GitHub이 이슈를 닫지 않는다.
-# pull_request_target은 develop 쪽 워크플로와 스크립트로 돈다. PR의 코드는 받지 않고, 본문은 환경 변수로만 넘긴다.
+# develop에 커밋이 들어오면(push) 그 커밋을 머지한 PR을 찾아 본문을 읽는다. 이미 머지된 develop 코드로만 돈다.
+# pull_request_target은 기본 브랜치(main)의 워크플로 파일로 돌아서, develop에만 있는 이 파일로는 돌지 않았다.
 name: 머지된 PR의 이슈 닫기
 
 on:
-  pull_request_target:
-    types: [closed]
+  push:
     branches: [develop]
 
 permissions:
   contents: read
   issues: write
+  pull-requests: read
 
 jobs:
   close:
     name: Closes 이슈 닫기
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: 본문의 닫는 말로 적은 열린 이슈를 코멘트와 함께 닫기
+      - name: 커밋을 머지한 PR 본문의 닫는 말로 적은 열린 이슈를 코멘트와 함께 닫기
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          COMMIT_SHA: ${{ github.sha }}
         run: python3 .github/scripts/close_linked_issues.py
