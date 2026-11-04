@@ -195,9 +195,27 @@ def cmd_judge_probes(args) -> int:
     return 0 if not failed else 1
 
 
+def cmd_no_answer_copies(args) -> int:
+    batch_dir = _batch_dir(args)
+    if pipeline.path(batch_dir, "plan").exists():
+        print(f"이미 계획이 있다: {pipeline.path(batch_dir, 'plan')} — 새 묶음 이름을 쓴다")
+        return 1
+    train = Path(args.root).parent / "train"
+    plans, questions = pairs.no_answer_copies([train / name for name in args.from_batches.split(",") if name], args.batch)
+    if not plans:
+        print("사본을 만들 원본이 없다(판정 통과·자동 검사 통과한 답 있는 예시)")
+        return 1
+    pipeline.write(batch_dir, "plan", plans, mode="w")
+    pipeline.write(batch_dir, "questions", questions, mode="w")
+    print(f"답없음 사본 {len(plans)}개 → {pipeline.path(batch_dir, 'plan')} · 원본 묶음별 "
+          f"{dict(Counter(plan['source_id'].rsplit('-', 1)[0] for plan in plans))}")
+    return 0
+
+
 def cmd_pairs(args) -> int:
     train = Path(args.root).parent / "train"
-    lines, manifest = pairs.build([train / name for name in args.batches.split(",") if name], args.probe_model)
+    lines, manifest = pairs.build([train / name for name in args.batches.split(",") if name], args.probe_model,
+                                  [train / name for name in (args.copies or "").split(",") if name])
     print(json.dumps({key: value for key, value in manifest.items() if key != "ids"}, ensure_ascii=False, indent=1))
     if manifest["items"].get("unjudged"):
         print(f"Claude 판정 전인 답이 있는 문항 {manifest['items']['unjudged']}개 — judge-probes를 먼저 돌린다. 쌍 파일을 쓰지 않는다")
@@ -358,4 +376,9 @@ def add_parser(commands) -> None:
     pairing.add_argument("--batches", required=True, help="쉼표로 묶음 이름(앞 묶음이 질문 중복에서 남는다)")
     pairing.add_argument("--probe-model", required=True, help="probe --model로 답을 받은 모델(예: ax40light-r3:q4km)")
     pairing.add_argument("--out-dir", required=True, help="pairs.jsonl과 manifest.json을 둘 폴더")
+    pairing.add_argument("--copies", help="쉼표로 답없음 사본 묶음 이름: 사본마다 사본 쌍과 원본 쌍을 더한다")
     pairing.set_defaults(func=cmd_pairs)
+
+    copying = with_batch("no-answer-copies", "답 있는 판정 통과 예시에서 답 근거를 뺀 답없음 사본 계획(4회차 쌍, ADR-0053 변경 메모)")
+    copying.add_argument("--from-batches", required=True, help="쉼표로 원본 묶음 이름(판정·3회차 답 판정까지 마친 묶음)")
+    copying.set_defaults(func=cmd_no_answer_copies)
