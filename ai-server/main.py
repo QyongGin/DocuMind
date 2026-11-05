@@ -153,6 +153,9 @@ QUERY_RETRIEVAL_CHUNKS_ENABLED = _env_bool("QUERY_RETRIEVAL_CHUNKS_ENABLED", Tru
 # 프롬프트 날짜 줄(ADR-0047 결정 4): 맨 위 '오늘: YYYY-MM-DD'와 근거 머리말 '게시: YYYY-MM-DD'(색인 메타데이터 posted_at).
 # 기본은 꺼짐 — 개발셋으로 해가 없는지 잰 뒤(ADR-0047 측정 1단계) 켠다. 오늘은 한국 시간, 평가 요청의 as_of가 있으면 그 날짜
 PROMPT_DATE_LINES_ENABLED = _env_bool("AI_PROMPT_DATE_LINES_ENABLED", False)
+# 근거 블록에 청크 원문을 늘 넣는다(M2 개선 설계 A1). 기본은 꺼짐 — 지금처럼 표 검색 정보나 질문 의도 추출 정보가 있으면
+# 발췌만 넣는다. 켜면 발췌 뒤에 원문 전체를 붙여, 발췌가 답 줄을 고르지 못해도 답이 프롬프트에 남는다
+CONTEXT_FULL_TEXT_ENABLED = _env_bool("AI_CONTEXT_FULL_TEXT_ENABLED", False)
 SERVICE_TIMEZONE = ZoneInfo("Asia/Seoul")
 # 평가 전용 제외 목록이 있을 때 벡터 검색을 늘려 받는 상한. 빼고 남은 후보가 검색 개수에 못 미치면 두 배씩 늘린다
 VECTOR_EXCLUSION_MAX_RESULTS = _env_int("AI_VECTOR_EXCLUSION_MAX_RESULTS", 400)
@@ -4407,7 +4410,7 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
     has_structured_evidence = bool(fact_text or evidence_facts)
-    if relevant_excerpt and has_structured_evidence:
+    if relevant_excerpt and has_structured_evidence and not CONTEXT_FULL_TEXT_ENABLED:
         # [#110 실험1b] 구조화 근거(표 검색 정보 또는 질문 의도 추출 정보)가 하나라도 있으면
         # 중복·노이즈인 원문 전체 덤프(전체 내용)를 빼고 발췌만 남겨 7.8B 모델이 답을 놓치지 않게 한다.
         # 구조화 근거가 답을 실제로 담고 있는지는 확인하지 않으므로, 답이 원문에만 있으면 놓칠 수 있다.
@@ -6537,6 +6540,7 @@ def _model_settings() -> dict:
         "num_predict": OLLAMA_NUM_PREDICT,
         "query_retrieval_chunks_enabled": QUERY_RETRIEVAL_CHUNKS_ENABLED,
         "prompt_date_lines": PROMPT_DATE_LINES_ENABLED,
+        "context_full_text": CONTEXT_FULL_TEXT_ENABLED,
     }
 
 
