@@ -41,6 +41,9 @@ ROUND1 = {"fact": 40, "procedure": 35, "table": 40, "multi": 25, "partial": 20, 
 USERS = ("재학생", "예비 입학생·지원자", "교직원", "외국인", "업체")
 # 말투(ADR-0044): 실제 사용자처럼 짧은 구어·검색어형을 더했다. 운영 질문 기록이 없어 비율은 고르게 돌린다
 STYLES = ("짧은 구어", "검색어형", "정중체", "상황 설명형", "쉬운 한국어")
+# 말 바꾸기 표시(4회차 설계 변경, 2026-11-05): 질문의 핵심 낱말을 글에 적힌 말 대신 묻는 사람이 평소 쓰는 말로 쓰게 한다.
+# 개발셋에서 학습한 모델이 근거를 받고도 거절한 문항은 대부분 문서와 다른 말로 물은 질문이었다
+REWORD = "다른 말"
 MIN_CHUNK_CHARS = 200
 TABLE_MIN_ROWS = 3
 BOILERPLATE_MIN_DOCS = 5  # 이만큼 넘는 문서에 같은 줄이 있으면 상투문
@@ -173,10 +176,13 @@ def ordered_groups(documents: list[dict], rng: random.Random, skip: set[str] = f
 
 
 def plan(documents: list[dict], quotas: dict[str, int], fetch_chunks: Callable[[int], list[dict]], batch: str,
-         seed: int, skip_groups: set[str] = frozenset(), boilerplate: set[str] = frozenset()) -> list[dict]:
+         seed: int, skip_groups: set[str] = frozenset(), boilerplate: set[str] = frozenset(),
+         reword_share: float = 0.0) -> list[dict]:
     """예시 종류별 개수만큼 묶음과 청크를 고른다. fetch_chunks(문서 번호)는 그 문서의 청크 목록을 돌려준다.
-    boilerplate는 상투문 줄(boilerplate_lines)."""
+    boilerplate는 상투문 줄(boilerplate_lines). reword_share만큼의 글 있는 예시에 말 바꾸기 표시(wording)를 단다."""
     rng = random.Random(seed)
+    # 말 바꾸기 고르기는 따로 굴려 묶음·청크 고르기 순서를 바꾸지 않는다(0이면 예전 계획과 같다)
+    reword_rng = random.Random(seed + 1)
     sequence = [name for name, count in quotas.items() for _ in range(count)]
     rng.shuffle(sequence)
     groups = ordered_groups(documents, rng, set(skip_groups))
@@ -211,5 +217,7 @@ def plan(documents: list[dict], quotas: dict[str, int], fetch_chunks: Callable[[
             if item["chunks"]:
                 break
         if item["chunks"]:
+            if reword_share and reword_rng.random() < reword_share:
+                item["wording"] = REWORD
             items.append(item)
     return items

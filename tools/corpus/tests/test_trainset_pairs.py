@@ -186,3 +186,73 @@ def test_pairs_refuse_prompts_with_legacy_rules(tmp_path):
     lines, manifest = pairs.build([batch], MODEL)
     # 3회차 답은 지난 규칙으로 받은 답이라, 입력만 지금 규칙으로 바꾸면 쌍의 입력과 답이 어긋난다
     assert manifest["legacy_prompts"] == 1 and lines[0]["prompt"][0]["content"] != legacy
+
+
+def copy_setup(tmp_path):
+    """원본 묶음 s(답 있는 예시 셋)와 그 답없음 사본 묶음 c. s1은 3회차가 다 맞힘, s2는 한 번 과잉 거절, s3은 사본 근거에서도
+    답이 나와 사본 종류가 바뀜. c1은 3회차가 사본에서 맞게 거절, c2는 사본에서 지어냄."""
+    source = write_batch(tmp_path / "train" / "s", [
+        ("s1", "fact", "휴학 언제까지 신청해?", TARGET, [RIGHT] * 4),
+        ("s2", "fact", "가나대 휴학 마감 며칠이야?", TARGET, [REFUSAL, RIGHT, RIGHT, RIGHT]),
+        ("s3", "fact", "휴학 신청 끝나는 날 알려 줘", TARGET, [RIGHT] * 4),
+    ])
+    pipeline.write(source, "questions", [{"id": item_id, "question": question, "hint": "8월 18일부터 8월 29일까지",
+                                          "possible": True, "user_actual": "재학생"}
+                                         for item_id, question in (("s1", "휴학 언제까지 신청해?"),
+                                                                   ("s2", "가나대 휴학 마감 며칠이야?"),
+                                                                   ("s3", "휴학 신청 끝나는 날 알려 줘"))])
+    copies = write_batch(tmp_path / "train" / "c", [
+        ("c1", "refuse_guide", "휴학 언제까지 신청해?", GUIDE, [GUIDE, REFUSAL, GUIDE, REFUSAL]),
+        ("c2", "refuse_guide", "가나대 휴학 마감 며칠이야?", GUIDE, ["9월 5일까지입니다.", GUIDE, REFUSAL, REFUSAL]),
+        ("c3", "fact", "휴학 신청 끝나는 날 알려 줘", TARGET, [RIGHT] * 4),
+    ])
+    pipeline.write(copies, "plan", [{"id": f"c{n}", "kind": "refuse_guide", "group_id": f"공지:s{n}", "ledger_id": f"www/s{n}",
+                                     "source_id": f"s{n}"} for n in (1, 2, 3)])
+    return source, copies
+
+
+def test_no_answer_copies_take_question_and_hint_of_passed_answerable_items(tmp_path):
+    source, _ = copy_setup(tmp_path)
+    pipeline.write(source, "judged", [{"id": "s3", "verdict": "탈락"}])  # 목표 답이 탈락한 예시는 원본이 될 수 없다
+    plans, questions = pairs.no_answer_copies([source, *two_batches(tmp_path)], "r4-c")
+    assert [(plan["id"], plan["source_id"], plan["kind"]) for plan in plans] == [
+        ("r4-c-0001", "s1", "refuse_guide"), ("r4-c-0002", "s2", "refuse_guide")]  # a·b 묶음은 답 근거가 없어 못 뺀다
+    assert plans[0]["group_id"] == "공지:s1" and plans[0]["batch"] == "r4-c"  # 원본과 같은 문서 묶음(검증 몫에서 갈라지지 않게)
+    assert questions[0] == {"id": "r4-c-0001", "question": "휴학 언제까지 신청해?", "hint": "8월 18일부터 8월 29일까지",
+                            "user_actual": "재학생", "possible": True, "drafter": {"copied_from": "s1"}}
+
+
+def test_copies_add_answer_and_refusal_pairs_for_the_same_question(tmp_path):
+    source, copies = copy_setup(tmp_path)
+    lines, manifest = pairs.build([source], MODEL, [copies])
+    by_id = {(line["id"], line["meta"]["pair"]): line for line in lines}
+    # s2는 3회차가 실제로 과잉 거절해 그 답으로 쌍이 있고, 사본 쌍만 더한다. s1은 사본에서 3회차가 한 거절로 원본 쌍을 짓는다
+    assert sorted(by_id) == [("c1", "fabrication"), ("c2", "fabrication"), ("s1", "over_refusal"), ("s2", "over_refusal")]
+    c1, s1, c2 = by_id["c1", "fabrication"], by_id["s1", "over_refusal"], by_id["c2", "fabrication"]
+    assert c1["chosen"][0]["content"] == GUIDE and c1["rejected"][0]["content"] == RIGHT  # 원본에서 맞힌 답 = 사본에선 근거 없음
+    assert (c1["meta"]["made_from"], c1["meta"]["source_id"]) == ("원본 답", "s1")
+    assert s1["chosen"][0]["content"] == TARGET and s1["rejected"][0]["content"] == GUIDE  # 사본에서 한 거절(첫 거절 답)
+    assert (s1["meta"]["made_from"], s1["meta"]["sample"]) == ("사본 거절", 1)
+    assert (c2["rejected"][0]["content"], c2["meta"]["made_from"]) == ("9월 5일까지입니다.", "3회차 답")  # 실제로 지어낸 답이 먼저
+    assert by_id["s2", "over_refusal"]["meta"]["made_from"] == "3회차 답"
+    assert manifest["types"] == {"over_refusal": 2, "fabrication": 2} and manifest["dropped_over_refusal"] == 0
+    assert manifest["copies"] == {"copies": 3, "copy_has_answer": 1, "twins": 2}  # c3은 사본 근거에서도 답이 나왔다
+    assert manifest["made_from"] == {"3회차 답": 2, "원본 답": 1, "사본 거절": 1} and manifest["copy_batches"] == ["c"]
+
+
+def test_pairs_command_waits_for_copy_answer_verdicts(tmp_path, capsys):
+    source, copies = copy_setup(tmp_path)
+    pipeline.write(copies, pipeline.probe_step(MODEL), [{"id": "c1", "ax_samples": ["학사지원팀이 담당합니다."] * 4}])
+    command = ["--root", str(tmp_path / "corpus"), "trainset", "pairs", "--batches", "s", "--copies", "c",
+               "--probe-model", MODEL, "--out-dir", str(tmp_path / "round4")]
+    assert main(command) == 1 and not (tmp_path / "round4").exists()  # 사본의 애매한 답이 판정 전
+    assert "judge-probes" in capsys.readouterr().out
+
+
+def test_no_answer_copies_command_writes_plan_and_questions_once(tmp_path, capsys):
+    copy_setup(tmp_path)
+    command = ["--root", str(tmp_path / "corpus"), "trainset", "no-answer-copies", "--batch", "r4-c", "--from-batches", "s"]
+    assert main(command) == 0 and "사본 3개" in capsys.readouterr().out
+    merged = pipeline.merged(tmp_path / "train" / "r4-c")
+    assert [(record["kind"], record["question"]) for record in merged][0] == ("refuse_guide", "휴학 언제까지 신청해?")
+    assert main(command) == 1  # 이미 계획이 있으면 덮어쓰지 않는다

@@ -32,8 +32,8 @@ from pathlib import Path
 import requests
 
 from . import judge, pairs, pipeline, review, timeline
-from .plan import (ROUND1, boilerplate_lines, dataset_documents, document_family, fill_quotas, parse_kinds, plan,
-                   scale)
+from .plan import (REWORD, ROUND1, boilerplate_lines, dataset_documents, document_family, fill_quotas, parse_kinds,
+                   plan, scale)
 
 DEFAULT_MODEL = "gemma4:12b-it-qat"
 
@@ -47,6 +47,16 @@ def _kinds(text: str) -> dict[str, int]:
         return parse_kinds(text)
     except ValueError as error:
         raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _share(text: str) -> float:
+    try:
+        share = float(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"0~1 사이 수가 아니다: {text}") from error
+    if not 0 <= share <= 1:
+        raise argparse.ArgumentTypeError(f"0~1 사이 수가 아니다: {text}")
+    return share
 
 
 def load_chunks(documents: list[dict], ai_url: str, cache: Path) -> dict[int, list[dict]]:
@@ -99,13 +109,13 @@ def cmd_plan(args) -> int:
             print("목표를 다 채웠다 — 새 묶음이 필요 없다")
             return 1
     items = plan(documents, quotas, lambda document_id: chunks.get(document_id, []), args.batch, args.seed, skip,
-                 boilerplate)
+                 boilerplate, reword_share=args.reword_share)
     pipeline.write(batch_dir, "plan", items, mode="w")
     made = {}
     for item in items:
         made[item["kind"]] = made.get(item["kind"], 0) + 1
     print(f"계획 {len(items)}개 (목표 {quotas}) → {pipeline.path(batch_dir, 'plan')}")
-    print(f"종류별: {made}")
+    print(f"종류별: {made} · 말 바꾸기 {sum(item.get('wording') == REWORD for item in items)}개")
     return 0
 
 
@@ -185,9 +195,27 @@ def cmd_judge_probes(args) -> int:
     return 0 if not failed else 1
 
 
+def cmd_no_answer_copies(args) -> int:
+    batch_dir = _batch_dir(args)
+    if pipeline.path(batch_dir, "plan").exists():
+        print(f"이미 계획이 있다: {pipeline.path(batch_dir, 'plan')} — 새 묶음 이름을 쓴다")
+        return 1
+    train = Path(args.root).parent / "train"
+    plans, questions = pairs.no_answer_copies([train / name for name in args.from_batches.split(",") if name], args.batch)
+    if not plans:
+        print("사본을 만들 원본이 없다(판정 통과·자동 검사 통과한 답 있는 예시)")
+        return 1
+    pipeline.write(batch_dir, "plan", plans, mode="w")
+    pipeline.write(batch_dir, "questions", questions, mode="w")
+    print(f"답없음 사본 {len(plans)}개 → {pipeline.path(batch_dir, 'plan')} · 원본 묶음별 "
+          f"{dict(Counter(plan['source_id'].rsplit('-', 1)[0] for plan in plans))}")
+    return 0
+
+
 def cmd_pairs(args) -> int:
     train = Path(args.root).parent / "train"
-    lines, manifest = pairs.build([train / name for name in args.batches.split(",") if name], args.probe_model)
+    lines, manifest = pairs.build([train / name for name in args.batches.split(",") if name], args.probe_model,
+                                  [train / name for name in (args.copies or "").split(",") if name])
     print(json.dumps({key: value for key, value in manifest.items() if key != "ids"}, ensure_ascii=False, indent=1))
     if manifest["items"].get("unjudged"):
         print(f"Claude 판정 전인 답이 있는 문항 {manifest['items']['unjudged']}개 — judge-probes를 먼저 돌린다. 쌍 파일을 쓰지 않는다")
@@ -265,6 +293,8 @@ def add_parser(commands) -> None:
                           help="문서별 청크 캐시 파일 이름(Assets/train/ 아래). 데이터셋 색인을 다시 만들면 지운다")
     planning.add_argument("--fill-from", help="쉼표로 판정을 마친 묶음 이름: 그 통과 수를 목표(--kinds, 없으면 1회차)에서 빼고 "
                                               "모자란 종류만 배정")
+    planning.add_argument("--reword-share", type=_share, default=0.0,
+                          help="글 있는 예시 중 질문의 핵심 낱말을 문서와 다른 말로 쓰게 할 몫(0~1, 기본 0)")
     planning.set_defaults(func=cmd_plan)
 
     questions = with_batch("questions", "질문 초안")
@@ -346,4 +376,9 @@ def add_parser(commands) -> None:
     pairing.add_argument("--batches", required=True, help="쉼표로 묶음 이름(앞 묶음이 질문 중복에서 남는다)")
     pairing.add_argument("--probe-model", required=True, help="probe --model로 답을 받은 모델(예: ax40light-r3:q4km)")
     pairing.add_argument("--out-dir", required=True, help="pairs.jsonl과 manifest.json을 둘 폴더")
+    pairing.add_argument("--copies", help="쉼표로 답없음 사본 묶음 이름: 사본마다 사본 쌍과 원본 쌍을 더한다")
     pairing.set_defaults(func=cmd_pairs)
+
+    copying = with_batch("no-answer-copies", "답 있는 판정 통과 예시에서 답 근거를 뺀 답없음 사본 계획(4회차 쌍, ADR-0053 변경 메모)")
+    copying.add_argument("--from-batches", required=True, help="쉼표로 원본 묶음 이름(판정·3회차 답 판정까지 마친 묶음)")
+    copying.set_defaults(func=cmd_no_answer_copies)
