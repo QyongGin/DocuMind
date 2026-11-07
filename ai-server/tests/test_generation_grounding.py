@@ -70,3 +70,28 @@ def test_format_context_block_drops_full_content_only_with_excerpt_and_structure
 
     assert (FULL_CONTENT_LABEL in block) is expect_full_content
     assert (EXCERPT_LABEL in block) is bool(excerpt)
+
+
+# --- M2 개선 설계 A1: 원문을 늘 넣는 설정 ------------------------------------------
+
+@pytest.mark.parametrize(
+    ("table_facts", "evidence_facts"),
+    [(["행: 가 / 열: 금액 / 값: 10,000원"], ""), ([], "신청 방법: 합성 홈페이지")],
+    ids=["발췌+표정보", "발췌+의도추출"],
+)
+def test_full_text_setting_keeps_full_content_even_with_structured_evidence(monkeypatch, table_facts, evidence_facts):
+    """설정을 켜면 구조화 근거와 발췌가 함께 있어도 발췌 뒤에 원문 전체를 붙인다(발췌가 답 줄을 못 골라도 답이 남게)."""
+    _stub_context_parts(monkeypatch, excerpt="합성 발췌", table_facts=table_facts, evidence_facts=evidence_facts)
+    monkeypatch.setattr(main, "CONTEXT_FULL_TEXT_ENABLED", True)
+
+    block = _format_context_block(1, "합성 원문 본문 — 답 줄", {"source": "합성.pdf"}, "chunk-1", _analysis())
+
+    assert EXCERPT_LABEL in block
+    assert FULL_CONTENT_LABEL in block
+    assert "합성 원문 본문 — 답 줄" in block
+
+
+def test_full_text_setting_is_off_by_default_and_reported_in_runtime_settings():
+    """기본은 꺼짐(운영 동작 그대로)이고, 처리 기록·평가 기록의 서버 설정에 켜짐 여부가 남는다."""
+    assert main.CONTEXT_FULL_TEXT_ENABLED is False
+    assert main._model_settings()["context_full_text"] is False
