@@ -1,7 +1,7 @@
 ---
 name: 작업
 about: 작업을 시작하기 전에 무엇을 왜 하는지와 끝난 기준을 적습니다
-title: '[영역] '
+title: ''
 labels: ''
 assignees: ''
 ---
