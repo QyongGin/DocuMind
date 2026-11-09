@@ -141,6 +141,40 @@ def test_attach_takes_prompt_and_final_candidates():
                        "http://ai", "질문")
 
 
+def rerank_trace(used: bool) -> dict:
+    """재순위를 켠 AI 서버의 평가 기록. used가 거짓이면 재순위 서버가 답하지 않아 순위 융합 순서로 나온 근거다."""
+    return {"answer_path": "llm", "prompt": "P", "stages": {"final": []},
+            "rerank": {"enabled": True, "used": used, "candidates": 20 if used else 0,
+                       "error": None if used else "ConnectError"}}
+
+
+def test_attach_keeps_rerank_record_and_can_require_it():
+    used = clients.attach(FakeSession({"answer": "답", "eval_trace": rerank_trace(True)}), "http://ai", "질문",
+                          require_rerank=True)
+    assert used["rerank"]["used"] is True and used["rerank"]["candidates"] == 20
+    # 재순위를 요구하지 않으면 그 전처럼 받되 기록은 남긴다
+    fallback = clients.attach(FakeSession({"answer": "답", "eval_trace": rerank_trace(False)}), "http://ai", "질문")
+    assert fallback["rerank"]["error"] == "ConnectError"
+    with pytest.raises(ValueError, match="재순위"):
+        clients.attach(FakeSession({"answer": "답", "eval_trace": rerank_trace(False)}), "http://ai", "질문",
+                       require_rerank=True)
+    with pytest.raises(ValueError, match="재순위"):  # 재순위를 끈 서버(기록 없음)도 실패
+        clients.attach(FakeSession({"answer": "답", "eval_trace": {"answer_path": "llm", "prompt": "P"}}),
+                       "http://ai", "질문", require_rerank=True)
+
+
+def test_run_attach_retries_examples_without_rerank(tmp_path):
+    batch = tmp_path / "r5"
+    pipeline.write(batch, "plan", [{"id": "r5-0001", "kind": "fact", "ledger_id": "gana/bbs/1", "chunks": []}], mode="w")
+    pipeline.write(batch, "questions", [{"id": "r5-0001", "question": "가나대학 등록금 납부 기간은?", "possible": True}])
+    answers = iter([rerank_trace(False), rerank_trace(True)])  # 첫 요청 때 재순위 서버가 아직 뜨지 않음
+    session = FakeSession(lambda body: {"answer": "답", "eval_trace": next(answers)})
+    quiet = {"log": lambda line: None, "require_rerank": True}
+    assert pipeline.run_attach(batch, session, "http://ai", **quiet) == {"error": 1}
+    assert pipeline.run_attach(batch, session, "http://ai", **quiet) == {"attached": 1}
+    assert pipeline.read(batch, "attached")["r5-0001"]["rerank"]["used"] is True
+
+
 PROMPT = """너는 가나대학 문서를 근거로 답변하는 안내 챗봇이다.
 
 [검색 근거]

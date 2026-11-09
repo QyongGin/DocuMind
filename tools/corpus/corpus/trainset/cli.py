@@ -131,7 +131,8 @@ def cmd_attach(args) -> int:
     dates = None if args.no_timeline else timeline.ledger_dates(con)
     # 답없음 예시의 확인처 블록을 가릴 문서 관계(재료 문서·같은 게시글·같은 묶음, ADR-0048 결정 2)
     counts = pipeline.run_attach(_batch_dir(args), requests.Session(), args.ai_url, args.limit, dates=dates,
-                                 today=date.today().isoformat(), family=document_family(con))
+                                 today=date.today().isoformat(), family=document_family(con),
+                                 require_rerank=args.require_rerank)
     print(dict(counts))
     return 0 if not counts.get("error") else 1
 
@@ -308,6 +309,9 @@ def add_parser(commands) -> None:
     attaching.add_argument("--limit", type=int)
     attaching.add_argument("--no-timeline", action="store_true",
                            help="그날 없던 문서를 빼지 않고 데이터셋 색인 그대로 근거를 붙인다(ADR-0047 전 방식, 비교용)")
+    attaching.add_argument("--require-rerank", action="store_true",
+                           help="재순위가 실제로 쓰인 근거만 받는다(5회차, ADR-0055). 재순위 서버가 답하지 않아 순위 융합 "
+                                "순서로 나온 근거는 실패로 남겨 다음 실행에서 다시 붙인다")
     attaching.set_defaults(func=cmd_attach)
 
     probing = with_batch("probe", "A.X 답 여러 번 받기(학습 전 모델의 아는 정도 ADR-0042, 학습한 모델의 답 ADR-0053)")
