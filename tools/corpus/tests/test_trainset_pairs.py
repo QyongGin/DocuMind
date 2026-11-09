@@ -57,6 +57,8 @@ def test_plan_rejects_unknown_kind_on_command_line(tmp_path):
     ("fact", TARGET, "1,200,000원입니다.\n[출처 2]", "undecided"),  # 근거의 다른 값(다른 칸·행일 수 있음)은 Claude가 본다
     ("fact", TARGET, "학사지원팀에 물어보세요.", "undecided"),
     ("procedure", "가나포털 학적 메뉴에서 신청합니다.\n[출처 1]", f"{REFUSAL}\n\n[출처 1]", "over_refusal"),
+    # 목표 답으로 올린 그 답(ADR-0056): 값이 없는 답도 글이 같으면 규칙으로 맞음
+    ("procedure", "가나포털 학적 메뉴에서 신청합니다.\n[출처 1]", "가나포털 학적 메뉴에서 신청합니다.\n[출처 1]", "correct"),
     ("procedure", "가나포털 학적 메뉴에서 신청합니다.\n[출처 1]", f"{REFUSAL} 가나포털에서 신청하세요.", "undecided"),
     ("partial", f"휴학 신청은 8월 29일까지입니다. 휴학 비용은 {REFUSAL}\n[출처 1]",
      "8월 29일까지입니다. 비용은 나와 있지 않습니다.", "correct"),
