@@ -96,7 +96,7 @@ def test_judge_command_with_as_target_judges_then_promotes(tmp_path, monkeypatch
 
     def fake_run(records, work, model, jobs=2):
         seen.extend(record["id"] for record in records)
-        return [{"id": record["id"], "verdict": "통과" if record["id"] == "g2#4" else "탈락", "category": ""}
+        return [{"id": record["id"], "verdict": "통과" if record["id"].startswith("g2") else "탈락", "category": ""}
                 for record in records], []
 
     monkeypatch.setattr(judge, "run", fake_run)
@@ -107,6 +107,6 @@ def test_judge_command_with_as_target_judges_then_promotes(tmp_path, monkeypatch
     last = capsys.readouterr().out.strip().splitlines()[-1]
     assert last == "대상 3 · 올림 1 · 통과한 후보 없음 1 · 자동 검사를 통과한 후보 없음 1 · 판정 전 0 · 실패한 작업 단위 0"
     g2 = next(item for item in pipeline.merged(tmp_path / "train" / "a") if item["id"] == "g2")
-    assert g2["target_ga"] == RIGHT and g2["target_generation"]["sample"] == 4
+    assert g2["target_ga"] == RIGHT_SHORT and g2["target_generation"]["sample"] == 1  # 통과한 후보 중 앞 번호
     seen.clear()
     assert main(command) == 0 and seen == []  # 판정한 후보는 다시 판정하지 않는다

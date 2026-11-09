@@ -35,9 +35,8 @@ def answer_side_failure(record: dict) -> bool:
 
 
 def _targeted(batch_dir: Path) -> list[dict]:
-    """대상 문항: 목표 답이 답 탓으로 떨어졌고 아직 올린 답이 없다."""
-    return [record for record in pipeline.merged(batch_dir)
-            if not (record.get("target_generation") or {}).get("from") and answer_side_failure(record)]
+    """대상 문항. 답을 올린 문항은 판정 '통과'와 다시 매긴 자동 검사 통과로 바뀌어 저절로 빠진다."""
+    return [record for record in pipeline.merged(batch_dir) if answer_side_failure(record)]
 
 
 def candidates(batch_dir: Path, model: str) -> list[dict]:
