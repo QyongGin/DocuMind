@@ -1,8 +1,8 @@
 ---
 name: 🐛 버그 리포트
 about: 버그 발생 시 작성해주세요
-title: '[Bug] '
-labels: 'Type: Bug, Priority: Medium'
+title: ''
+labels: 'Bug, Medium'
 assignees: ''
 ---
 

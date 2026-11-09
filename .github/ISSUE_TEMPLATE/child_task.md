@@ -1,8 +1,8 @@
 ---
 name: 하위 작업 이슈
 about: Epic 또는 parent issue를 해결하기 위한 작은 구현/검증 작업입니다
-title: '[Task] '
-labels: 'Type: Task'
+title: ''
+labels: ''
 assignees: ''
 ---
 

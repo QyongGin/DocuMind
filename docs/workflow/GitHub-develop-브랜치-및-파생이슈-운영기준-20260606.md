@@ -202,14 +202,14 @@ child issue로 만들지 않아도 되는 경우:
 | TableFact 저장 schema 설계 | `table_relation_loss`, `index_consistency` | runtime 문자열 table_fact를 typed schema 저장 구조로 승격할지 결정 |
 | runtime 호출 방식 검증 | `runtime_fit`, `generation_grounding` | OllamaLLM flat prompt와 chat message 호출 차이를 비교 |
 
-child issue 제목 예시:
+child issue 제목 예시(영역은 `AI/RAG` 라벨로 단다, `CONTRIBUTING.md` 2장):
 
 ```text
-[AI/RAG] SelectedContext endpoint drift 검증
-[AI/RAG] unsupported 질문 처리 gate 보강
-[AI/RAG] Source contamination P0 재현 정리
-[AI/RAG] Retrieval miss 질문 원인 분석
-[AI/RAG] TableFact typed 저장 schema 설계
+SelectedContext endpoint drift 검증
+unsupported 질문 처리 gate 보강
+Source contamination P0 재현 정리
+Retrieval miss 질문 원인 분석
+TableFact typed 저장 schema 설계
 ```
 
 ## 7. 브랜치 삭제 방법
