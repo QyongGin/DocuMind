@@ -33,7 +33,7 @@ import requests
 
 from . import judge, pairs, pipeline, review, timeline
 from .plan import (REWORD, ROUND1, boilerplate_lines, dataset_documents, document_family, fill_quotas, parse_kinds,
-                   plan, scale)
+                   plan, scale, trained_groups)
 
 DEFAULT_MODEL = "gemma4:12b-it-qat"
 
@@ -94,6 +94,10 @@ def cmd_plan(args) -> int:
         if other:
             skip |= {item["group_id"] for item in pipeline.read(Path(args.root).parent / "train" / other, "plan").values()
                      if item.get("group_id")}
+    if args.skip_trained:
+        skip |= trained_groups(Path(args.root).parent / "train" / name for name in args.skip_trained.split(",") if name)
+    if skip:
+        print(f"뺀 문서 묶음 {len(skip)}")
     chunks = load_chunks(documents, args.ai_url, Path(args.root).parent / "train" / args.chunk_cache)
     boilerplate = boilerplate_lines(chunks)
     print(f"문서 {len(documents)} · 청크를 받은 문서 {len(chunks)} · 상투문 줄 {len(boilerplate)}")
@@ -290,6 +294,9 @@ def add_parser(commands) -> None:
     planning.add_argument("--seed", type=int, default=20261021)
     planning.add_argument("--ai-url", default="http://localhost:18100", help="데이터셋 AI 서버 주소(SSH 터널)")
     planning.add_argument("--skip-batches", help="쉼표로 묶음 이름: 그 묶음에서 쓴 문서 묶음은 고르지 않는다")
+    planning.add_argument("--skip-trained",
+                          help="쉼표로 학습 파일(Assets/train/ 아래 경로, 예: round3/round-ga.jsonl,round4/pairs.jsonl): "
+                               "그 파일의 예시가 쓴 문서 묶음은 고르지 않는다(학습한 모델이 본 문서, 5회차 ADR-0055)")
     planning.add_argument("--chunk-cache", default="chunks-dataset.jsonl",
                           help="문서별 청크 캐시 파일 이름(Assets/train/ 아래). 데이터셋 색인을 다시 만들면 지운다")
     planning.add_argument("--fill-from", help="쉼표로 판정을 마친 묶음 이름: 그 통과 수를 목표(--kinds, 없으면 1회차)에서 빼고 "
