@@ -31,7 +31,7 @@ from pathlib import Path
 
 import requests
 
-from . import judge, pairs, pipeline, review, timeline
+from . import judge, model_targets, pairs, pipeline, review, timeline
 from .plan import (REWORD, ROUND1, boilerplate_lines, dataset_documents, document_family, fill_quotas, parse_kinds,
                    plan, scale, trained_groups)
 
@@ -169,6 +169,8 @@ def cmd_status(args) -> int:
 
 def cmd_judge(args) -> int:
     batch_dir = _batch_dir(args)
+    if args.as_target:
+        return _judge_as_target(batch_dir, args)
     records = pipeline.merged(batch_dir)
     todo = (pipeline.pick_for_judge(records, args.limit) if args.limit else
             [record for record in records if (record.get("keep") or {}).get("ga") and record.get("verdict") is None])
@@ -180,6 +182,22 @@ def cmd_judge(args) -> int:
         print(f"실패 {name}: {why}")
     passed = sum(result["verdict"] == "통과" for result in results)
     print(f"판정 {len(results)} · 통과 {passed} · 탈락 {len(results) - passed} · 실패한 작업 단위 {len(failed)}")
+    return 0 if not failed else 1
+
+
+def _judge_as_target(batch_dir: Path, args) -> int:
+    # 목표 답이 답 탓으로 떨어진 문항에서 학습한 모델의 답을 목표 답 후보로 판정하고, 통과한 답을 목표 답으로 올린다(ADR-0056)
+    todo, failed = model_targets.pending(batch_dir, args.as_target), []
+    if todo:
+        work = Path(args.work) if args.work else Path(tempfile.mkdtemp(prefix="trainset-judge-as-target-"))
+        print(f"목표 답 후보로 판정할 {args.as_target} 답 {len(todo)}개 · 작업 폴더 {work}")
+        results, failed = judge.run(todo, work, args.model, jobs=args.jobs)
+        pipeline.write(batch_dir, model_targets.verdict_step(args.as_target), results)
+        for name, why in failed:
+            print(f"실패 {name}: {why}")
+    counts = model_targets.promote(batch_dir, args.as_target)
+    print(" · ".join(f"{name} {counts[name]}" for name in ("대상", "올림", "통과한 후보 없음", "자동 검사를 통과한 후보 없음",
+                                                           "판정 전")) + f" · 실패한 작업 단위 {len(failed)}")
     return 0 if not failed else 1
 
 
@@ -346,6 +364,9 @@ def add_parser(commands) -> None:
     judging.add_argument("--jobs", type=int, default=2)
     judging.add_argument("--limit", type=int, help="판정할 예시 수(첫 묶음 40). 주면 종류별 개수(1회차 비율)를 지켜 고른다")
     judging.add_argument("--work", help="작업 폴더(저장소 밖). 없으면 임시 폴더")
+    judging.add_argument("--as-target", metavar="PROBE_MODEL",
+                         help="목표 답이 답 탓으로 떨어진 문항에서 probe --model로 받은 이 모델의 답을 목표 답 후보로 판정하고, "
+                              "통과한 답을 목표 답으로 올린다(ADR-0056)")
     judging.set_defaults(func=cmd_judge)
 
     probe_judging = with_batch("judge-probes", "학습한 모델 답 중 규칙으로 못 가른 답만 Claude 판정(선호 쌍, ADR-0053)")

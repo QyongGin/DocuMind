@@ -56,6 +56,8 @@ def head_refusal(answer: str) -> str | None:
 def classify(record: dict, answer: str) -> str:
     """3회차 답 하나를 규칙으로 가른다. record는 자동 검사·판정을 마친 예시(종류는 받은 근거로 정한 종류)다.
     돌려주는 것: correct, over_refusal, wrong_value, fabrication, refusal_preamble, undecided."""
+    if answer.strip() == (record.get("target_ga") or "").strip():
+        return CORRECT  # 목표 답으로 올린 그 답(ADR-0056)
     question = record.get("question") or ""
     said = core_values(answer, question)
     refusal = head_refusal(answer)
@@ -126,10 +128,16 @@ def pending(batch_dir: Path, model: str) -> list[dict]:
             for result in assess(record, record["answers"], record["answer_verdicts"]) if result["outcome"] == UNDECIDED]
 
 
+def chosen_source(record: dict) -> str:
+    """선호 답을 쓴 모델: 목표 답으로 올린 학습한 모델의 답이면 그 모델(ADR-0056), 아니면 목표 답 초안 모델."""
+    generation = record.get("target_generation") or {}
+    return str(generation.get("from") or generation.get("model") or "목표 답")
+
+
 def pair_line(record: dict, rejected: dict, results: list[dict], model: str) -> dict:
     """선호 쌍 한 줄(TRL 대화 형식): 입력 = 운영 프롬프트, 선호 답 = 학습 파일과 같은 목표 답, 비선호 답 = 고른 3회차 답
     그대로(rejected는 assess 결과 하나). type_samples는 그 문항의 답 중 같은 종류로 틀린 답 수다. made_from은 비선호 답이
-    어디서 왔는지(이 입력의 3회차 답, 답없음 사본이면 원본 답·사본 거절)다."""
+    어디서 왔는지(이 입력의 3회차 답, 답없음 사본이면 원본 답·사본 거절)다. chosen_from은 선호 답을 쓴 모델(chosen_source)이다."""
     return {"id": record["id"],
             "prompt": [{"role": "user", "content": pipeline.current_rules(record["prompt"])}],
             "chosen": [{"role": "assistant", "content": pipeline.training_target(record["target_ga"])}],
@@ -138,7 +146,7 @@ def pair_line(record: dict, rejected: dict, results: list[dict], model: str) -> 
                                                       "source_id")}
                     | {"pair": rejected["outcome"], "sample": rejected["sample"], "judged_by": rejected["by"], "model": model,
                        "type_samples": sum(result["outcome"] == rejected["outcome"] for result in results),
-                       "made_from": rejected.get("made_from", NATURAL)}}
+                       "made_from": rejected.get("made_from", NATURAL), "chosen_from": chosen_source(record)}}
 
 
 def no_answer_copies(source_dirs: list[Path], batch: str) -> tuple[list[dict], list[dict]]:
@@ -253,6 +261,7 @@ def build(batch_dirs: list[Path], model: str, copy_dirs: list[Path] = ()) -> tup
                 "kinds": dict(Counter(line["meta"]["kind"] for line in lines)),
                 "judged_by": dict(Counter(line["meta"]["judged_by"] for line in lines)),
                 "made_from": dict(Counter(line["meta"]["made_from"] for line in lines)),
+                "chosen_from": dict(Counter(line["meta"]["chosen_from"] for line in lines)),
                 "copy_batches": [Path(copy_dir).name for copy_dir in copy_dirs], "copies": dict(copies),
                 "dropped_over_refusal": len(dropped), "items": dict(items), "answers": dict(answers),
                 # 입력 규칙이 지난 글인 문항 수(0이어야 한다 — 3회차 답은 받은 입력 그대로라, 학습 입력만 바꾸면 둘이 어긋난다)와
