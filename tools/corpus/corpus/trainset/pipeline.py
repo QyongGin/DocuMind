@@ -143,8 +143,11 @@ def refusal_contact_blocks(record: dict, retrieved: list[dict], family: dict | N
 
 def run_attach(batch_dir: Path, session, ai_url: str, limit: int | None = None,
                log: Callable[[str], None] = print, dates: dict[str, timeline.Dates] | None = None,
-               today: str | None = None, family: dict | None = None) -> Counter:
+               today: str | None = None, family: dict | None = None, require_rerank: bool = False) -> Counter:
     """근거 붙이기: 데이터셋 AI 서버 /query(평가용 옵션)로 운영 프롬프트·근거 8개·학습 전 A.X 답을 받는다.
+
+    require_rerank면 재순위가 실제로 쓰인 근거만 받는다(답없음 예시를 만들려고 다시 붙일 때도 같다, ADR-0055 결정 1).
+    쓰이지 않은 예시는 실패로 남아 다음 실행에서 다시 붙인다.
 
     dates(문서 대장의 게시일·유효 기간)를 주면 예시마다 그날의 서비스 색인 모양으로 근거를 붙인다(ADR-0047):
     그날 없던 문서를 검색 후보에서 빼고 프롬프트의 기준 날짜를 그날로 준다. 어떻게 붙였는지 예시의 timeline에 남긴다.
@@ -154,12 +157,12 @@ def run_attach(batch_dir: Path, session, ai_url: str, limit: int | None = None,
     today = today or date.today().isoformat()
     for record in _todo(batch_dir, "attached", lambda r: r.get("possible") and r.get("question"), limit):
         try:
-            options, info = {}, {}
+            options, info = ({"require_rerank": True} if require_rerank else {}), {}
             if dates is not None:
                 day = timeline.the_day(record.get("ledger_id"), dates, today)
                 keep_old = timeline.keeps_old_versions(record["id"])
                 excluded = timeline.excluded_ledger_ids(day, dates, keep_old)
-                options = {"exclude_ledger_ids": excluded, "as_of": day}
+                options.update({"exclude_ledger_ids": excluded, "as_of": day})
                 info = {"timeline": {"as_of": day, "old_versions": keep_old, "excluded_ledgers": len(excluded)}}
             attached = clients.attach(session, ai_url, record["question"], **options)
             if record["kind"] == "refuse_guide":

@@ -24,3 +24,7 @@ volumes:
   ollama_data:
     external: true
     name: documind_desktop_ollama_data
+  # 재순위 모델(5회차 학습 근거, ADR-0055)도 서비스 스택이 받아 둔 볼륨을 쓴다. 켜는 법은 데이터셋 색인 절차 5절
+  reranker_data:
+    external: true
+    name: documind_desktop_reranker_data

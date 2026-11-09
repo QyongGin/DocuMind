@@ -33,11 +33,13 @@ def parse_json(text: str) -> dict:
 
 def attach(session, ai_url: str, question: str, top_k: int = 8, timeout: float = 600.0,
            exclude_ledger_ids: list[str] | None = None, exclude_chunk_ids: list[str] | None = None,
-           as_of: str | None = None) -> dict:
+           as_of: str | None = None, require_rerank: bool = False) -> dict:
     """데이터셋 AI 서버에 질문을 묻고 운영 프롬프트·근거 8개·학습 전 A.X 답을 받는다.
 
     평가 실행기와 같은 요청이다(`evalset run`). 모델을 거치지 않는 우선 경로 답이면 프롬프트가 없어 실패로 돌려준다.
     뺄 문서(대장 번호)·뺄 원문 청크·기준 날짜는 AI 서버의 평가 전용 칸이다(ADR-0047·0048). 주지 않으면 보내지 않는다.
+    재순위 기록(켜짐·사용 여부·실패 이유)을 함께 돌려준다. require_rerank면 재순위가 실제로 쓰이지 않은 근거를 실패로
+    돌려준다: 재순위 서버가 답하지 않으면 AI 서버는 순위 융합 순서 그대로 답하기 때문이다(ADR-0055 결정 1).
     """
     body = {"question": question, "top_k": top_k, "system_prompt": None, "include_eval_trace": True}
     for key, value in (("exclude_ledger_ids", exclude_ledger_ids), ("exclude_chunk_ids", exclude_chunk_ids),
@@ -52,8 +54,11 @@ def attach(session, ai_url: str, question: str, top_k: int = 8, timeout: float =
         raise ValueError("AI 서버가 평가용 기록(eval_trace)을 돌려주지 않는다")
     if trace.get("answer_path") != "llm" or not trace.get("prompt"):
         raise ValueError(f"생성 모델을 거치지 않은 답(answer_path={trace.get('answer_path')})")
+    rerank = trace.get("rerank")
+    if require_rerank and not (rerank or {}).get("used"):
+        raise ValueError(f"재순위가 쓰이지 않은 근거(rerank={rerank})")
     final = (trace.get("stages") or {}).get("final") or []
-    return {"prompt": trace["prompt"], "context": trace.get("context") or "",
+    return {"prompt": trace["prompt"], "context": trace.get("context") or "", "rerank": rerank,
             "retrieved": [{key: candidate.get(key) for key in ("chunk_id", "document_id", "ledger_id", "chunk_index",
                                                                  "chunk_role")} for candidate in final],
             "ax_answer": body.get("answer"), "runtime": trace.get("runtime")}
