@@ -9,11 +9,13 @@
 
 from __future__ import annotations
 
+import json
 import random
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Callable
+from pathlib import Path
+from typing import Callable, Iterable
 
 
 @dataclass(frozen=True)
@@ -151,6 +153,22 @@ def pick_chunks(kind: Kind, chunks: list[dict], rng: random.Random, boilerplate:
                  if int(second.get("chunk_index") or 0) - int(first.get("chunk_index") or 0) == 1]
         return list(rng.choice(pairs)) if pairs else None
     return [rng.choice(usable)] if usable else None
+
+
+def trained_groups(paths: Iterable[Path]) -> set[str]:
+    """학습 파일(지도 학습 round-*.jsonl, 선호 쌍 pairs.jsonl)의 예시가 쓴 문서 묶음(meta.group_id).
+
+    학습한 모델의 실패를 재는 질문은 그 모델이 학습에서 본 문서를 피한다(5회차, ADR-0055). 계획에만 쓰이고 학습 파일에
+    들지 않은 묶음은 모델이 본 적이 없으니 다시 고를 수 있다. 엉뚱한 근거 종류처럼 문서가 없는 예시는 묶음이 없다.
+    """
+    groups = set()
+    for path in paths:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                group_id = (json.loads(line).get("meta") or {}).get("group_id")
+                if group_id:
+                    groups.add(group_id)
+    return groups
 
 
 def ordered_groups(documents: list[dict], rng: random.Random, skip: set[str] = frozenset()) -> list[list[dict]]:

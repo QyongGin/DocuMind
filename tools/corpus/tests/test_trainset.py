@@ -9,7 +9,7 @@ import pytest
 
 from corpus.trainset import checks, clients, pipeline, prompts
 from corpus.trainset.plan import (KINDS, ROUND1, boilerplate_lines, dataset_documents, draft_text, is_table_chunk,
-                                  pick_chunks, plan, scale)
+                                  pick_chunks, plan, scale, trained_groups)
 
 TABLE = "\n".join([
     "|구분|등록 기간|금액|",
@@ -81,6 +81,20 @@ def test_plan_one_example_per_group_and_kind_fits():
 def test_plan_skips_groups_of_other_batches():
     items = plan(documents(), {"fact": 6}, fetch_chunks, "r2", seed=1, skip_groups={f"공지:{n}" for n in range(5)})
     assert {item["group_id"] for item in items} == {"공지:5"}  # 남은 묶음 하나뿐이라 하나만
+
+
+def test_trained_groups_reads_training_and_pair_files(tmp_path):
+    sft = tmp_path / "round3" / "round-ga.jsonl"
+    sft.parent.mkdir()
+    sft.write_text("\n".join(json.dumps({"id": f"r3-{n}", "messages": [], "meta": {"group_id": f"공지:{n}"}},
+                                        ensure_ascii=False) for n in (0, 1)) + "\n", encoding="utf-8")
+    pairs = tmp_path / "pairs.jsonl"  # 엉뚱한 근거 쌍은 문서가 없어 묶음이 없다
+    pairs.write_text(json.dumps({"id": "r4-1", "meta": {"group_id": "공지:2"}}, ensure_ascii=False) + "\n"
+                     + json.dumps({"id": "r4-2", "meta": {"group_id": None}}) + "\n\n", encoding="utf-8")
+    groups = trained_groups([sft, pairs])
+    assert groups == {"공지:0", "공지:1", "공지:2"}
+    items = plan(documents(), {"fact": 6}, fetch_chunks, "r5", seed=1, skip_groups=groups)
+    assert {item["group_id"] for item in items} == {"공지:3", "공지:4", "공지:5"}  # 학습에서 본 묶음은 고르지 않는다
 
 
 def test_dataset_documents_reads_dataset_uploads(ledger):
