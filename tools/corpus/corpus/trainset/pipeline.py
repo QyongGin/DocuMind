@@ -188,7 +188,12 @@ PROBE_TEMPERATURE = 0.7
 def probe_step(model: str | None = None) -> str:
     """여러 번 받은 답을 둘 단계 이름. 모델을 주지 않으면 학습 전 A.X의 'probes', 주면 모델마다 따로 둔다
     (예: 'probes-ax40light-r3-q4km'). 학습한 모델의 답이 학습 전 A.X의 아는 정도(ADR-0042)에 섞이지 않게 한다."""
-    return "probes" if not model else "probes-" + re.sub(r"[^0-9A-Za-z._-]+", "-", model)
+    return "probes" if not model else f"probes-{model_slug(model)}"
+
+
+def model_slug(model: str) -> str:
+    """모델 이름을 단계 파일 이름에 쓸 글로 바꾼다(예: 'gemma4:26b-a4b-it-qat' → 'gemma4-26b-a4b-it-qat')."""
+    return re.sub(r"[^0-9A-Za-z._-]+", "-", model)
 
 
 def run_probe(batch_dir: Path, session, ollama_url: str, samples: int = PROBE_SAMPLES,
@@ -217,39 +222,51 @@ def run_probe(batch_dir: Path, session, ollama_url: str, samples: int = PROBE_SA
     return counts
 
 
+def draft_target(record: dict, session, ollama_url: str, model: str, shapes: tuple[str, ...] = ("ga",),
+                 counts: Counter | None = None) -> dict:
+    """예시 하나의 목표 답 초안: 모양마다 target_<모양>과 생성 기록(target_generation). 답이 있는 종류에만 답 근거를 함께 준다
+    (거절 종류는 근거만 보고 거절해야 한다). 안내 줄을 다시 쓴 횟수는 counts의 guidance_fix에 센다.
+
+    지시문은 계획한 종류로 만든다. 자동 검사 뒤에는 종류(kind)가 그 목표 답의 행동으로 정한 값이라(ADR-0041), 떨어진 목표 답을
+    다시 쓸 때 kind를 쓰면 답이 없게 만든 근거에 답 근거를 함께 주게 된다. 계획한 종류를 쓰면 처음 쓸 때와 같은 지시문이다."""
+    planned = record.get("kind_planned") or record["kind"]
+    hint = record.get("hint") if KINDS[planned].answerable else ""
+    # 답 근거가 든 블록 번호는 코드가 짚어 준다(ADR-0048 결정 3) — 초안 모델이 번호를 찾다 틀리던 출처 번호 오류를 줄인다
+    sources = checks.hint_blocks(hint, record["prompt"]) if hint else []
+    # 답없음 예시는 코드가 고른 블록의 연락처·사이트만 확인처 후보로 보인다(ADR-0048 결정 2)
+    constructed = record.get("refusal") if planned == "refuse_guide" else None
+    guidance_blocks = constructed.get("contact_blocks") or [] if constructed is not None else None
+    result = {"id": record["id"], "target_generation": {"model": model, **TARGET_OPTIONS}}
+    for shape in shapes:
+        task = prompts.target_prompt(record, record["prompt"], hint, shape, hint_sources=sources,
+                                     guidance_blocks=guidance_blocks)
+        out = clients.generate(session, ollama_url, model, task, **TARGET_OPTIONS)
+        text, generation = out["text"].strip(), out["generation"]
+        # 답이 쓴 근거의 안내 줄이 빠졌으면 검사 결과를 주고 한 번 다시 쓴다(ADR-0046). 엉뚱한 근거 종류는
+        # 질문이 문서에서 오지 않아 근거의 확인처가 질문과 무관하다
+        refused = checks.answer_body(text, shape).startswith(prompts.REFUSALS)
+        missing = [] if planned == "refuse_offtopic" else evidence.missing_guidance(text, record["prompt"], refused)
+        if missing:
+            fixed = clients.generate(session, ollama_url, model, prompts.guidance_fix_prompt(task, text, missing),
+                                     **TARGET_OPTIONS)
+            generation = {**generation, "guidance_fix": {
+                "draft": text, "missing": [f"[출처 {number}] {', '.join(lost)}" for number, _, lost in missing],
+                "generation": fixed["generation"]}}
+            text = fixed["text"].strip()
+            if counts is not None:
+                counts["guidance_fix"] += 1
+        result[f"target_{shape}"] = text
+        result["target_generation"][shape] = generation
+    return result
+
+
 def run_targets(batch_dir: Path, session, ollama_url: str, model: str, shapes: tuple[str, ...] = ("ga",),
                 limit: int | None = None, log: Callable[[str], None] = print) -> Counter:
-    """목표 답 초안. 답이 있는 종류에만 답 근거를 함께 준다(거절 종류는 근거만 보고 거절해야 한다)."""
+    """목표 답 초안(draft_target). 끝난 예시는 건너뛰고 실패한 예시는 다음 실행에서 다시 한다."""
     counts = Counter()
     for record in _todo(batch_dir, "targets", lambda r: bool(r.get("prompt")), limit):
-        hint = record.get("hint") if KINDS[record["kind"]].answerable else ""
-        # 답 근거가 든 블록 번호는 코드가 짚어 준다(ADR-0048 결정 3) — 초안 모델이 번호를 찾다 틀리던 출처 번호 오류를 줄인다
-        sources = checks.hint_blocks(hint, record["prompt"]) if hint else []
-        # 답없음 예시는 코드가 고른 블록의 연락처·사이트만 확인처 후보로 보인다(ADR-0048 결정 2)
-        refusal = record.get("refusal") if (record.get("kind_planned") or record["kind"]) == "refuse_guide" else None
-        guidance_blocks = refusal.get("contact_blocks") or [] if refusal is not None else None
-        result = {"id": record["id"], "target_generation": {"model": model, **TARGET_OPTIONS}}
         try:
-            for shape in shapes:
-                task = prompts.target_prompt(record, record["prompt"], hint, shape, hint_sources=sources,
-                                             guidance_blocks=guidance_blocks)
-                out = clients.generate(session, ollama_url, model, task, **TARGET_OPTIONS)
-                text, generation = out["text"].strip(), out["generation"]
-                # 답이 쓴 근거의 안내 줄이 빠졌으면 검사 결과를 주고 한 번 다시 쓴다(ADR-0046). 엉뚱한 근거 종류는
-                # 질문이 문서에서 오지 않아 근거의 확인처가 질문과 무관하다
-                planned = record.get("kind_planned") or record["kind"]
-                refusal = checks.answer_body(text, shape).startswith(prompts.REFUSALS)
-                missing = [] if planned == "refuse_offtopic" else evidence.missing_guidance(text, record["prompt"], refusal)
-                if missing:
-                    fixed = clients.generate(session, ollama_url, model, prompts.guidance_fix_prompt(task, text, missing),
-                                             **TARGET_OPTIONS)
-                    generation = {**generation, "guidance_fix": {
-                        "draft": text, "missing": [f"[출처 {number}] {', '.join(lost)}" for number, _, lost in missing],
-                        "generation": fixed["generation"]}}
-                    text = fixed["text"].strip()
-                    counts["guidance_fix"] += 1
-                result[f"target_{shape}"] = text
-                result["target_generation"][shape] = generation
+            result = draft_target(record, session, ollama_url, model, shapes, counts)
             counts["made"] += 1
         except (ValueError, KeyError, OSError) as error:
             result = {"id": record["id"], "error": str(error)}

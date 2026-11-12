@@ -1,11 +1,12 @@
 """목표 답이 떨어진 문항에서 학습한 모델의 답을 목표 답 후보로 쓴다(ADR-0056). 가나대학 합성 데이터로."""
 
 from corpus.cli import main
-from corpus.trainset import judge, model_targets, pairs, pipeline, prompts
-from test_trainset import record
+from corpus.trainset import cli, judge, model_targets, pairs, pipeline, prompts
+from test_trainset import FakeSession, record
 from test_trainset_refusal import HINT, WITHOUT_ANSWER
 
 MODEL = "ax40light-r4:q4km"
+REWRITER = "gemma4:26b-a4b-it-qat"  # 떨어진 목표 답을 다시 쓰는 초안 모델(ADR-0057 결정 3)
 REFUSAL = prompts.REFUSAL
 GOOD = record()["target_ga"]  # 자동 검사를 통과하는 목표 답(8월 18일~8월 29일, 학사지원팀)
 RIGHT = "휴학은 8월 29일까지 신청하면 됩니다. 문의는 학사지원팀(02-000-0000)입니다.\n[출처 1]"
@@ -155,3 +156,70 @@ def test_verdict_given_under_another_kind_is_judged_again(tmp_path):
     assert model_targets.promote(batch, MODEL) == {"대상": 1, "올림": 1}
     item = pipeline.merged(batch)[0]
     assert (item["target_ga"], item["kind"], item["keep"]["ga"]) == (REFUSED, "refuse_guide", True)
+
+
+def test_rewrite_drafts_only_answer_side_failures_into_its_own_step(tmp_path):
+    batch = make_batch(tmp_path / "a", rows())
+    session = FakeSession({"response": GOOD})
+    assert model_targets.rewrite(batch, session, "http://o", REWRITER, log=lambda line: None) == {"made": 3}
+    assert [body["model"] for _, body in session.sent] == [REWRITER] * 3  # g1·g2·g6만. 통과한 g3, 질문·근거 탓인 g4·g5는 뺀다
+    rewritten = pipeline.read(batch, model_targets.rewrite_step(REWRITER))
+    assert sorted(rewritten) == ["g1", "g2", "g6"] and rewritten["g1"]["target_ga"] == GOOD
+    generation = rewritten["g1"]["target_generation"]
+    assert (generation["model"], generation["replaces"]) == (REWRITER, "gemma4:12b-it-qat")
+    assert generation["temperature"] == pipeline.TARGET_OPTIONS["temperature"]  # 생성 설정은 처음 쓸 때와 같다
+    g1 = next(item for item in pipeline.merged(batch) if item["id"] == "g1")
+    assert g1["target_ga"] == OUTSIDE and g1["keep"]["ga"] is False  # 판정 전에는 문항의 목표 답을 바꾸지 않는다
+    assert model_targets.rewrite(batch, session, "http://o", REWRITER, log=lambda line: None) == {}  # 쓴 문항은 건너뜀
+    assert len(session.sent) == 3
+
+
+def test_rewrite_prompt_follows_the_planned_kind(tmp_path):
+    batch = refusal_batch(tmp_path / "a")  # 거절로 계획했지만 떨어진 목표 답이 답해서 문항의 종류는 '답'이다
+    session = FakeSession({"response": REFUSED})
+    assert model_targets.rewrite(batch, session, "http://o", REWRITER, log=lambda line: None) == {"made": 1}
+    task = session.sent[0][1]["prompt"]
+    assert "[답없음 예시]" in task and "[질문을 만든 글에서 답이 되는 부분]" not in task and HINT not in task
+    assert [candidate["kind"] for candidate in model_targets.candidates(batch, REWRITER, rewritten=True)] == ["refuse_guide"]
+
+
+def test_rewritten_target_is_promoted_only_after_checks_and_verdict(tmp_path):
+    batch = make_batch(tmp_path / "train" / "a", rows())
+    pipeline.write(batch, model_targets.rewrite_step(REWRITER), [
+        {"id": item, "target_ga": text, "target_generation": {"model": REWRITER, "replaces": "gemma4:12b-it-qat"}}
+        for item, text in (("g1", GOOD), ("g2", OUTSIDE), ("g6", RIGHT))])
+    found = model_targets.candidates(batch, REWRITER, rewritten=True)
+    assert [candidate["id"] for candidate in found] == ["g1#1", "g6#1"]  # g2는 근거에 없는 날짜라 자동 검사에서 빠진다
+    assert model_targets.promote(batch, REWRITER, rewritten=True) == {"대상": 3, "판정 전": 2, "자동 검사를 통과한 후보 없음": 1}
+    model_targets.record_verdicts(batch, REWRITER, found, [{"id": "g1#1", "verdict": "통과", "category": ""},
+                                                           {"id": "g6#1", "verdict": "탈락", "category": "안내 빠짐"}],
+                                  rewritten=True)
+    # 다시 쓴 목표 답의 판정은 학습한 모델 답의 판정과 다른 파일에 쌓인다
+    assert pipeline.read(batch, model_targets.verdict_step(MODEL)) == {}
+    counts = model_targets.promote(batch, REWRITER, rewritten=True)
+    assert counts == {"대상": 3, "올림": 1, "통과한 후보 없음": 1, "자동 검사를 통과한 후보 없음": 1}
+    merged = {item["id"]: item for item in pipeline.merged(batch)}
+    assert merged["g1"]["target_ga"] == GOOD and merged["g1"]["target_generation"]["model"] == REWRITER
+    assert pipeline.final_verdict(merged["g1"]) == "통과" and merged["g1"]["keep"]["ga"] is True
+    assert merged["g6"]["target_ga"] == GOOD and merged["g6"]["category"] == "안내 빠짐"  # 떨어진 문항은 처음 기록 그대로
+    lines, manifest = pairs.build([batch], MODEL)  # 4회차 답 가운데 근거에 없는 날짜를 말한 답이 비선호 답이 된다
+    g1_line = next(line for line in lines if line["id"] == "g1")
+    assert g1_line["chosen"][0]["content"] == GOOD and g1_line["rejected"][0]["content"] == OUTSIDE
+    assert g1_line["meta"]["chosen_from"] == REWRITER and manifest["chosen_from"] == {REWRITER: 1}
+
+
+def test_targets_and_judge_commands_rewrite_then_promote(tmp_path, monkeypatch, capsys):
+    make_batch(tmp_path / "train" / "a", rows())
+    session = FakeSession({"response": GOOD})
+    monkeypatch.setattr(cli.requests, "Session", lambda: session)
+    monkeypatch.setattr(judge, "run", lambda records, work, model, jobs=2: (
+        [{"id": record["id"], "verdict": "통과", "category": ""} for record in records], []))
+    base = ["--root", str(tmp_path / "corpus"), "trainset"]
+    assert main([*base, "targets", "--batch", "a", "--rewrite-failed", "--model", REWRITER, "--ollama-url", "http://o"]) == 0
+    assert len(session.sent) == 3 and pipeline.read(tmp_path / "train" / "a", "targets")["g1"]["target_ga"] == OUTSIDE
+    assert main([*base, "judge", "--batch", "a", "--rewritten-by", REWRITER, "--work", str(tmp_path / "work")]) == 0
+    out = capsys.readouterr().out.strip().splitlines()
+    assert out[-2].startswith(f"{REWRITER}이 다시 쓴 목표 답 3개")
+    assert out[-1] == "대상 3 · 올림 3 · 통과한 후보 없음 0 · 자동 검사를 통과한 후보 없음 0 · 판정 전 0 · 실패한 작업 단위 0"
+    assert all(item["target_generation"]["model"] == REWRITER
+               for item in pipeline.merged(tmp_path / "train" / "a") if item["id"] in ("g1", "g2", "g6"))
