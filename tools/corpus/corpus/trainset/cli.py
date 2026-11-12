@@ -192,7 +192,7 @@ def _judge_as_target(batch_dir: Path, args) -> int:
         work = Path(args.work) if args.work else Path(tempfile.mkdtemp(prefix="trainset-judge-as-target-"))
         print(f"목표 답 후보로 판정할 {args.as_target} 답 {len(todo)}개 · 작업 폴더 {work}")
         results, failed = judge.run(todo, work, args.model, jobs=args.jobs)
-        pipeline.write(batch_dir, model_targets.verdict_step(args.as_target), results)
+        model_targets.record_verdicts(batch_dir, args.as_target, todo, results)
         for name, why in failed:
             print(f"실패 {name}: {why}")
     counts = model_targets.promote(batch_dir, args.as_target)
