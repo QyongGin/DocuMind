@@ -24,6 +24,7 @@ def flags_off(monkeypatch):
     for name in FLAGS:
         monkeypatch.setattr(main, name, False)
     monkeypatch.setattr(main, "EXP_EXPAND_TABLE_CHARS", 0)
+    monkeypatch.setattr(main, "EXP_EXPAND_TABLE_BUDGET_CHARS", 0)
     monkeypatch.setattr(main, "EXP_TABLE_FACT_FORMAT", "")
     monkeypatch.setattr(main, "EXP_CONTEXT_ORDER", "")
 
@@ -155,3 +156,22 @@ def test_prompt_rule_candidates_add_lines(monkeypatch):
     assert "'근거 행:'" not in before
     assert after.endswith("[답변 작성]\n") and "\n\n[답변 작성]" in after
     assert main._table_experiment_settings() == {"copy_rows_first": True, "check_each_row": True}
+
+
+def test_expand_within_budget_keeps_blocks_and_respects_budget(monkeypatch):
+    store = {"7_4": (fx.PIECE_2, {}), "7_3": (fx.PIECE_1, {})}
+    monkeypatch.setattr(main, "_load_raw_chunks_by_id", lambda chunk_ids: {c: store[c] for c in chunk_ids if c in store})
+    question = fx.QUESTIONS[1]
+    analysis = main._analyze_query(question)
+    metas = main._attach_runtime_table_facts(question, fx.docs(), [dict(m) for m in fx.metas()], analysis)
+    before = main._build_context(fx.docs(), metas, fx.ids(), analysis)
+    monkeypatch.setattr(main, "EXP_EXPAND_TABLE_CHARS", 4000)
+    monkeypatch.setattr(main, "EXP_EXPAND_TABLE_BUDGET_CHARS", 100000)
+    roomy = main._build_context(fx.docs(), metas, fx.ids(), analysis)
+    assert roomy.count("[출처 ") == before.count("[출처 ") == 3  # 블록 수와 순서는 그대로
+    first = roomy.split("\n\n[출처 ")[0]
+    assert "|인문|라마경영과 ★|2|40|6|1|" in first.split("전체 내용:")[1]  # 1위 표 블록을 넓힘
+    monkeypatch.setattr(main, "EXP_EXPAND_TABLE_BUDGET_CHARS", len(before) + 10)
+    tight = main._build_context(fx.docs(), metas, fx.ids(), analysis)
+    assert tight == before  # 넓히면 예산을 넘으니 원래 조각을 둔다
+    assert main._table_experiment_settings() == {"expand_table_chars": 4000, "expand_table_budget_chars": len(before) + 10}

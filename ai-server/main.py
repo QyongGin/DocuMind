@@ -175,6 +175,8 @@ EXP_COPY_ROWS_FIRST = _env_bool("AI_EXP_COPY_ROWS_FIRST", False)  # 답 앞에 �
 EXP_CHECK_EACH_ROW = _env_bool("AI_EXP_CHECK_EACH_ROW", False)  # 조건에 맞는 행을 하나씩 확인하게 하기
 # 표 조각을 이웃 청크에서 모을 때 한쪽으로 볼 최대 조각 수(표 전체로 넓히기·같은 표 조각 합치기 공통)
 EXP_TABLE_NEIGHBOR_LIMIT = _env_int("AI_EXP_TABLE_NEIGHBOR_LIMIT", 12)
+# 표 전체로 넓히기의 근거 블록 전체 글자 예산(0이면 예산 없음). 순위가 높은 표부터 넓히고 넘치면 원래 조각을 둔다
+EXP_EXPAND_TABLE_BUDGET_CHARS = _env_int("AI_EXP_EXPAND_TABLE_BUDGET_CHARS", 0, minimum=0)
 # 표 청크 후보(#259 설계 3-3): AI_EXP_CHUNK_*. 모두 꺼지면 지금 색인과 같은 청크
 EXP_CHUNK = table_chunk_experiments.from_env()
 
@@ -4690,9 +4692,35 @@ def _apply_table_context_experiments(
     return docs, metadatas, ids
 
 
+def _expand_tables_within_budget(
+    docs: list[str], metadatas: list[dict], ids: list[str], analysis: QueryAnalysis
+) -> tuple[list[str], list[dict]]:
+    """표 전체로 넓히기(예산 판, 실험): 검색 순위가 높은 표 블록부터 이웃 조각을 모아 넓히되, 넓힌 뒤 근거 블록 전체가
+    EXP_EXPAND_TABLE_BUDGET_CHARS를 넘으면 그 블록은 원래 조각을 둔다. 근거 블록 수와 순서는 바꾸지 않는다."""
+    docs, metadatas = list(docs), [meta or {} for meta in metadatas]
+
+    def context_length() -> int:
+        return len("\n\n".join(_format_context_block(index, doc, meta, chunk_id, analysis)
+                                 for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids), start=1)))
+
+    for position, (doc, meta) in enumerate(zip(list(docs), list(metadatas))):
+        pieces = _table_neighbor_pieces(doc, meta, EXP_EXPAND_TABLE_CHARS)
+        if len(pieces) <= 1:
+            continue
+        before_doc, before_meta = docs[position], metadatas[position]
+        docs[position] = _join_table_pieces(pieces)
+        metadatas[position] = {**meta, _EXP_JOINED_TABLE_KEY: True}
+        if context_length() > EXP_EXPAND_TABLE_BUDGET_CHARS:
+            docs[position], metadatas[position] = before_doc, before_meta
+    return docs, metadatas
+
+
 def _build_context(docs: list[str], metadatas: list[dict], ids: list[str], analysis: QueryAnalysis) -> str:
     """검색된 청크들을 출처 단위 context로 변환한다."""
-    docs, metadatas, ids = _apply_table_context_experiments(docs, metadatas, ids)
+    if EXP_EXPAND_TABLE_CHARS and EXP_EXPAND_TABLE_BUDGET_CHARS:
+        docs, metadatas = _expand_tables_within_budget(docs, metadatas, ids, analysis)
+    else:
+        docs, metadatas, ids = _apply_table_context_experiments(docs, metadatas, ids)
     blocks = []
     for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids), start=1):
         blocks.append(_format_context_block(index, doc, meta or {}, chunk_id, analysis))
@@ -6837,6 +6865,7 @@ def _table_experiment_settings() -> dict:
         "table_full_text": EXP_TABLE_FULL_TEXT,
         "merge_table_pieces": EXP_MERGE_TABLE_PIECES,
         "expand_table_chars": EXP_EXPAND_TABLE_CHARS,
+        "expand_table_budget_chars": EXP_EXPAND_TABLE_BUDGET_CHARS,
         "row_fact_to_source": EXP_ROW_FACT_TO_SOURCE,
         "table_fact_format": EXP_TABLE_FACT_FORMAT,
         "context_order": EXP_CONTEXT_ORDER,
