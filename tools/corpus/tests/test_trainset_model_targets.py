@@ -3,6 +3,7 @@
 from corpus.cli import main
 from corpus.trainset import judge, model_targets, pairs, pipeline, prompts
 from test_trainset import record
+from test_trainset_refusal import HINT, WITHOUT_ANSWER
 
 MODEL = "ax40light-r4:q4km"
 REFUSAL = prompts.REFUSAL
@@ -110,3 +111,47 @@ def test_judge_command_with_as_target_judges_then_promotes(tmp_path, monkeypatch
     assert g2["target_ga"] == RIGHT_SHORT and g2["target_generation"]["sample"] == 1  # 통과한 후보 중 앞 번호
     seen.clear()
     assert main(command) == 0 and seen == []  # 판정한 후보는 다시 판정하지 않는다
+    kinds = {verdict["judged_kind"] for verdict in pipeline.read(tmp_path / "train" / "a", model_targets.verdict_step(MODEL)).values()}
+    assert kinds == {"fact"}  # 판정자에게 보인 종류를 판정 기록에 남긴다
+
+
+ANSWERED = "학위복 대여료는 없습니다.\n[출처 1]"  # 답이 없게 만든 근거인데 거절하지 않음 — 자동 검사에서 떨어진다
+REFUSED = f"{REFUSAL} 학위복 대여는 학생지원팀(02-333-4444)에 문의하세요.\n[출처 1]"
+
+
+def refusal_batch(folder):
+    """거절 + 확인처로 계획한 문항 하나. Gemma 목표 답은 거절하지 않아 떨어졌고(종류가 '답'으로 바뀜), 4회차 답은 거절했다."""
+    pipeline.write(folder, "plan", [{"id": "n1", "kind": "refuse_guide", "user": "재학생", "chunks": []}], mode="w")
+    pipeline.write(folder, "questions", [{"id": "n1", "question": "학위복 빌리면 돈 내?", "hint": HINT, "possible": True}])
+    pipeline.write(folder, "attached", [{"id": "n1", "prompt": WITHOUT_ANSWER,
+                                         "refusal": {"removed_chunks": ["77_0"], "contact_blocks": [1]}}])
+    pipeline.write(folder, "targets", [{"id": "n1", "target_ga": ANSWERED,
+                                        "target_generation": {"model": "gemma4:12b-it-qat"}}])
+    pipeline.run_checks(folder)
+    pipeline.write(folder, pipeline.probe_step(MODEL), [{"id": "n1", "ax_samples": [REFUSED, ANSWERED]}])
+    return folder
+
+
+def test_candidate_is_judged_as_the_kind_of_its_own_answer(tmp_path):
+    batch = refusal_batch(tmp_path / "a")
+    item = pipeline.merged(batch)[0]
+    assert (item["kind"], item["kind_planned"]) == ("fact", "refuse_guide")  # 문항의 종류는 떨어진 목표 답을 따른 값이다
+    found = model_targets.candidates(batch, MODEL)
+    assert [candidate["id"] for candidate in found] == ["n1#1"]  # 거절하지 않은 2번은 자동 검사에서 빠진다
+    assert (found[0]["kind"], found[0]["item_kind"]) == ("refuse_guide", "fact")
+    assert judge.example(found[0])["종류"] == "거절 + 확인처"  # 판정자는 후보 답의 종류로 본다
+
+
+def test_verdict_given_under_another_kind_is_judged_again(tmp_path):
+    batch = refusal_batch(tmp_path / "a")
+    # 종류를 남기지 않은 지난 판정: 문항의 종류('답')로 보이고 받은 탈락이라 쓰지 않는다
+    pipeline.write(batch, model_targets.verdict_step(MODEL), [{"id": "n1#1", "verdict": "탈락", "category": "거절 오류"}])
+    assert [candidate["id"] for candidate in model_targets.pending(batch, MODEL)] == ["n1#1"]
+    assert model_targets.promote(batch, MODEL) == {"대상": 1, "판정 전": 1}
+    todo = model_targets.pending(batch, MODEL)
+    model_targets.record_verdicts(batch, MODEL, todo, [{"id": "n1#1", "verdict": "통과", "category": ""}])
+    assert pipeline.read(batch, model_targets.verdict_step(MODEL))["n1#1"]["judged_kind"] == "refuse_guide"
+    assert model_targets.pending(batch, MODEL) == []
+    assert model_targets.promote(batch, MODEL) == {"대상": 1, "올림": 1}
+    item = pipeline.merged(batch)[0]
+    assert (item["target_ga"], item["kind"], item["keep"]["ga"]) == (REFUSED, "refuse_guide", True)

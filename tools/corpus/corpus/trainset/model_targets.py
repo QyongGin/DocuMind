@@ -4,6 +4,9 @@
 그 문항에서 학습한 모델이 이미 낸 답(probe)을 하나씩 목표 답 자리에 넣어, 목표 답과 같은 자동 검사와 같은 Claude 판정을
 거친다. 둘 다 통과한 답 중 번호가 가장 앞선 답을 그 문항의 목표 답으로 올린다. Claude는 판정만 하고 글은 쓰지 않는다
 (ADR-0010·0040). 올린 뒤에는 지금 흐름 그대로 나머지 답을 새 목표 답과 비교해 판정하고(judge-probes) 쌍을 만든다(pairs).
+
+후보의 종류는 그 후보 답으로 다시 정한다(ADR-0041). 문항의 종류는 떨어진 목표 답의 행동으로 정해진 값이라, 그대로 두면
+거절해야 맞는 문항에서 거절한 후보가 판정자에게 '답' 종류로 보인다. 판정 기록에는 판정자에게 보인 종류를 남긴다.
 """
 
 from __future__ import annotations
@@ -41,7 +44,8 @@ def _targeted(batch_dir: Path) -> list[dict]:
 
 def candidates(batch_dir: Path, model: str) -> list[dict]:
     """목표 답 후보: 대상 문항마다 그 모델의 답을 목표 답 자리에 넣은 예시. 번호는 '<문항>#<몇 번째 답>'이고, 목표 답과 같은
-    자동 검사를 통과한 답만 담는다. 글이 같은 답은 앞 번호 하나만 둔다(같은 판정을 두 번 받지 않게)."""
+    자동 검사를 통과한 답만 담는다. 글이 같은 답은 앞 번호 하나만 둔다(같은 판정을 두 번 받지 않게).
+    종류(kind)는 후보 답으로 다시 정한 종류이고, 문항의 종류는 item_kind에 남긴다."""
     probes = pipeline.read(batch_dir, pipeline.probe_step(model))
     found = []
     for record in _targeted(batch_dir):
@@ -53,14 +57,31 @@ def candidates(batch_dir: Path, model: str) -> list[dict]:
             candidate = {**record, "id": judge.answer_id(record["id"], number), "target_ga": answer}
             result = checks.check(candidate)
             if not result["drop"]:
-                found.append({**candidate, "item": record["id"], "sample": number, "result": {"ga": result}})
+                found.append({**candidate, "kind": result["kind"], "item_kind": record["kind"], "item": record["id"],
+                              "sample": number, "result": {"ga": result}})
     return found
+
+
+def judged(candidate: dict, verdicts: dict[str, dict]) -> dict | None:
+    """그 후보의 판정. 판정자에게 보인 종류가 지금 후보의 종류와 다른 판정은 쓰지 않는다(다시 판정한다).
+    종류를 남기지 않은 지난 판정은 문항의 종류로 받은 판정이다."""
+    verdict = verdicts.get(candidate["id"])
+    if verdict and (verdict.get("judged_kind") or candidate["item_kind"]) == candidate["kind"]:
+        return verdict
+    return None
 
 
 def pending(batch_dir: Path, model: str) -> list[dict]:
     """아직 판정 전인 후보."""
-    judged = pipeline.read(batch_dir, verdict_step(model))
-    return [candidate for candidate in candidates(batch_dir, model) if candidate["id"] not in judged]
+    verdicts = pipeline.read(batch_dir, verdict_step(model))
+    return [candidate for candidate in candidates(batch_dir, model) if judged(candidate, verdicts) is None]
+
+
+def record_verdicts(batch_dir: Path, model: str, judged_candidates: list[dict], results: list[dict]) -> None:
+    """후보 판정을 판정자에게 보인 종류(judged_kind)와 함께 남긴다. 칸 이름을 kind로 두지 않는 것은, 올린 후보의 판정이
+    문항의 판정 줄이 될 때(promote) 자동 검사가 정한 문항의 종류를 덮지 않게 하려는 것이다."""
+    kinds = {candidate["id"]: candidate["kind"] for candidate in judged_candidates}
+    pipeline.write(batch_dir, verdict_step(model), [{**result, "judged_kind": kinds[result["id"]]} for result in results])
 
 
 def promote(batch_dir: Path, model: str) -> Counter:
@@ -72,24 +93,24 @@ def promote(batch_dir: Path, model: str) -> Counter:
     by_item: dict[str, list[dict]] = {}
     for candidate in candidates(batch_dir, model):
         by_item.setdefault(candidate["item"], []).append(candidate)
-    counts, targets, judged = Counter(대상=len(targeted)), [], []
+    counts, targets, item_verdicts = Counter(대상=len(targeted)), [], []
     for item in targeted:
         found = by_item.get(item, [])
-        passed = [candidate for candidate in found if (verdicts.get(candidate["id"]) or {}).get("verdict") == "통과"]
+        passed = [candidate for candidate in found if (judged(candidate, verdicts) or {}).get("verdict") == "통과"]
         if passed:
             chosen = passed[0]  # 후보는 답 번호 순서다
             targets.append({"id": item, "target_ga": chosen["target_ga"],
                             "target_generation": {"from": model, "sample": chosen["sample"]}})
-            judged.append({**verdicts[chosen["id"]], "id": item, "from": model, "sample": chosen["sample"]})
+            item_verdicts.append({**verdicts[chosen["id"]], "id": item, "from": model, "sample": chosen["sample"]})
             counts["올림"] += 1
         elif not found:
             counts["자동 검사를 통과한 후보 없음"] += 1
-        elif any(candidate["id"] not in verdicts for candidate in found):
+        elif any(judged(candidate, verdicts) is None for candidate in found):
             counts["판정 전"] += 1
         else:
             counts["통과한 후보 없음"] += 1
     if targets:
         pipeline.write(batch_dir, "targets", targets)
-        pipeline.write(batch_dir, "judged", judged)
+        pipeline.write(batch_dir, "judged", item_verdicts)
         pipeline.run_checks(batch_dir)
     return counts
