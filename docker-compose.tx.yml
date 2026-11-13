@@ -1,0 +1,44 @@
+# 표 근거 실험(#259) 단계 2 — 후보 색인 전용 Chroma와 AI 서버. 서비스 색인 볼륨(chroma_data)을 쓰지 않는다.
+# 후보 색인 볼륨은 서비스 색인을 복사해 만든 뒤(서비스 볼륨은 읽기만) 평가 몫 PDF만 후보 설정으로 다시 색인한다.
+# 사용(데스크탑): TX_CHROMA_VOLUME=<후보 볼륨> AI_EXP_CHUNK_...=값 docker compose --project-name documind_desktop \
+#   -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.eval.yml -f docker-compose.exp.yml \
+#   -f docker-compose.tx.yml --env-file .env up -d tx-chromadb tx-ai-server
+# 맥북 실행기는 SSH 터널로 127.0.0.1:18100을 부른다. 끝나면 두 서비스를 멈춘다(볼륨은 지우지 않는다).
+services:
+  tx-chromadb:
+    image: chromadb/chroma:1.5.5
+    expose:
+      - "8000"
+    volumes:
+      - tx_chroma:/data
+    environment:
+      TZ: Asia/Seoul
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8000'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  tx-ai-server:
+    extends:
+      file: docker-compose.yml
+      service: ai-server
+    depends_on:
+      tx-chromadb:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${TX_AI_PORT:-18100}:8000"
+    environment:
+      CHROMA_HOST: tx-chromadb
+      AI_EXP_CHUNK_GRID: ${AI_EXP_CHUNK_GRID:-false}
+      AI_EXP_CHUNK_HEADER_ALL: ${AI_EXP_CHUNK_HEADER_ALL:-false}
+      AI_EXP_CHUNK_CROSS_PAGE: ${AI_EXP_CHUNK_CROSS_PAGE:-false}
+      AI_EXP_CHUNK_NOTES: ${AI_EXP_CHUNK_NOTES:-}
+      AI_EXP_CHUNK_TABLE_FORMAT: ${AI_EXP_CHUNK_TABLE_FORMAT:-}
+      AI_EXP_CHUNK_TABLE_MAX: ${AI_EXP_CHUNK_TABLE_MAX:-0}
+
+volumes:
+  tx_chroma:
+    external: true
+    name: ${TX_CHROMA_VOLUME:-documind_tx_unset}
