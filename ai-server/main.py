@@ -160,6 +160,20 @@ SERVICE_TIMEZONE = ZoneInfo("Asia/Seoul")
 # 평가 전용 제외 목록이 있을 때 벡터 검색을 늘려 받는 상한. 빼고 남은 후보가 검색 개수에 못 미치면 두 배씩 늘린다
 VECTOR_EXCLUSION_MAX_RESULTS = _env_int("AI_VECTOR_EXCLUSION_MAX_RESULTS", 400)
 OPENDATALOADER_JSON_TABLE_FACTS_ENABLED = _env_bool("OPENDATALOADER_JSON_TABLE_FACTS_ENABLED", False)
+# 표 근거 실험 후보(docs/rag/m2/표-근거-실험-설계-20261114.md 3-1, #259). 프롬프트에 표 근거를 넣는 법만 바꾸고 색인은 그대로다.
+# 모두 기본 꺼짐이고, 꺼진 상태의 근거 블록·프롬프트는 실험 코드를 넣기 전과 글자까지 같다(tests/test_table_experiment_flags.py)
+EXP_DROP_TABLE_BRIDGE = _env_bool("AI_EXP_DROP_TABLE_BRIDGE", False)  # 추측 줄 빼기(질문 의도 추출 정보의 표 조합 줄)
+EXP_DROP_INTENT_PRIORITY = _env_bool("AI_EXP_DROP_INTENT_PRIORITY", False)  # '질문 의도 추출 정보 우선 사용' 지시만 빼기
+EXP_TABLE_FULL_TEXT = _env_bool("AI_EXP_TABLE_FULL_TEXT", False)  # 표가 든 근거 블록에만 청크 원문(원본 표) 넣기
+EXP_MERGE_TABLE_PIECES = _env_bool("AI_EXP_MERGE_TABLE_PIECES", False)  # 검색된 같은 표 조각을 머리글 하나로 합치기
+EXP_EXPAND_TABLE_CHARS = _env_int("AI_EXP_EXPAND_TABLE_CHARS", 0, minimum=0)  # 표 전체로 넓히기(이웃 조각을 이 글자 수까지, 0이면 끔)
+EXP_ROW_FACT_TO_SOURCE = _env_bool("AI_EXP_ROW_FACT_TO_SOURCE", False)  # 행 문장은 검색에만, 프롬프트에는 원본 청크
+EXP_TABLE_FACT_FORMAT = os.getenv("AI_EXP_TABLE_FACT_FORMAT", "").strip()  # 표 검색 정보 줄 모양: bracket(행 경계 표시), keyvalue
+EXP_CONTEXT_ORDER = os.getenv("AI_EXP_CONTEXT_ORDER", "").strip()  # ends: 관련 높은 근거를 앞과 끝에
+EXP_COPY_ROWS_FIRST = _env_bool("AI_EXP_COPY_ROWS_FIRST", False)  # 답 앞에 근거 표의 해당 행을 옮겨 쓰게 하기
+EXP_CHECK_EACH_ROW = _env_bool("AI_EXP_CHECK_EACH_ROW", False)  # 조건에 맞는 행을 하나씩 확인하게 하기
+# 표 조각을 이웃 청크에서 모을 때 한쪽으로 볼 최대 조각 수(표 전체로 넓히기·같은 표 조각 합치기 공통)
+EXP_TABLE_NEIGHBOR_LIMIT = _env_int("AI_EXP_TABLE_NEIGHBOR_LIMIT", 12)
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
     logger.warning(
@@ -4024,7 +4038,7 @@ def _attach_runtime_table_facts(question: str, docs: list[str], metadatas: list[
             analysis is not None
             and _allow_cost_table_subject_fallback(doc, runtime_meta, analysis)
         )
-        if analysis is not None:
+        if analysis is not None and not EXP_DROP_TABLE_BRIDGE:
             can_extract_evidence = analysis.intent != "cost" or allow_cost_subject_fallback
             if can_extract_evidence:
                 bridge_source_facts = _get_matched_table_facts(runtime_meta) + extracted_facts
@@ -4405,12 +4419,19 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     if not relevant_excerpt:
         relevant_excerpt = _select_relevant_excerpt(doc, analysis.context_terms)
     matched_table_facts = _get_matched_table_facts(meta)
+    if EXP_ROW_FACT_TO_SOURCE:
+        matched_table_facts = []  # 행 문장은 검색에만 쓰고 프롬프트에는 원본 청크를 준다(아래에서 원문을 넣음)
+    if EXP_TABLE_FACT_FORMAT:
+        matched_table_facts = [_reformat_table_fact(fact, EXP_TABLE_FACT_FORMAT) for fact in matched_table_facts]
     fact_text = "\n".join(matched_table_facts)
 
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
     evidence_fact_block = f"\n질문 의도 추출 정보:\n{evidence_facts}" if evidence_facts else ""
     has_structured_evidence = bool(fact_text or evidence_facts)
-    if relevant_excerpt and has_structured_evidence and not CONTEXT_FULL_TEXT_ENABLED:
+    # 이은 표는 발췌만 두면 이은 행이 빠지므로 전체 내용을 함께 준다
+    table_full_text = (EXP_TABLE_FULL_TEXT or EXP_ROW_FACT_TO_SOURCE or bool(meta.get(_EXP_JOINED_TABLE_KEY))) \
+        and _has_markdown_table(doc)
+    if relevant_excerpt and has_structured_evidence and not CONTEXT_FULL_TEXT_ENABLED and not table_full_text:
         # [#110 실험1b] 구조화 근거(표 검색 정보 또는 질문 의도 추출 정보)가 하나라도 있으면
         # 중복·노이즈인 원문 전체 덤프(전체 내용)를 빼고 발췌만 남겨 7.8B 모델이 답을 놓치지 않게 한다.
         # 구조화 근거가 답을 실제로 담고 있는지는 확인하지 않으므로, 답이 원문에만 있으면 놓칠 수 있다.
@@ -4421,8 +4442,161 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     return f"[출처 {index}]\n{metadata}{table_fact_block}{evidence_fact_block}\n전체 내용:\n{doc.strip()}"
 
 
+# 합치기·넓히기로 조각을 이은 근거 블록 표시(프롬프트 안에서만 쓰고 응답 출처에는 나가지 않는다)
+_EXP_JOINED_TABLE_KEY = "_exp_joined_table"
+_MARKDOWN_TABLE_LINE = re.compile(r"^\s*\|.*\|\s*$")
+_TABLE_SEPARATOR_LINE = re.compile(r"^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$")
+_TABLE_FACT_PARTS = re.compile(r"^(?P<head>.*?행 정보는\s*)(?P<pairs>.*?)(?P<tail>이다\.?|\.\.\.)?$", re.S)
+
+
+def _has_markdown_table(text: str) -> bool:
+    """청크에 마크다운 표 줄이 있는가(표 근거 실험 후보가 표 블록만 고를 때 쓴다)."""
+    return any(_MARKDOWN_TABLE_LINE.match(line) for line in (text or "").splitlines())
+
+
+def _reformat_table_fact(fact: str, style: str) -> str:
+    """표 검색 정보 한 줄('…행 정보는 열=값; 열=값이다.')의 칸 묶음 모양만 바꾼다(표 근거 실험 후보).
+
+    bracket: 칸마다 '(열: 값)'으로 행 경계를 드러낸다. keyvalue: '{열: 값, …}'. 모양이 다르면 그대로 둔다.
+    """
+    match = _TABLE_FACT_PARTS.match(fact.strip())
+    if not match or "=" not in match.group("pairs"):
+        return fact
+    pairs = []
+    for part in match.group("pairs").split("; "):
+        key, sep, value = part.partition("=")
+        pairs.append((key.strip(), value.strip()) if sep else ("", part.strip()))
+    if style == "bracket":
+        body = " ".join(f"({key}: {value})" if key else f"({value})" for key, value in pairs)
+    elif style == "keyvalue":
+        body = "{" + ", ".join(f"{key}: {value}" if key else value for key, value in pairs) + "}"
+    else:
+        return fact
+    truncated = "..." if (match.group("tail") or "").startswith("...") else ""
+    return f"{match.group('head').rstrip()} {body}{truncated}"
+
+
+def _table_header_lines(text: str) -> list[str]:
+    """청크의 첫 마크다운 표 머리(머리 줄 + 구분 줄). 표가 없으면 빈 목록."""
+    lines = (text or "").splitlines()
+    for index, line in enumerate(lines[:-1]):
+        if _MARKDOWN_TABLE_LINE.match(line) and _TABLE_SEPARATOR_LINE.match(lines[index + 1]):
+            return [line.strip(), lines[index + 1].strip()]
+    return []
+
+
+def _table_body_after_header(text: str, header: list[str]) -> str:
+    """조각 글에서 되풀이된 표 머리(머리 줄 + 구분 줄)를 한 번 빼고 나머지를 돌려준다."""
+    lines = (text or "").splitlines()
+    for index in range(len(lines) - 1):
+        if lines[index].strip() == header[0] and lines[index + 1].strip() == header[1]:
+            return "\n".join(lines[:index] + lines[index + 2:]).strip()
+    return (text or "").strip()
+
+
+def _load_raw_chunks_by_id(chunk_ids: list[str]) -> dict[str, tuple[str, dict]]:
+    """원본 청크를 id로 불러온다(표 이웃 조각 모으기). 테스트에서 바꿔 끼운다."""
+    return _load_parent_chunks(chunk_ids)
+
+
+def _table_neighbor_pieces(doc: str, meta: dict, max_chars: int) -> list[tuple[int, str]]:
+    """같은 문서의 이웃 청크 가운데 표 머리가 같은 조각을 앞뒤로 모은다(청크 번호, 글). 표 ID 칸이 없어
+    '같은 문서 + 이어지는 청크 번호 + 같은 표 머리'를 같은 표로 본다. 자기 조각을 포함하고 max_chars를 넘으면 멈춘다."""
+    header = _table_header_lines(doc)
+    document_id = str((meta or {}).get("document_id") or "").strip()
+    try:
+        chunk_index = int((meta or {}).get("chunk_index"))
+    except (TypeError, ValueError):
+        return [(0, doc)]
+    if not header or not document_id:
+        return [(chunk_index, doc)]
+    wanted = [f"{document_id}_{chunk_index + step}" for step in range(-EXP_TABLE_NEIGHBOR_LIMIT, EXP_TABLE_NEIGHBOR_LIMIT + 1)
+              if step != 0 and chunk_index + step >= 0]
+    loaded = _load_raw_chunks_by_id(wanted)
+    pieces = {chunk_index: doc}
+    total = len(doc)
+    for direction in (-1, 1):
+        step = direction
+        while abs(step) <= EXP_TABLE_NEIGHBOR_LIMIT:
+            neighbor = loaded.get(f"{document_id}_{chunk_index + step}")
+            if not neighbor or _table_header_lines(neighbor[0]) != header:
+                break
+            if max_chars and total + len(neighbor[0]) > max_chars:
+                break
+            pieces[chunk_index + step] = neighbor[0]
+            total += len(neighbor[0])
+            step += direction
+    return sorted(pieces.items())
+
+
+def _join_table_pieces(pieces: list[tuple[int, str]]) -> str:
+    """같은 표 조각을 머리 하나로 잇는다(첫 조각은 그대로, 뒤 조각은 되풀이된 머리를 뺌)."""
+    if not pieces:
+        return ""
+    if len(pieces) == 1:
+        return pieces[0][1]
+    header = _table_header_lines(pieces[0][1])
+    parts = [pieces[0][1].strip()]
+    for _, text in pieces[1:]:
+        parts.append(_table_body_after_header(text, header) if header else text.strip())
+    return "\n".join(part for part in parts if part)
+
+
+def _apply_table_context_experiments(
+    docs: list[str], metadatas: list[dict], ids: list[str]
+) -> tuple[list[str], list[dict], list[str]]:
+    """표 근거 실험 후보 가운데 근거 블록 묶음을 바꾸는 것(같은 표 조각 합치기, 표 전체로 넓히기, 근거 순서)을 적용한다.
+    모두 꺼져 있으면 입력을 그대로 돌려준다."""
+    if EXP_MERGE_TABLE_PIECES or EXP_EXPAND_TABLE_CHARS:
+        out_docs, out_metas, out_ids = [], [], []
+        owner: dict[tuple[str, str], int] = {}  # (문서, 표 머리) → 합친 블록 자리
+        covered: set[tuple[str, int]] = set()  # 넓히기로 이미 넣은 (문서, 청크 번호)
+        for doc, meta, chunk_id in zip(docs, metadatas, ids):
+            meta = meta or {}
+            header = _table_header_lines(doc)
+            document_id = str(meta.get("document_id") or "").strip()
+            try:
+                chunk_index = int(meta.get("chunk_index"))
+            except (TypeError, ValueError):
+                chunk_index = None
+            if not header or not document_id or chunk_index is None:
+                out_docs.append(doc), out_metas.append(meta), out_ids.append(chunk_id)
+                continue
+            if (document_id, chunk_index) in covered:
+                continue
+            key = (document_id, header[0])
+            if EXP_EXPAND_TABLE_CHARS:
+                pieces = _table_neighbor_pieces(doc, meta, EXP_EXPAND_TABLE_CHARS)
+                covered.update((document_id, index) for index, _ in pieces)
+                if key in owner:  # 같은 표의 다른 조각이 이미 넓혀져 들어갔다
+                    continue
+                owner[key] = len(out_docs)
+                joined_meta = {**meta, _EXP_JOINED_TABLE_KEY: True} if len(pieces) > 1 else meta
+                out_docs.append(_join_table_pieces(pieces)), out_metas.append(joined_meta), out_ids.append(chunk_id)
+                continue
+            if key in owner:  # 같은 표 조각 합치기: 앞 블록에 이 조각의 행을 붙인다
+                at = owner[key]
+                out_docs[at] = out_docs[at].rstrip() + "\n" + _table_body_after_header(doc, header)
+                merged_meta = {**out_metas[at], _EXP_JOINED_TABLE_KEY: True}
+                facts = _get_matched_table_facts(merged_meta) + [
+                    fact for fact in _get_matched_table_facts(meta) if fact not in _get_matched_table_facts(merged_meta)]
+                if facts:
+                    merged_meta["matched_table_facts"] = facts
+                out_metas[at] = merged_meta
+                continue
+            owner[key] = len(out_docs)
+            out_docs.append(doc), out_metas.append(meta), out_ids.append(chunk_id)
+        docs, metadatas, ids = out_docs, out_metas, out_ids
+    if EXP_CONTEXT_ORDER == "ends" and len(docs) > 2:
+        # 관련 높은 근거를 앞과 끝에: 1, 3, 5, …, 6, 4, 2 순서(1위가 맨 앞, 2위가 맨 끝)
+        order = list(range(0, len(docs), 2)) + list(reversed(range(1, len(docs), 2)))
+        docs, metadatas, ids = [docs[i] for i in order], [metadatas[i] for i in order], [ids[i] for i in order]
+    return docs, metadatas, ids
+
+
 def _build_context(docs: list[str], metadatas: list[dict], ids: list[str], analysis: QueryAnalysis) -> str:
     """검색된 청크들을 출처 단위 context로 변환한다."""
+    docs, metadatas, ids = _apply_table_context_experiments(docs, metadatas, ids)
     blocks = []
     for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids), start=1):
         blocks.append(_format_context_block(index, doc, meta or {}, chunk_id, analysis))
@@ -4759,6 +4933,20 @@ def _build_rag_prompt(
     """검색 근거와 사용자 질문을 LLM 입력 프롬프트로 조합한다. today가 있으면 맨 위에 '오늘' 줄을 둔다(날짜 줄 켜짐일 때만)."""
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
     today_line = f"오늘: {today.isoformat()}\n" if today else ""
+    intent_priority_line = (
+        "" if EXP_DROP_INTENT_PRIORITY else "- [검색 근거]의 '질문 의도 추출 정보'가 있으면 답변에 우선 사용한다.\n"
+    )
+    experiment_lines = ""
+    if EXP_COPY_ROWS_FIRST:
+        experiment_lines += (
+            "- 표의 값을 답하는 질문이면, 답하기 전에 [검색 근거]의 표에서 질문에 해당하는 행을 '근거 행:' 뒤에 그대로 옮겨 적고, "
+            "그 행의 열 이름과 값만 보고 답한다.\n"
+        )
+    if EXP_CHECK_EACH_ROW:
+        experiment_lines += (
+            "- 조건에 맞는 행을 모두 찾거나 합계·최댓값을 묻는 질문이면, 근거 표의 행을 처음부터 끝까지 하나씩 확인해 "
+            "조건에 맞는지 따진 뒤 빠뜨린 행이 없는지 다시 확인하고 답한다.\n"
+        )
     # 빈 줄 둘과 [답변 직전 확인]의 '우선 표 근거'·'우선 질의 근거' 두 줄은 규칙 경로(#169에서 삭제)의 흔적이다.
     # 지우면 프롬프트가 바뀌어 답이 달라질 수 있으므로, 프롬프트를 바꾸는 작업(M2 5단계·모델 선정 ①)에서 측정과 함께 정리한다.
     return f"""{today_line}{prompt_policy}
@@ -4777,12 +4965,11 @@ def _build_rag_prompt(
 - [우선 표 근거]가 있으면 표의 행/열/값 판단에 가장 먼저 사용한다.
 - [우선 질의 근거]가 있으면 질문 의도에 직접 대응하는 절차와 안내 문구로 우선 사용한다.
 - [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다.
-- [검색 근거]의 '질문 의도 추출 정보'가 있으면 답변에 우선 사용한다.
-- [검색 근거]의 '질문 관련 발췌'가 있으면 그 발췌에 직접 적힌 항목만 우선 사용한다.
+{intent_priority_line}- [검색 근거]의 '질문 관련 발췌'가 있으면 그 발췌에 직접 적힌 항목만 우선 사용한다.
 - 질문 단어와 일치하는 섹션 제목이 있으면 해당 섹션 아래 내용만 답변한다.
 - 같은 청크 안에 다른 섹션이 있어도 질문과 맞지 않으면 답변에 섞지 않는다.
 - 근거에 없는 일반적인 대학 행정 절차나 조언은 쓰지 않는다.
-
+{experiment_lines}
 [답변 작성]
 """
 
@@ -6541,7 +6728,25 @@ def _model_settings() -> dict:
         "query_retrieval_chunks_enabled": QUERY_RETRIEVAL_CHUNKS_ENABLED,
         "prompt_date_lines": PROMPT_DATE_LINES_ENABLED,
         "context_full_text": CONTEXT_FULL_TEXT_ENABLED,
+        "table_experiment": _table_experiment_settings(),
     }
+
+
+def _table_experiment_settings() -> dict:
+    """표 근거 실험 후보 설정(#259). 실행 기록에 남겨 어떤 후보로 잰 답인지 가린다. 모두 꺼져 있으면 빈 사전."""
+    settings = {
+        "drop_table_bridge": EXP_DROP_TABLE_BRIDGE,
+        "drop_intent_priority": EXP_DROP_INTENT_PRIORITY,
+        "table_full_text": EXP_TABLE_FULL_TEXT,
+        "merge_table_pieces": EXP_MERGE_TABLE_PIECES,
+        "expand_table_chars": EXP_EXPAND_TABLE_CHARS,
+        "row_fact_to_source": EXP_ROW_FACT_TO_SOURCE,
+        "table_fact_format": EXP_TABLE_FACT_FORMAT,
+        "context_order": EXP_CONTEXT_ORDER,
+        "copy_rows_first": EXP_COPY_ROWS_FIRST,
+        "check_each_row": EXP_CHECK_EACH_ROW,
+    }
+    return {key: value for key, value in settings.items() if value}
 
 
 def _eval_runtime_settings() -> dict:

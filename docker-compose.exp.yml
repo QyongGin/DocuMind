@@ -1,0 +1,16 @@
+# 표 근거 실험(#259) 때만 쓰는 덮어쓰기 파일. 후보 설정을 AI 서버에 넘긴다(값이 없으면 모두 꺼짐 = 지금 동작).
+# 사용(데스크탑): AI_EXP_TABLE_FULL_TEXT=true docker compose ... -f docker-compose.eval.yml -f docker-compose.exp.yml up -d ai-server
+# 후보 이름과 뜻: ai-server/main.py의 EXP_* 설정, docs/rag/m2/표-근거-실험-설계-20261114.md 3-1
+services:
+  ai-server:
+    environment:
+      AI_EXP_DROP_TABLE_BRIDGE: ${AI_EXP_DROP_TABLE_BRIDGE:-false}
+      AI_EXP_DROP_INTENT_PRIORITY: ${AI_EXP_DROP_INTENT_PRIORITY:-false}
+      AI_EXP_TABLE_FULL_TEXT: ${AI_EXP_TABLE_FULL_TEXT:-false}
+      AI_EXP_MERGE_TABLE_PIECES: ${AI_EXP_MERGE_TABLE_PIECES:-false}
+      AI_EXP_EXPAND_TABLE_CHARS: ${AI_EXP_EXPAND_TABLE_CHARS:-0}
+      AI_EXP_ROW_FACT_TO_SOURCE: ${AI_EXP_ROW_FACT_TO_SOURCE:-false}
+      AI_EXP_TABLE_FACT_FORMAT: ${AI_EXP_TABLE_FACT_FORMAT:-}
+      AI_EXP_CONTEXT_ORDER: ${AI_EXP_CONTEXT_ORDER:-}
+      AI_EXP_COPY_ROWS_FIRST: ${AI_EXP_COPY_ROWS_FIRST:-false}
+      AI_EXP_CHECK_EACH_ROW: ${AI_EXP_CHECK_EACH_ROW:-false}
