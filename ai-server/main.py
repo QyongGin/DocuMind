@@ -41,6 +41,7 @@ from rag_table_fact_selector import (
     select_table_facts_for_question,
 )
 from opendataloader_contract_adapter import adapt_opendataloader_json_page
+import table_chunk_experiments
 from format_loaders import (
     SUPPORTED_EXTENSIONS as TABLE_GRID_EXTENSIONS,
     UnsupportedDocumentError,
@@ -174,6 +175,8 @@ EXP_COPY_ROWS_FIRST = _env_bool("AI_EXP_COPY_ROWS_FIRST", False)  # 답 앞에 �
 EXP_CHECK_EACH_ROW = _env_bool("AI_EXP_CHECK_EACH_ROW", False)  # 조건에 맞는 행을 하나씩 확인하게 하기
 # 표 조각을 이웃 청크에서 모을 때 한쪽으로 볼 최대 조각 수(표 전체로 넓히기·같은 표 조각 합치기 공통)
 EXP_TABLE_NEIGHBOR_LIMIT = _env_int("AI_EXP_TABLE_NEIGHBOR_LIMIT", 12)
+# 표 청크 후보(#259 설계 3-3): AI_EXP_CHUNK_*. 모두 꺼지면 지금 색인과 같은 청크
+EXP_CHUNK = table_chunk_experiments.from_env()
 
 if CHUNK_OVERLAP >= CHUNK_SIZE:
     logger.warning(
@@ -800,7 +803,18 @@ def _split_markdown_table_blocks(text: str) -> list[tuple[str, str]]:
         current_type = None
         current_lines = []
 
+    in_html = False
     for line in text.splitlines():
+        if EXP_CHUNK.table_format == "html" and (in_html or line.strip() == "<table>"):
+            # HTML 표 후보(실험): <table>…</table> 한 덩어리를 나누지 않는 표 블록으로 둔다(이미 길이에 맞춰 나눠 둠)
+            if not in_html:
+                flush()
+                current_type, in_html = "html_table", True
+            current_lines.append(line)
+            if line.strip() == "</table>":
+                flush()
+                in_html = False
+            continue
         line_type = "table" if _is_markdown_table_line(line) else "text"
         if current_type is None:
             current_type = line_type
@@ -1169,8 +1183,9 @@ def _split_table_block(block_text: str, metadata: dict) -> list[Document]:
 
     table_metadata = dict(metadata)
     table_metadata["block_type"] = "table"
+    limit = max(CHUNK_SIZE, EXP_CHUNK.table_max)  # 표를 한 청크로(실험): 이 길이까지 나누지 않는다
 
-    if len(block_text) <= CHUNK_SIZE:
+    if len(block_text) <= limit:
         return [_document_with_metadata(block_text, table_metadata)]
 
     header_lines: list[str] = []
@@ -1178,6 +1193,13 @@ def _split_table_block(block_text: str, metadata: dict) -> list[Document]:
     if len(lines) >= 2 and _is_markdown_table_row(lines[0]) and _is_markdown_table_separator(lines[1]):
         header_lines = lines[:2]
         body_lines = lines[2:]
+        if EXP_CHUNK.header_all:  # 머리글 전체 되풀이(실험): 보강 머리글 줄까지 조각마다 앞에 둔다
+            header_rows = [_split_markdown_cells(lines[0])]
+            while body_lines and len(header_rows) < 3 and _is_markdown_table_row(body_lines[0]) and \
+                    _is_probable_subheader_row(_split_markdown_cells(body_lines[0]), header_rows):
+                header_rows.append(_split_markdown_cells(body_lines[0]))
+                header_lines.append(body_lines[0])
+                body_lines = body_lines[1:]
 
     if not body_lines:
         return [_document_with_metadata(block_text, table_metadata)]
@@ -1193,7 +1215,7 @@ def _split_table_block(block_text: str, metadata: dict) -> list[Document]:
     for row in body_lines:
         candidate_rows = current_rows + [row]
         candidate = build_table(candidate_rows)
-        if current_rows and len(candidate) > CHUNK_SIZE:
+        if current_rows and len(candidate) > limit:
             chunks.append(_document_with_metadata(build_table(current_rows), table_metadata))
             current_rows = [row]
             continue
@@ -1208,12 +1230,14 @@ def _split_table_block(block_text: str, metadata: dict) -> list[Document]:
 def _split_large_chunk_preserving_tables(doc: Document) -> list[Document]:
     """큰 청크를 나눌 때 Markdown table은 row group 단위로 보존한다."""
     blocks = _split_markdown_table_blocks(doc.page_content)
-    if not any(block_type == "table" for block_type, _ in blocks):
+    if not any(block_type in ("table", "html_table") for block_type, _ in blocks):
         return _char_splitter.split_documents([doc])
 
     split_docs: list[Document] = []
     for block_type, block_text in blocks:
-        if block_type == "table":
+        if block_type == "html_table":
+            split_docs.append(_document_with_metadata(block_text, doc.metadata, block_type="table"))
+        elif block_type == "table":
             split_docs.extend(_split_table_block(block_text, doc.metadata))
         else:
             split_docs.extend(_split_text_block(block_text, doc.metadata))
@@ -1522,6 +1546,8 @@ def _apply_overlap(docs: list[Document]) -> list[Document]:
             overlap_text = ""
             if CHUNK_OVERLAP > 0 and _should_apply_general_overlap(content_text):
                 overlap_text = _select_overlap_text(docs[i - 1].page_content, CHUNK_OVERLAP)
+                if EXP_CHUNK.table_format == "html" and ("<tr>" in overlap_text or "table>" in overlap_text):
+                    overlap_text = ""  # HTML 표 후보(실험): 표 태그 조각을 다음 청크에 겹쳐 붙이지 않는다
             table_context_overlap = _select_table_context_overlap(docs[i - 1].page_content, content_text)
             if table_context_overlap:
                 context_parts.append(table_context_overlap)
@@ -2533,6 +2559,142 @@ def _delete_document_chroma_entries(
     )
 
 
+def _rewrite_pdf_tables_for_experiment(
+    raw_docs: list[Document], json_docs: list[Document], tmp_path: str, filename: str
+) -> tuple[list[Document], list[tuple]]:
+    """표 청크 후보(#259 설계 3-3): PDF 쪽 글의 마크다운 표를 후보 방식으로 다시 쓰고 표에 붙일 주석을 모은다.
+    PDF가 아니거나 쪽 정보가 없으면 그대로 돌려준다. 표 구조는 OpenDataLoader JSON에서 읽는다."""
+    if filename.rsplit(".", 1)[-1].lower() != "pdf" or not _has_page_metadata(raw_docs):
+        return raw_docs, []
+    if not json_docs:
+        json_docs = OpenDataLoaderPDFLoader(file_path=tmp_path, format="json").load()
+    json_by_page: dict = {}
+    for json_doc in json_docs:
+        try:
+            data = json.loads(json_doc.page_content)
+        except (TypeError, ValueError):
+            continue
+        page = json_doc.metadata.get("page") or data.get("page number")
+        json_by_page[page] = data
+    result = table_chunk_experiments.rewrite_pages(
+        [doc.page_content for doc in raw_docs],
+        [json_by_page.get(doc.metadata.get("page")) for doc in raw_docs],
+        EXP_CHUNK,
+        is_subheader=_is_probable_subheader_row,
+        chunk_size=CHUNK_SIZE,
+    )
+    rewritten = [Document(page_content=text, metadata=dict(doc.metadata)) for text, doc in zip(result.pages, raw_docs)]
+    notes = [(raw_docs[index].metadata.get("page"), head, lines) for index, head, lines in result.notes]
+    logger.info("[table_chunk_experiment] filename=%s settings=%s tables=%s notes=%s",
+                filename, EXP_CHUNK.settings(), result.tables, len(notes))
+    return rewritten, notes
+
+
+def _attach_table_notes_for_experiment(final_docs: list[Document], notes: list[tuple]) -> list[Document]:
+    """표 청크 후보(주석 붙이기): 표 머리 줄이 든 청크에 그 표의 주석 줄을 붙인다."""
+    texts = table_chunk_experiments.attach_notes([(doc.page_content, doc.metadata.get("page")) for doc in final_docs], notes)
+    return [Document(page_content=text, metadata=doc.metadata) for text, doc in zip(texts, final_docs)]
+
+
+def _prepare_upload_documents(
+    tmp_path: str,
+    filename: str,
+    document_id: int,
+    report: dict | None = None,
+) -> tuple[list[Document], list[dict], OpenDataLoaderJsonIndexArtifacts]:
+    """업로드 문서를 파싱·정규화·청킹해 최종 청크, 페이지 조회표, OpenDataLoader JSON 색인 산출물을 만든다(임베딩 전까지).
+    report에 단계별 걸린 시간과 청크 수를 적는다(업로드 로그용)."""
+    total_start = time.perf_counter()
+    _set_document_progress(document_id, 8, "parse", "문서를 파싱하고 있습니다.")
+
+    # 파서 분기: PDF는 OpenDataLoader, HWP·HWPX·HTML·DOCX는 format_loaders, PPTX·XLSX는 MarkItDown으로 읽는다
+    parse_start = time.perf_counter()
+    raw_docs = _load_documents(tmp_path, filename)
+    parse_elapsed = time.perf_counter() - parse_start
+    _set_document_progress(document_id, 18, "parse", "문서 파싱을 완료했습니다.")
+
+    opendataloader_json_start = time.perf_counter()
+    opendataloader_json_artifacts = _empty_opendataloader_json_index_artifacts()
+    opendataloader_json_docs: list[Document] = []
+    if OPENDATALOADER_JSON_TABLE_FACTS_ENABLED:
+        try:
+            opendataloader_json_docs = _load_opendataloader_json_documents(tmp_path, filename)
+            opendataloader_json_artifacts = _build_opendataloader_json_index_artifacts(
+                opendataloader_json_docs,
+                filename,
+                document_id,
+            )
+        except Exception:
+            logger.exception(
+                "[opendataloader_json_table_facts] document_id=%s filename=%s failed; continuing with markdown table facts",
+                document_id,
+                filename,
+            )
+            opendataloader_json_artifacts = _empty_opendataloader_json_index_artifacts()
+    opendataloader_json_elapsed = time.perf_counter() - opendataloader_json_start
+    if OPENDATALOADER_JSON_TABLE_FACTS_ENABLED:
+        logger.info(
+            "[opendataloader_json_table_facts] document_id=%s filename=%s source_blocks=%s table_facts=%s diagnostics=%s elapsed=%.2fs",
+            document_id,
+            filename,
+            len(opendataloader_json_artifacts.source_docs),
+            len(opendataloader_json_artifacts.table_fact_docs),
+            opendataloader_json_artifacts.diagnostics_count,
+            opendataloader_json_elapsed,
+        )
+
+    table_notes: list = []
+    if EXP_CHUNK.rewrites_pages():  # 표 청크 후보(실험): 표를 다시 쓰고 주석을 모은다. 꺼져 있으면 지나간다
+        raw_docs, table_notes = _rewrite_pdf_tables_for_experiment(
+            raw_docs, opendataloader_json_docs, tmp_path, filename
+        )
+
+    page_lookup_start = time.perf_counter()
+    page_lookup = _build_page_lookup(raw_docs)
+    page_lookup_elapsed = time.perf_counter() - page_lookup_start
+    _set_document_progress(document_id, 22, "page_lookup", "페이지 정보를 분석하고 있습니다.")
+
+    # 로더 Document 단위 정규화. PDF는 page metadata를 보존해 구조 단서로 활용한다.
+    normalize_start = time.perf_counter()
+    normalized_docs = _normalize_loaded_documents(raw_docs)
+    normalize_elapsed = time.perf_counter() - normalize_start
+    _set_document_progress(document_id, 25, "normalize", "문서 텍스트를 정리했습니다.")
+
+    # Two-Pass 청킹 + 연속 중복 line 정리 + 수동 overlap 후처리
+    split_start = time.perf_counter()
+    split_docs = _split_loaded_documents(normalized_docs)
+    split_elapsed = time.perf_counter() - split_start
+    _log_chunk_stats(document_id, filename, "split", split_docs)
+
+    dedupe_start = time.perf_counter()
+    deduped_docs = _dedupe_chunk_documents(split_docs)
+    dedupe_elapsed = time.perf_counter() - dedupe_start
+    _log_chunk_stats(document_id, filename, "deduped", deduped_docs)
+    _set_document_progress(document_id, 28, "chunking", "문서를 청크로 나누고 있습니다.")
+
+    merge_start = time.perf_counter()
+    merged_docs = _merge_short_chunks(deduped_docs)
+    merge_elapsed = time.perf_counter() - merge_start
+    _log_chunk_stats(document_id, filename, "merged", merged_docs)
+
+    overlap_start = time.perf_counter()
+    final_docs = _apply_overlap(merged_docs)
+    if table_notes:
+        final_docs = _attach_table_notes_for_experiment(final_docs, table_notes)
+    overlap_elapsed = time.perf_counter() - overlap_start
+    _log_chunk_stats(document_id, filename, "final", final_docs)
+    _set_document_progress(document_id, 30, "chunking", f"청킹을 완료했습니다. ({len(final_docs)} chunks)")
+    if report is not None:
+        report.update(
+            total_start=total_start, raw_docs=len(raw_docs), split_docs=len(split_docs), deduped_docs=len(deduped_docs),
+            merged_docs=len(merged_docs), opendataloader_json_artifacts=opendataloader_json_artifacts,
+            parse_elapsed=parse_elapsed, opendataloader_json_elapsed=opendataloader_json_elapsed,
+            page_lookup_elapsed=page_lookup_elapsed, normalize_elapsed=normalize_elapsed, split_elapsed=split_elapsed,
+            dedupe_elapsed=dedupe_elapsed, merge_elapsed=merge_elapsed, overlap_elapsed=overlap_elapsed,
+        )
+    return final_docs, page_lookup, opendataloader_json_artifacts
+
+
 async def _run_upload_pipeline(
     tmp_path: str,
     filename: str,
@@ -2542,77 +2704,11 @@ async def _run_upload_pipeline(
     """문서 전처리 파이프라인: 로딩 → 정규화 → Two-Pass 청킹 → overlap → 임베딩 → ChromaDB 저장"""
 
     def _execute() -> int:
-        total_start = time.perf_counter()
-        _set_document_progress(document_id, 8, "parse", "문서를 파싱하고 있습니다.")
-
-        # 파서 분기: PDF는 OpenDataLoader, HWP·HWPX·HTML·DOCX는 format_loaders, PPTX·XLSX는 MarkItDown으로 읽는다
-        parse_start = time.perf_counter()
-        raw_docs = _load_documents(tmp_path, filename)
-        parse_elapsed = time.perf_counter() - parse_start
-        _set_document_progress(document_id, 18, "parse", "문서 파싱을 완료했습니다.")
-
-        opendataloader_json_start = time.perf_counter()
-        opendataloader_json_artifacts = _empty_opendataloader_json_index_artifacts()
-        if OPENDATALOADER_JSON_TABLE_FACTS_ENABLED:
-            try:
-                opendataloader_json_docs = _load_opendataloader_json_documents(tmp_path, filename)
-                opendataloader_json_artifacts = _build_opendataloader_json_index_artifacts(
-                    opendataloader_json_docs,
-                    filename,
-                    document_id,
-                )
-            except Exception:
-                logger.exception(
-                    "[opendataloader_json_table_facts] document_id=%s filename=%s failed; continuing with markdown table facts",
-                    document_id,
-                    filename,
-                )
-                opendataloader_json_artifacts = _empty_opendataloader_json_index_artifacts()
-        opendataloader_json_elapsed = time.perf_counter() - opendataloader_json_start
-        if OPENDATALOADER_JSON_TABLE_FACTS_ENABLED:
-            logger.info(
-                "[opendataloader_json_table_facts] document_id=%s filename=%s source_blocks=%s table_facts=%s diagnostics=%s elapsed=%.2fs",
-                document_id,
-                filename,
-                len(opendataloader_json_artifacts.source_docs),
-                len(opendataloader_json_artifacts.table_fact_docs),
-                opendataloader_json_artifacts.diagnostics_count,
-                opendataloader_json_elapsed,
-            )
-
-        page_lookup_start = time.perf_counter()
-        page_lookup = _build_page_lookup(raw_docs)
-        page_lookup_elapsed = time.perf_counter() - page_lookup_start
-        _set_document_progress(document_id, 22, "page_lookup", "페이지 정보를 분석하고 있습니다.")
-
-        # 로더 Document 단위 정규화. PDF는 page metadata를 보존해 구조 단서로 활용한다.
-        normalize_start = time.perf_counter()
-        normalized_docs = _normalize_loaded_documents(raw_docs)
-        normalize_elapsed = time.perf_counter() - normalize_start
-        _set_document_progress(document_id, 25, "normalize", "문서 텍스트를 정리했습니다.")
-
-        # Two-Pass 청킹 + 연속 중복 line 정리 + 수동 overlap 후처리
-        split_start = time.perf_counter()
-        split_docs = _split_loaded_documents(normalized_docs)
-        split_elapsed = time.perf_counter() - split_start
-        _log_chunk_stats(document_id, filename, "split", split_docs)
-
-        dedupe_start = time.perf_counter()
-        deduped_docs = _dedupe_chunk_documents(split_docs)
-        dedupe_elapsed = time.perf_counter() - dedupe_start
-        _log_chunk_stats(document_id, filename, "deduped", deduped_docs)
-        _set_document_progress(document_id, 28, "chunking", "문서를 청크로 나누고 있습니다.")
-
-        merge_start = time.perf_counter()
-        merged_docs = _merge_short_chunks(deduped_docs)
-        merge_elapsed = time.perf_counter() - merge_start
-        _log_chunk_stats(document_id, filename, "merged", merged_docs)
-
-        overlap_start = time.perf_counter()
-        final_docs = _apply_overlap(merged_docs)
-        overlap_elapsed = time.perf_counter() - overlap_start
-        _log_chunk_stats(document_id, filename, "final", final_docs)
-        _set_document_progress(document_id, 30, "chunking", f"청킹을 완료했습니다. ({len(final_docs)} chunks)")
+        report: dict = {}
+        final_docs, page_lookup, opendataloader_json_artifacts = _prepare_upload_documents(
+            tmp_path, filename, document_id, report
+        )
+        total_start = report["total_start"]
 
         # 임베딩 + ChromaDB 저장. 청크별 호출 대신 batch 단위로 처리해 HTTP 왕복과 저장 오버헤드를 줄인다.
         page_match_elapsed, embedding_elapsed, chroma_elapsed, index_entries, table_fact_entries, retrieval_chunk_entries = _store_document_chunks(
@@ -2629,10 +2725,10 @@ async def _run_upload_pipeline(
             "[upload] document_id=%s filename=%s raw_docs=%s split_chunks=%s deduped_chunks=%s merged_chunks=%s chunks=%s index_entries=%s table_fact_entries=%s opendataloader_json_table_fact_entries=%s retrieval_chunk_entries=%s chunk_size=%s chunk_overlap=%s chunk_merge_min_size=%s table_fact_max_per_chunk=%s embed_table_raw_chunks=%s batch_size=%s parse=%.2fs opendataloader_json=%.2fs page_lookup=%.2fs normalize=%.2fs split=%.2fs dedupe=%.2fs merge=%.2fs overlap=%.2fs page_match=%.2fs embed=%.2fs chroma_add=%.2fs total=%.2fs",
             document_id,
             filename,
-            len(raw_docs),
-            len(split_docs),
-            len(deduped_docs),
-            len(merged_docs),
+            report["raw_docs"],
+            report["split_docs"],
+            report["deduped_docs"],
+            report["merged_docs"],
             len(final_docs),
             index_entries,
             table_fact_entries,
@@ -2644,14 +2740,14 @@ async def _run_upload_pipeline(
             TABLE_FACT_MAX_PER_CHUNK,
             EMBED_TABLE_RAW_CHUNKS,
             EMBEDDING_BATCH_SIZE,
-            parse_elapsed,
-            opendataloader_json_elapsed,
-            page_lookup_elapsed,
-            normalize_elapsed,
-            split_elapsed,
-            dedupe_elapsed,
-            merge_elapsed,
-            overlap_elapsed,
+            report["parse_elapsed"],
+            report["opendataloader_json_elapsed"],
+            report["page_lookup_elapsed"],
+            report["normalize_elapsed"],
+            report["split_elapsed"],
+            report["dedupe_elapsed"],
+            report["merge_elapsed"],
+            report["overlap_elapsed"],
             page_match_elapsed,
             embedding_elapsed,
             chroma_elapsed,
@@ -6729,6 +6825,7 @@ def _model_settings() -> dict:
         "prompt_date_lines": PROMPT_DATE_LINES_ENABLED,
         "context_full_text": CONTEXT_FULL_TEXT_ENABLED,
         "table_experiment": _table_experiment_settings(),
+        "table_chunk_experiment": EXP_CHUNK.settings(),
     }
 
 
