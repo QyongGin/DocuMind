@@ -4,9 +4,9 @@
     questions  질문 초안(초안 모델, ADR-0040)
     attach     근거 붙이기: 데이터셋 AI 서버 /query(평가용 옵션)의 운영 프롬프트·근거 8개·학습 전 A.X 답
     probe      학습 전 A.X 답을 같은 프롬프트로 여러 번(표본 추출) 받아 아는 정도를 잰다(ADR-0042). --model이면 그 모델의 답(ADR-0053)
-    targets    목표 답 초안(ADR-0039). --shapes ga,na면 인용형도
+    targets    목표 답 초안(ADR-0039). --shapes ga,na면 인용형도. --rewrite-failed면 목표 답이 답 탓으로 떨어진 문항만 --model로 다시 쓴다(ADR-0057)
     check      자동 검사(ADR-0037)와 중복 표시
-    judge      Claude 판정(통과·탈락과 이유만, 저장소 밖 격리 폴더에서 `claude -p`)
+    judge      Claude 판정(통과·탈락과 이유만, 저장소 밖 격리 폴더에서 `claude -p`). --as-target·--rewritten-by면 목표 답 후보를 판정해 통과한 답을 올린다
     review-html  사람 표본 화면(Claude 판정은 사람이 고른 뒤에 보임)
     merge-review 화면이 내려받은 판정 기록을 합치고 Claude와 어긋난 수를 센다
     status     단계별·종류별 개수
@@ -149,6 +149,11 @@ def cmd_probe(args) -> int:
 
 
 def cmd_targets(args) -> int:
+    if args.rewrite_failed:
+        # 목표 답이 답 탓으로 떨어진 문항만 이 모델로 다시 써서 따로 둔다(ADR-0057 결정 3). 판정은 judge --rewritten-by
+        counts = model_targets.rewrite(_batch_dir(args), requests.Session(), args.ollama_url, args.model, args.limit)
+        print(dict(counts))
+        return 0 if not counts.get("error") else 1
     shapes = tuple(shape for shape in args.shapes.split(",") if shape)
     counts = pipeline.run_targets(_batch_dir(args), requests.Session(), args.ollama_url, args.model, shapes, args.limit)
     print(dict(counts))
@@ -169,8 +174,8 @@ def cmd_status(args) -> int:
 
 def cmd_judge(args) -> int:
     batch_dir = _batch_dir(args)
-    if args.as_target:
-        return _judge_as_target(batch_dir, args)
+    if args.as_target or args.rewritten_by:
+        return _judge_candidates(batch_dir, args)
     records = pipeline.merged(batch_dir)
     todo = (pipeline.pick_for_judge(records, args.limit) if args.limit else
             [record for record in records if (record.get("keep") or {}).get("ga") and record.get("verdict") is None])
@@ -185,17 +190,20 @@ def cmd_judge(args) -> int:
     return 0 if not failed else 1
 
 
-def _judge_as_target(batch_dir: Path, args) -> int:
-    # 목표 답이 답 탓으로 떨어진 문항에서 학습한 모델의 답을 목표 답 후보로 판정하고, 통과한 답을 목표 답으로 올린다(ADR-0056)
-    todo, failed = model_targets.pending(batch_dir, args.as_target), []
+def _judge_candidates(batch_dir: Path, args) -> int:
+    # 목표 답이 답 탓으로 떨어진 문항의 목표 답 후보를 판정하고 통과한 답을 목표 답으로 올린다. 후보는 학습한 모델이 낸 답
+    # (--as-target, ADR-0056)이거나 다른 초안 모델이 다시 쓴 목표 답(--rewritten-by, ADR-0057 결정 3)이다
+    model, rewritten = args.as_target or args.rewritten_by, bool(args.rewritten_by)
+    todo, failed = model_targets.pending(batch_dir, model, rewritten), []
     if todo:
-        work = Path(args.work) if args.work else Path(tempfile.mkdtemp(prefix="trainset-judge-as-target-"))
-        print(f"목표 답 후보로 판정할 {args.as_target} 답 {len(todo)}개 · 작업 폴더 {work}")
+        work = Path(args.work) if args.work else Path(tempfile.mkdtemp(prefix="trainset-judge-candidates-"))
+        what = f"{model}이 다시 쓴 목표 답" if rewritten else f"목표 답 후보로 판정할 {model} 답"
+        print(f"{what} {len(todo)}개 · 작업 폴더 {work}")
         results, failed = judge.run(todo, work, args.model, jobs=args.jobs)
-        model_targets.record_verdicts(batch_dir, args.as_target, todo, results)
+        model_targets.record_verdicts(batch_dir, model, todo, results, rewritten)
         for name, why in failed:
             print(f"실패 {name}: {why}")
-    counts = model_targets.promote(batch_dir, args.as_target)
+    counts = model_targets.promote(batch_dir, model, rewritten)
     print(" · ".join(f"{name} {counts[name]}" for name in ("대상", "올림", "통과한 후보 없음", "자동 검사를 통과한 후보 없음",
                                                            "판정 전")) + f" · 실패한 작업 단위 {len(failed)}")
     return 0 if not failed else 1
@@ -353,6 +361,9 @@ def add_parser(commands) -> None:
     targets.add_argument("--model", default=DEFAULT_MODEL)
     targets.add_argument("--shapes", default="ga", help="쉼표로 모양: ga(결론 → 안내 → 번호), na(인용 → 결론)")
     targets.add_argument("--limit", type=int)
+    targets.add_argument("--rewrite-failed", action="store_true",
+                         help="목표 답이 답 탓으로 떨어진 문항만 --model로 다시 써서 targets-<모델>.jsonl에 둔다(ADR-0057). 문항의 "
+                              "목표 답은 그대로 두고, judge --rewritten-by가 판정해 통과한 답만 올린다")
     targets.set_defaults(func=cmd_targets)
 
     checking = with_batch("check", "자동 검사")
@@ -364,9 +375,13 @@ def add_parser(commands) -> None:
     judging.add_argument("--jobs", type=int, default=2)
     judging.add_argument("--limit", type=int, help="판정할 예시 수(첫 묶음 40). 주면 종류별 개수(1회차 비율)를 지켜 고른다")
     judging.add_argument("--work", help="작업 폴더(저장소 밖). 없으면 임시 폴더")
-    judging.add_argument("--as-target", metavar="PROBE_MODEL",
-                         help="목표 답이 답 탓으로 떨어진 문항에서 probe --model로 받은 이 모델의 답을 목표 답 후보로 판정하고, "
-                              "통과한 답을 목표 답으로 올린다(ADR-0056)")
+    candidate_source = judging.add_mutually_exclusive_group()
+    candidate_source.add_argument("--as-target", metavar="PROBE_MODEL",
+                                  help="목표 답이 답 탓으로 떨어진 문항에서 probe --model로 받은 이 모델의 답을 목표 답 후보로 "
+                                       "판정하고, 통과한 답을 목표 답으로 올린다(ADR-0056)")
+    candidate_source.add_argument("--rewritten-by", metavar="DRAFT_MODEL",
+                                  help="targets --rewrite-failed --model로 이 모델이 다시 쓴 목표 답을 판정하고, 통과한 답을 "
+                                       "목표 답으로 올린다(ADR-0057)")
     judging.set_defaults(func=cmd_judge)
 
     probe_judging = with_batch("judge-probes", "학습한 모델 답 중 규칙으로 못 가른 답만 Claude 판정(선호 쌍, ADR-0053)")
