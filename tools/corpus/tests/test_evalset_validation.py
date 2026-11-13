@@ -36,6 +36,17 @@ def test_schema_rejects_bad_values_and_round_trips(tmp_path):
     assert schema.fingerprint(loaded) == schema.fingerprint([dict(reversed(list(good.items()))), item("ev-0002")])
 
 
+def test_table_structure_tags_and_table_question_ids():
+    """표 질문 유형 묶음(#259): '표 구조' 태그와 tq- 문항 ID를 받는다. 목록에 없는 태그와 다른 머리는 여전히 막는다."""
+    table = item("tq-0001", tags=["범례의 뜻", "표 근거", "쪽을 넘는 표"])
+    assert schema.validate(table) == []
+    assert set(schema.TABLE_TAGS) <= set(schema.TAGS) and set(schema.BASE_TAGS) <= set(schema.TAGS)
+    assert any("태그" in error for error in schema.validate(item("tq-0002", tags=["표 모양"])))
+    assert any("ID" in error for error in schema.validate(item("tx-0001")))
+    absent = unanswerable_item("tq-0003", tags=["표에 없는 값"])
+    assert schema.validate(absent) == []
+
+
 def test_unanswerable_section_must_be_text():
     near = unanswerable_item("ev-0001")["unanswerable"]
     assert schema.validate(unanswerable_item("ev-0001", unanswerable={**near, "section": "Ⅱ 전형일정"})) == []
