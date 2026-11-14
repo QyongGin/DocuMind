@@ -133,3 +133,45 @@ def test_refusal_phrasings_seen_in_baseline():
     key = unanswerable_item("ev-0009")
     assert score(key, "제공된 문서에서는 2028학년도 정원을 명시하고 있지 않습니다.")["label"] == "맞음"
     assert score(key, "정원에 대해 정확히 답변 드리기 어렵습니다. 입학팀에 문의하세요.")["label"] == "맞음"
+
+
+def test_copied_evidence_row_is_not_a_forbidden_answer():
+    """결론 뒤에 근거 표의 행을 그대로 옮겨 적으면 그 행의 옆 칸 값(금지 값)으로 '틀림'이 되지 않는다(#261)."""
+    key = item("ev-0010")
+    context = "[검색 근거]\n|구분|올해|지난해|\n|---|---|---|\n|전형료|30,000원|25,000원|"
+    answer = "전형료는 30,000원입니다.\n\n<검색 근거>\n|구분|올해|지난해|\n| 전형료 | 30,000원 | 25,000원 |"
+    copied = score(key, answer, context)
+    assert (copied["label"], copied["forbidden_hits"]) == ("맞음", [])
+    # 근거 글이 없으면 옮겨 적은 줄인지 모르므로 지금처럼 금지 값으로 본다
+    assert score(key, answer)["label"] == "틀림"
+
+
+def test_forbidden_value_outside_copied_rows_is_still_wrong():
+    """근거 줄과 통째로 같지 않은 표 줄이나 문장으로 말한 금지 값은 그대로 '틀림'이다(#261)."""
+    key = item("ev-0011")
+    context = "|구분|올해|지난해|\n|전형료|30,000원|25,000원|"
+    assert score(key, "|전형료|25,000원|", context)["label"] == "틀림"
+    # 근거 행의 앞부분만 골라 적은 줄도 새로 쓴 단정이다
+    earlier_first = "|구분|지난해|올해|\n|전형료|25,000원|30,000원|"
+    assert score(key, "|전형료|25,000원|", earlier_first)["label"] == "틀림"
+    rewritten = "전형료는 30,000원입니다.\n|전형료|30,000원|25,000원|\n다만 지난해 기준인 25,000원이 맞습니다."
+    assert score(key, rewritten, context)["forbidden_hits"] == ["25,000원"]
+
+
+def test_correct_value_only_in_copied_row_is_not_correct():
+    """결론은 틀린 값인데 옮겨 적은 근거 행에만 정답 값이 있으면 '맞음'이 아니다(#261)."""
+    key = item("ev-0012", forbidden=[])
+    context = "|구분|올해|지난해|\n|전형료|30,000원|25,000원|"
+    answer = "전형료는 20,000원입니다.\n|전형료|30,000원|25,000원|"
+    result = score(key, answer, context)
+    assert (result["label"], result["matched"]) == ("애매", [])
+
+
+def test_facts_only_in_copied_rows_go_to_a_person():
+    """근거 행을 그대로 옮겨 적은 것이 답 자체일 수 있어, 핵심 사실이 그 행에만 있으면 일부로 단정하지 않고 애매로 넘긴다(#261)."""
+    key = item("ev-0013", shape="목록", tags=["표 근거"], forbidden=[],
+               facts=[{"name": "목표 1", "values": ["문제 해결"]}, {"name": "목표 2", "values": ["직업기술"]}])
+    context = "|교육목표 1|문제 해결 능력 배양|\n|교육목표 2|현장 직업기술 함양|"
+    answer = "교육목표는 다음과 같습니다.\n|교육목표 1|문제 해결 능력 배양|\n|교육목표 2|현장 직업기술 함양|\n현장 직업기술을 키웁니다."
+    result = score(key, answer, context)
+    assert (result["label"], result["quoted_facts"]) == ("애매", ["목표 1"])

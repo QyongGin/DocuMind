@@ -77,20 +77,39 @@ def numbers_with_units(normalized_text: str) -> set[str]:
     return set(_NUMBER_WITH_UNIT.findall(normalized_text))
 
 
+def without_copied_table_rows(answer: str, context: str | None) -> str:
+    """핵심 사실·금지 값 검사에 쓸 답 글: 근거 글의 한 줄과 통째로 같은 표 줄(`|`로 칸을 나눈 줄)은 뺀다.
+
+    모델이 결론 뒤에 근거 표의 행을 옮겨 적으면 그 행의 옆 칸 값이 금지 값에 걸려, 결론이 맞아도 '틀림'이 됐다(#261).
+    옮겨 적은 행은 단정이 아니라 인용이므로 그 안의 값으로 맞음도 틀림도 매기지 않는다. 금지 값만 빼면 결론은 틀린 값인데
+    옮겨 적은 행에 정답 값이 있는 답이 '맞음'이 되므로 핵심 사실도 같은 글에서 찾고, 옮겨 적은 행에만 있는 핵심 사실은
+    `score`가 '애매'로 넘긴다(행 자체를 답으로 보여 준 경우가 있어서). 근거 줄과 글자까지 같은 줄만 빼므로,
+    모델이 행 일부를 골라 새로 쓴 표 줄(예: `|학과|지난해 값|`)이나 문장으로 말한 값은 그대로 본다. 근거 글이 없으면 답
+    그대로다."""
+    if not context:
+        return answer
+    context_rows = {normalize(line) for line in context.splitlines() if line.count("|") >= 3}
+    kept = [line for line in answer.splitlines()
+            if not (line.count("|") >= 3 and normalize(line) in context_rows)]
+    return "\n".join(kept)
+
+
 def score(item: dict, answer: str | None, context: str | None = None) -> dict:
     """답 하나를 판정한다. context(모델이 받은 근거 글)를 주면 근거에 없는 숫자를 '지어낸 숫자'로 본다.
 
     `label`·`matched`·`missing`은 핵심 사실로 매긴 정확 점수, `guidance`는 안내 사실로 매긴 안내 점수다.
     """
     text = (answer or "").strip()
-    result = {"label": "빈 답", "matched": [], "missing": [], "forbidden_hits": [], "invented": [], "abstained": False,
-              "appended_refusal": False, "guidance": guidance(item, "")}
+    result = {"label": "빈 답", "matched": [], "missing": [], "forbidden_hits": [], "invented": [], "quoted_facts": [],
+              "abstained": False, "appended_refusal": False, "guidance": guidance(item, "")}
     if not text:
         return result
     normalized = normalize(text)
     abstained = any(normalize(phrase) in normalized for phrase in REFUSAL_PHRASES)
-    forbidden = [entry["value"] for entry in item.get("forbidden", []) if contains(normalized, entry["value"])]
-    matched, missing = _match(core_facts(item), normalized)
+    # 핵심 사실과 금지 값은 근거 표를 옮겨 적은 줄을 뺀 글에서 찾는다(#261). 거절 말투·숫자·지어낸 숫자는 답 전체로 본다
+    asserted = normalize(without_copied_table_rows(text, context))
+    forbidden = [entry["value"] for entry in item.get("forbidden", []) if contains(asserted, entry["value"])]
+    matched, missing = _match(core_facts(item), asserted)
     # 질문에 있던 숫자(예: "2028학년도")를 답에서 되풀이한 것은 새로 단정한 숫자로 보지 않는다
     numbers = numbers_with_units(normalized) - numbers_with_units(normalize(item.get("question", "")))
     invented = []
@@ -120,7 +139,13 @@ def score(item: dict, answer: str | None, context: str | None = None) -> dict:
         label = "맞음"
     if label in ("맞음", "일부") and invented:
         label = "애매"
+    # 옮겨 적은 근거 행에만 있는 핵심 사실: 그 행을 답으로 보여 준 것인지(맞는 답) 인용만 한 것인지(결론은 다른 값)는
+    # 규칙으로 가를 수 없어 사람이 본다(#261)
+    quoted_only = [name for name in missing if name in _match(core_facts(item), normalized)[0]]
+    if quoted_only and label != "틀림":
+        label = "애매"
     result.update(label=label, matched=matched, missing=missing, forbidden_hits=forbidden, invented=invented,
+                  quoted_facts=quoted_only,
                   abstained=abstained, appended_refusal=abstained and label == "맞음" and item["shape"] != "답없음",
                   guidance=guidance(item, text))
     return result
