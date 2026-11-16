@@ -2586,6 +2586,11 @@ def _rewrite_pdf_tables_for_experiment(
         chunk_size=CHUNK_SIZE,
     )
     rewritten = [Document(page_content=text, metadata=dict(doc.metadata)) for text, doc in zip(result.pages, raw_docs)]
+    if EXP_CHUNK.notes in table_chunk_experiments.GROUP_NOTE_MODES:  # 표마다 묶은 주석(쪽 위치는 쪽 메타데이터로 바꾼다)
+        notes = [(raw_docs[group.page].metadata.get("page"), group) for group in result.groups]
+        logger.info("[table_chunk_experiment] filename=%s settings=%s note_groups=%s with_notes=%s", filename,
+                    EXP_CHUNK.settings(), len(notes), sum(1 for _, group in notes if group.notes))
+        return rewritten, notes
     notes = [(raw_docs[index].metadata.get("page"), head, lines) for index, head, lines in result.notes]
     logger.info("[table_chunk_experiment] filename=%s settings=%s tables=%s notes=%s",
                 filename, EXP_CHUNK.settings(), result.tables, len(notes))
@@ -2593,7 +2598,20 @@ def _rewrite_pdf_tables_for_experiment(
 
 
 def _attach_table_notes_for_experiment(final_docs: list[Document], notes: list[tuple]) -> list[Document]:
-    """표 청크 후보(주석 붙이기): 표 머리 줄이 든 청크에 그 표의 주석 줄을 붙인다."""
+    """표 청크 후보(주석 붙이기). symbol·block·bbox: 표 머리 줄이 든 청크에 주석 줄을 붙인다.
+    pieces: 그 표의 모든 조각에 제목과 주석 묶음을 붙인다. chunk: 기존 청크 뒤에 표마다 주석 청크를 하나 더 둔다."""
+    if EXP_CHUNK.notes == "pieces":
+        texts = table_chunk_experiments.attach_notes_to_pieces([doc.page_content for doc in final_docs],
+                                                               [group for _, group in notes])
+        return [Document(page_content=text, metadata=doc.metadata) for text, doc in zip(texts, final_docs)]
+    if EXP_CHUNK.notes == "chunk":
+        extra = []
+        for page, group in notes:
+            text = table_chunk_experiments.note_chunk_text(group)
+            if text:  # 쪽 메타데이터는 같은 쪽의 청크에서 빌린다(색인 때 글로 다시 셈)
+                anchor = next((doc.metadata for doc in final_docs if doc.metadata.get("page") == page), {})
+                extra.append(Document(page_content=text, metadata={**anchor, "page": page} if page is not None else dict(anchor)))
+        return final_docs + extra
     texts = table_chunk_experiments.attach_notes([(doc.page_content, doc.metadata.get("page")) for doc in final_docs], notes)
     return [Document(page_content=text, metadata=doc.metadata) for text, doc in zip(texts, final_docs)]
 

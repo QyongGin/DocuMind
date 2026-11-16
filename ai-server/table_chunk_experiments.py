@@ -27,7 +27,10 @@ class ChunkExperiment:
     grid: bool = False  # 합친 칸을 채운 표 격자로 마크다운 표를 다시 쓴다
     header_all: bool = False  # 표를 나눌 때 여러 줄 머리글 전체를 조각마다 되풀이한다
     cross_page: bool = False  # 쪽을 넘는 표를 도구가 준 연결로 합친다
-    notes: str = ""  # symbol(기호가 든 주석 줄) | block(주석 묶음 전체) | bbox(좌표 규칙)
+    # symbol(기호가 든 주석 줄) | block(주석 묶음 전체) | bbox(좌표 규칙): 표 머리 줄이 든 청크에 붙인다
+    # pieces: 표 뒤 주석 묶음과 표 제목을 그 표의 모든 조각에 붙인다
+    # chunk: 표 제목 + 머리글 + 주석 묶음으로 된 청크를 표마다 하나 더 만든다(기존 청크는 그대로)
+    notes: str = ""
     table_format: str = ""  # cells(칸마다 머리글을 붙인 줄) | html(합친 칸을 rowspan·colspan으로)
     table_max: int = 0  # 표를 한 청크로: 이 글자 수까지 나누지 않는다
 
@@ -344,11 +347,136 @@ def notes_from_bbox(page_data: Mapping[str, Any], table: JsonTable, max_chars: i
 # ---------------------------------------------------------------- 쪽 글 다시 쓰기
 
 
+GROUP_NOTE_MODES = ("pieces", "chunk")
+NOTE_LINES_MAX = 12  # 주석 묶음 상한: 표 뒤에 제목 없이 본문이 이어질 때 본문까지 끌어오지 않게
+NOTE_CHARS_MAX = 800
+TITLE_LOOKBACK = 3  # 표 제목: 표 바로 위 이 줄 수 안의 가장 가까운 글 줄
+TITLE_MAX = 80
+PIECE_MIN = 0.5  # 청크의 표 줄 가운데 이 비율 이상이 그 표의 줄이면 그 표의 조각으로 본다
+
+
+@dataclass
+class TableNoteGroup:
+    """한 표(쪽을 넘으면 이어진 조각 전체)의 제목, 머리글, 표 줄, 표 뒤 주석 묶음."""
+    page: int  # 첫 조각의 쪽 위치(page_texts 순번)
+    title: str
+    header: list[str]  # 첫 조각의 머리 줄(구분 줄 포함)
+    rows: set[str]  # 모든 조각의 표 줄(공백을 뺀 글)
+    notes: list[str]
+
+
 @dataclass
 class RewriteResult:
     pages: list[str]
     notes: list[tuple[int, str, list[str]]]  # (쪽 위치, 표 머리 줄, 주석 줄들)
     tables: int = 0
+    groups: list[TableNoteGroup] = field(default_factory=list)  # pieces·chunk 모드
+
+
+def is_real_table(table: MdTable) -> bool:
+    """두 행 이상, 두 칸 이상인 표. 칸 하나짜리 상자(범례 상자 등)는 표로 보지 않고 글로 읽는다."""
+    return len(table.rows) >= 2 and max(len(row) for row in table.rows) >= 2
+
+
+def table_title(lines: list[str], start: int) -> str:
+    """표 바로 위 TITLE_LOOKBACK 줄 안의 가장 가까운 글 줄(제목 표시 '#'를 뺌). 표 줄이거나 길면 제목이 없다."""
+    for k in range(start - 1, max(-1, start - 1 - TITLE_LOOKBACK), -1):
+        text = lines[k].strip()
+        if not text:
+            continue
+        if _ROW.match(lines[k]):
+            return ""
+        text = text.lstrip("#").strip()
+        return text if len(text) <= TITLE_MAX else ""
+    return ""
+
+
+def notes_after_table(lines: list[str], table: MdTable, stop: int) -> list[str]:
+    """표 바로 뒤부터 다음 표(stop)나 제목 줄 전까지의 글 줄. 글자 모양(※·* 등)으로 거르지 않는다.
+    칸 하나짜리 상자 줄은 칸 글만 남긴다. NOTE_LINES_MAX 줄, NOTE_CHARS_MAX 글자에서 멈춘다."""
+    out, total = [], 0
+    for k in range(table.end, min(stop, len(lines))):
+        line = lines[k].strip()
+        if not line or _SEP.match(lines[k]):
+            continue
+        if line.startswith("#"):
+            break
+        if _ROW.match(lines[k]):
+            line = " ".join(cell.strip() for cell in split_cells(lines[k]) if cell.strip())
+            if not line:
+                continue
+        if len(out) >= NOTE_LINES_MAX or total + len(line) > NOTE_CHARS_MAX:
+            break
+        out.append(line)
+        total += len(line)
+    return out
+
+
+def note_groups(page_texts: list[str], md_by_page: list[list[MdTable]], tables_by_page: list[list[JsonTable]],
+                is_subheader: Callable[[list[str], list[list[str]]], bool] | None = None) -> list[TableNoteGroup]:
+    """쪽마다 진짜 표를 찾아, JSON의 앞뒤 표 연결로 이어진 조각을 한 표로 묶고 제목·머리글·주석 묶음을 모은다."""
+    lines_by_page = [text.split("\n") for text in page_texts]
+    pieces = [(i, m) for i, mds in enumerate(md_by_page) for m in mds if is_real_table(m)]
+    parent = {id(m): id(m) for _, m in pieces}
+
+    def find(key):
+        while parent[key] != key:
+            parent[key] = parent[parent[key]]
+            key = parent[key]
+        return key
+
+    by_id = {t.tid: t for page in tables_by_page for t in page if t.tid is not None}
+    for page in tables_by_page:
+        for t in page:
+            prev = by_id.get(t.prev_id) if t.prev_id is not None else None
+            if t.md is not None and prev is not None and prev.md is not None and id(t.md) in parent and id(prev.md) in parent:
+                parent[find(id(t.md))] = find(id(prev.md))
+    grouped: dict[int, list[tuple[int, MdTable]]] = {}
+    for i, m in pieces:
+        grouped.setdefault(find(id(m)), []).append((i, m))
+    out = []
+    for members in grouped.values():
+        members.sort(key=lambda pm: (pm[0], pm[1].start))
+        first_page, first = members[0]
+        notes: list[str] = []
+        for i, m in members:
+            later = [x.start for x in md_by_page[i] if is_real_table(x) and x.start >= m.end]
+            for line in notes_after_table(lines_by_page[i], m, min(later) if later else len(lines_by_page[i])):
+                if line not in notes:
+                    notes.append(line)
+        header_rows = header_row_count(first.rows, False, is_subheader)
+        header = [first.lines[0], first.lines[1]] + first.lines[2:header_rows + 1]
+        rows = {_norm(line) for _, m in members for line in m.lines if not _SEP.match(line)}
+        out.append(TableNoteGroup(first_page, table_title(lines_by_page[first_page], first.start), header, rows, notes))
+    out.sort(key=lambda g: g.page)
+    return out
+
+
+def attach_notes_to_pieces(chunks: list[str], groups: list[TableNoteGroup]) -> list[str]:
+    """pieces 모드: 표 줄의 PIECE_MIN 이상이 한 표의 줄인 청크(그 표의 조각)마다 그 표의 제목과 주석 묶음을 붙인다.
+    쪽 메타데이터는 틀릴 때가 있어 쓰지 않는다. 이미 든 줄은 다시 붙이지 않는다. 주석이 없는 표는 붙이지 않는다."""
+    out = []
+    for text in chunks:
+        rows = [_norm(line) for line in text.split("\n") if _ROW.match(line) and not _SEP.match(line)]
+        best, best_share = None, 0.0
+        for group in groups:
+            if not group.notes or not rows:
+                continue
+            share = sum(1 for row in rows if row in group.rows) / len(rows)
+            if share > best_share:
+                best, best_share = group, share
+        if best is None or best_share < PIECE_MIN:
+            out.append(text)
+            continue
+        flat = _norm(text)
+        extra = [line for line in [best.title] + best.notes if line and _norm(line) not in flat]
+        out.append(text + "\n\n" + "\n".join(extra) if extra else text)
+    return out
+
+
+def note_chunk_text(group: TableNoteGroup) -> str:
+    """chunk 모드: '제목 + 머리글 + 주석 묶음' 글. 주석이 없는 표는 빈 글(청크를 만들지 않는다)."""
+    return "\n".join(([group.title] if group.title else []) + group.header + group.notes) if group.notes else ""
 
 
 def rewrite_pages(page_texts: list[str], page_jsons: list[Mapping[str, Any] | None], exp: ChunkExperiment,
@@ -357,10 +485,13 @@ def rewrite_pages(page_texts: list[str], page_jsons: list[Mapping[str, Any] | No
     """쪽마다 마크다운 표를 후보 방식으로 다시 쓴다. page_jsons[i]는 i번째 쪽의 OpenDataLoader JSON(없으면 None)."""
     lines_by_page = [text.split("\n") for text in page_texts]
     tables_by_page: list[list[JsonTable]] = []
+    md_by_page: list[list[MdTable]] = []
     for i, data in enumerate(page_jsons):
         js = json_tables(data, i) if data else []
-        pair_tables(markdown_tables(page_texts[i]), js)
+        mds = markdown_tables(page_texts[i])
+        pair_tables(mds, js)
         tables_by_page.append(js)
+        md_by_page.append(mds)
     by_id = {(t.tid): t for page in tables_by_page for t in page if t.tid is not None}
 
     replace: dict[tuple[int, int], tuple[int, list[str]]] = {}  # (쪽, 시작 줄) → (끝 줄, 새 줄들)
@@ -404,7 +535,7 @@ def rewrite_pages(page_texts: list[str], page_jsons: list[Mapping[str, Any] | No
             if filled or joined:
                 replace[(i, t.md.start)] = (t.md.end, new)
                 count += 1
-            if exp.notes:
+            if exp.notes and exp.notes not in GROUP_NOTE_MODES:
                 if exp.notes == "bbox":
                     found = notes_from_bbox(page_jsons[i] or {}, t)
                 else:
@@ -423,7 +554,8 @@ def rewrite_pages(page_texts: list[str], page_jsons: list[Mapping[str, Any] | No
                 result.append(lines[k])
                 k += 1
         out_pages.append("\n".join(result))
-    return RewriteResult(out_pages, notes, count)
+    groups = note_groups(page_texts, md_by_page, tables_by_page, is_subheader) if exp.notes in GROUP_NOTE_MODES else []
+    return RewriteResult(out_pages, notes, count, groups)
 
 
 def attach_notes(chunks: list[tuple[str, int | None]], notes: list[tuple[int, str, list[str]]]) -> list[str]:

@@ -139,3 +139,87 @@ def test_table_max_keeps_table_whole(monkeypatch):
     monkeypatch.setattr(main, "EXP_CHUNK", tcx.ChunkExperiment(table_max=2000))
     assert len(table) <= 2000
     assert [d.page_content for d in main._split_table_block(table, {})] == [table]
+
+
+# ---------------------------------------------------------------- 주석 묶음을 표마다(pieces·chunk)
+
+PLAIN_NOTE_PAGE = """### 가나대학 정원외 모집인원
+
+|계열|모집단위|농어촌|
+|---|---|---|
+|공학|가나기계과|2|
+|인문|라마경영과|1|
+
+가나대학 자유전공학부는 정원외 전형을 모집하지 않음
+|◆ 표시: 야간 과정|
+|---|
+(단위: 명)
+
+|구분|기간|
+|---|---|
+|원서 접수|9월|
+|면접|10월|"""
+
+
+def test_note_groups_join_linked_pages_and_stop_at_heading():
+    result = rewrite(notes="pieces")
+    assert result.pages == [fx.PAGE_1, fx.PAGE_2] and result.notes == []  # 쪽 글은 그대로, 옛 주석 목록은 비움
+    assert len(result.groups) == 1  # 두 쪽에 걸친 표는 JSON 앞뒤 연결로 한 표
+    group = result.groups[0]
+    assert group.page == 0 and group.title == "가나대학 모집인원"
+    assert group.notes == ["★ 표시: 야간 과정을 함께 운영하는 학과", "※ 모집인원은 사정에 따라 바뀔 수 있음"]
+    assert any("라마경영과" in row for row in group.rows)  # 둘째 쪽 조각의 줄도 그 표의 줄
+    assert group.header[:2] == ["|계열|모집단위|수시1차| |", "|---|---|---|---|"]
+
+
+def test_notes_without_marks_box_text_and_stop_at_next_table():
+    result = tcx.rewrite_pages([PLAIN_NOTE_PAGE], [None], tcx.ChunkExperiment(notes="pieces"),
+                               is_subheader=main._is_probable_subheader_row)
+    first, second = result.groups
+    # 기호 없는 줄도, 칸 하나짜리 상자 글도, 단위 줄도 주석 묶음이다. 다음 표에서 멈춘다
+    assert first.notes == ["가나대학 자유전공학부는 정원외 전형을 모집하지 않음", "◆ 표시: 야간 과정", "(단위: 명)"]
+    assert first.title == "가나대학 정원외 모집인원"
+    assert second.notes == [] and second.title == "(단위: 명)"  # 표 바로 위 글 줄이 제목 자리
+
+
+def test_notes_block_is_capped(monkeypatch):
+    page = "|가|나|\n|---|---|\n|1|2|\n" + "\n".join(f"가나대학 안내 문장 {n}" for n in range(30))
+    group = tcx.rewrite_pages([page], [None], tcx.ChunkExperiment(notes="chunk")).groups[0]
+    assert len(group.notes) == tcx.NOTE_LINES_MAX  # 제목 없이 본문이 이어져도 상한에서 멈춘다
+
+
+def test_attach_notes_to_every_piece_of_the_table():
+    groups = rewrite(notes="pieces").groups
+    chunks = ["|계열|모집단위|수시1차| |\n|---|---|---|---|\n| | |일반고|특성화고|\n|공학|가나기계과 ★|30|5|",
+              "|인문|라마경영과|40|6|\n|인문|바사회계과|20|3|",  # 둘째 쪽 조각(머리글 없음)
+              "가나대학 휴학 신청은 학기 시작 전까지 포털에서 할 수 있다.",
+              "|구분|기간|\n|---|---|\n|원서 접수|9월|"]  # 다른 표
+    out = tcx.attach_notes_to_pieces(chunks, groups)
+    for k in (0, 1):
+        assert out[k].endswith("가나대학 모집인원\n★ 표시: 야간 과정을 함께 운영하는 학과\n※ 모집인원은 사정에 따라 바뀔 수 있음")
+    assert out[2] == chunks[2] and out[3] == chunks[3]
+    assert tcx.attach_notes_to_pieces(out, groups) == out  # 이미 든 줄은 다시 붙이지 않는다
+
+
+def test_main_modes_attach_or_add_note_chunk(monkeypatch):
+    groups = rewrite(notes="chunk").groups
+    docs = [Document(page_content="|계열|모집단위|수시1차| |\n|---|---|---|---|\n|공학|가나기계과 ★|30|5|",
+                     metadata={"page": 1, "Header 2": "가나대학 모집인원"}),
+            Document(page_content="가나대학 휴학 안내", metadata={"page": 2})]
+    monkeypatch.setattr(main, "EXP_CHUNK", tcx.ChunkExperiment(notes="chunk"))
+    out = main._attach_table_notes_for_experiment(docs, [(1, groups[0])])
+    assert out[:2] == docs and len(out) == 3  # 기존 청크는 그대로, 주석 청크가 뒤에 하나
+    assert out[2].page_content.splitlines() == ["가나대학 모집인원", "|계열|모집단위|수시1차| |", "|---|---|---|---|",
+                                                "| | |일반고|특성화고|", "★ 표시: 야간 과정을 함께 운영하는 학과",
+                                                "※ 모집인원은 사정에 따라 바뀔 수 있음"]
+    assert out[2].metadata == {"page": 1, "Header 2": "가나대학 모집인원"}
+    empty = tcx.TableNoteGroup(0, "가나 표", ["|가|", "|---|"], set(), [])
+    assert main._attach_table_notes_for_experiment(docs, [(1, empty)]) == docs  # 주석 없는 표는 청크를 만들지 않는다
+    monkeypatch.setattr(main, "EXP_CHUNK", tcx.ChunkExperiment(notes="pieces"))
+    pieces = main._attach_table_notes_for_experiment(docs, [(1, groups[0])])
+    assert pieces[0].page_content.endswith("※ 모집인원은 사정에 따라 바뀔 수 있음") and pieces[1] == docs[1]
+
+
+def test_from_env_reads_note_modes(monkeypatch):
+    monkeypatch.setenv("AI_EXP_CHUNK_NOTES", "pieces")
+    assert tcx.from_env().settings() == {"notes": "pieces"} and tcx.from_env().rewrites_pages()
