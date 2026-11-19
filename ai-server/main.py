@@ -2013,14 +2013,21 @@ def _build_opendataloader_json_index_artifacts(
     source_blocks_by_id: dict[str, SourceBlock] = {}
     table_facts: list[TableFact] = []
 
+    heading_path: tuple[str, ...] = ()
+    previous_table_caption: str | None = None
     for json_doc in json_docs:
+        # 쪽마다 따로 읽되, 제목 경로와 쪽 끝 표의 이름은 다음 쪽으로 넘긴다(쪽을 넘는 표가 이름을 잃지 않게, #264)
         result = adapt_opendataloader_json_page(
             json_doc.page_content,
             document_id=document_id,
             source=filename,
             document_format=_document_format_from_filename(filename),
             block_index_offset=block_index_offset,
+            initial_heading_path=heading_path,
+            previous_table_caption=previous_table_caption,
         )
+        heading_path = result.last_heading_path
+        previous_table_caption = result.last_table_caption
         block_index_offset += len(result.parsed_blocks)
         diagnostics_count += len(result.diagnostics)
         for source_block in result.source_blocks:

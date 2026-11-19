@@ -51,6 +51,9 @@ class OpenDataLoaderAdapterResult:
     source_blocks: tuple[SourceBlock, ...]
     table_facts: tuple[TableFact, ...]
     diagnostics: tuple[OpenDataLoaderAdapterDiagnostic, ...] = ()
+    # 다음 쪽으로 넘길 상태: 쪽 끝의 제목 경로와, 쪽이 표로 끝나면 그 표의 이름(이어지는 표가 이어받는다)
+    last_heading_path: tuple[str, ...] = ()
+    last_table_caption: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,8 +74,14 @@ def adapt_opendataloader_json_page(
     source: str,
     document_format: str = "pdf",
     block_index_offset: int = 0,
+    initial_heading_path: Sequence[str] = (),
+    previous_table_caption: str | None = None,
 ) -> OpenDataLoaderAdapterResult:
-    """Convert one OpenDataLoader JSON page into RAG contract candidates."""
+    """Convert one OpenDataLoader JSON page into RAG contract candidates.
+
+    ``initial_heading_path``와 ``previous_table_caption``은 앞 쪽 결과의 ``last_heading_path``,
+    ``last_table_caption``을 넘겨받아, 제목이 없는 쪽의 표와 쪽을 넘어 이어지는 표도 표 이름을 갖게 한다.
+    """
     page_data = _load_page_data(page_content)
     page_number = _coerce_int(page_data.get("page number")) or _coerce_int(
         page_data.get("page")
@@ -83,8 +92,9 @@ def adapt_opendataloader_json_page(
     source_blocks: list[SourceBlock] = []
     section_by_id: dict[str, SectionNode] = {}
     table_facts: list[TableFact] = []
-    heading_path: list[str] = []
+    heading_path: list[str] = list(initial_heading_path)
     linked_caption_by_content_id = _linked_caption_by_content_id(candidates)
+    last_table_caption: str | None = None
 
     start_index = max(0, block_index_offset) + 1
     for block_index, candidate in enumerate(candidates, start=start_index):
@@ -137,17 +147,22 @@ def adapt_opendataloader_json_page(
             )
 
         if candidate.element_type == "table":
+            position = block_index - start_index
+            table_caption = _table_caption_for_candidate(
+                candidate,
+                heading_path,
+                linked_caption_by_content_id,
+                preceding_caption=_preceding_short_line_caption(candidates, position),
+                continued_caption=previous_table_caption if _is_first_content_on_page(candidates, position) else None,
+            )
+            last_table_caption = table_caption
             table_facts.extend(
                 _table_facts_from_rows(
                     candidate.table_rows,
                     document_id=document_id,
                     table_index=block_index,
                     source_block_id=source_block.source_block_id,
-                    caption=_table_caption_for_candidate(
-                        candidate,
-                        heading_path,
-                        linked_caption_by_content_id,
-                    ),
+                    caption=table_caption,
                     header_path=heading_path,
                     diagnostics=diagnostics,
                     block_id=parsed_block.block_id,
@@ -160,6 +175,8 @@ def adapt_opendataloader_json_page(
         source_blocks=tuple(source_blocks),
         table_facts=tuple(table_facts),
         diagnostics=tuple(diagnostics),
+        last_heading_path=tuple(heading_path),
+        last_table_caption=last_table_caption if candidates and candidates[-1].element_type == "table" else None,
     )
 
 
@@ -435,12 +452,52 @@ def _table_caption_for_candidate(
     candidate: _ElementCandidate,
     heading_path: Sequence[str],
     linked_caption_by_content_id: Mapping[str, str],
+    *,
+    preceding_caption: str | None = None,
+    continued_caption: str | None = None,
 ) -> str | None:
+    # 순서: PDF 도구가 표에 이어 준 캡션 → 표 바로 앞의 짧은 제목 줄 → 앞 쪽에서 이어지는 표의 이름 → 제목 경로
     for content_id in _element_ids(candidate.element):
         caption = linked_caption_by_content_id.get(content_id)
         if caption:
             return caption
-    return _table_caption(heading_path)
+    return preceding_caption or continued_caption or _table_caption(heading_path)
+
+
+_CAPTION_LOOKBACK = 2
+_CAPTION_MAX_CHARS = 80
+
+
+def _preceding_short_line_caption(candidates: Sequence[_ElementCandidate], position: int) -> str | None:
+    # 마크다운 길(main._extract_table_caption)과 같은 규칙: 표 바로 앞 몇 요소에서 마지막 짧은 줄을 표 이름으로 쓴다.
+    # 80자 이하, 주석(※)이나 날짜가 둘 이상 든 줄은 빼고, 다른 표를 만나면 멈춘다.
+    for index in range(position - 1, max(position - 1 - _CAPTION_LOOKBACK, -1), -1):
+        previous = candidates[index]
+        if previous.element_type == "table":
+            return None
+        lines = [_clean_text(line) for line in previous.text.splitlines() if _clean_text(line)]
+        if not lines:
+            continue
+        # PDF 글자 층의 빈 문자(\x00)가 낱말 사이에 끼어 나오는 경우가 있어 표 이름에서는 지운다
+        line = _clean_text(lines[-1].replace("\x00", " ")).lstrip("- ").strip()
+        if _is_caption_like_line(line):
+            return line
+        return None
+    return None
+
+
+def _is_caption_like_line(line: str) -> bool:
+    return (
+        bool(line)
+        and len(line) <= _CAPTION_MAX_CHARS
+        and not line.startswith("※")
+        and not line.endswith(">")
+        and len(re.findall(r"\d{4}\.\d", line)) < 2
+    )
+
+
+def _is_first_content_on_page(candidates: Sequence[_ElementCandidate], position: int) -> bool:
+    return all(candidate.element_type == "table" for candidate in candidates[:position])
 
 
 def _element_ids(element: Mapping[str, Any]) -> tuple[str, ...]:
