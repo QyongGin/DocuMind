@@ -65,6 +65,7 @@ class _ElementCandidate:
     confidence: float
     fallback_reasons: tuple[str, ...] = ()
     table_rows: tuple[tuple[str, ...], ...] = ()
+    merged_columns: frozenset[int] = frozenset()
 
 
 def adapt_opendataloader_json_page(
@@ -159,6 +160,7 @@ def adapt_opendataloader_json_page(
             table_facts.extend(
                 _table_facts_from_rows(
                     candidate.table_rows,
+                    merged_columns=candidate.merged_columns,
                     document_id=document_id,
                     table_index=block_index,
                     source_block_id=source_block.source_block_id,
@@ -241,6 +243,7 @@ def _collect_element_candidates(page_data: Mapping[str, Any]) -> tuple[_ElementC
                 confidence=_confidence(element, text, fallback_reasons),
                 fallback_reasons=fallback_reasons,
                 table_rows=table_rows,
+                merged_columns=_vertically_merged_columns(element) if element_type == "table" else frozenset(),
             )
         )
     return tuple(candidates)
@@ -613,6 +616,7 @@ def _updated_heading_path(current_path: Sequence[str], level: int, title: str) -
 def _table_facts_from_rows(
     rows: Sequence[Sequence[str]],
     *,
+    merged_columns: frozenset[int] = frozenset(),
     document_id: str | int,
     table_index: int,
     source_block_id: str,
@@ -641,7 +645,7 @@ def _table_facts_from_rows(
     header_rows = normalized_rows[:header_row_count]
     data_rows = normalized_rows[header_row_count:]
     column_paths = _table_column_paths(header_rows)
-    label_column = _row_label_column(data_rows)
+    label_column, group_columns = _row_label_layout(data_rows, merged_columns)
     facts: list[TableFact] = []
     current_row_group: str | None = None
     for row_offset, row in enumerate(data_rows, start=header_row_count):
@@ -686,10 +690,10 @@ def _table_facts_from_rows(
                 else (f"column {column_index + 1}",)
             )
             column_label = " > ".join(column_path)
-            row_header_path = (
-                (current_row_group, row_label)
-                if current_row_group
-                else (row_label,)
+            row_header_path = tuple(
+                part
+                for part in (current_row_group, *_row_group_path(row, group_columns), row_label)
+                if part
             )
             facts.append(
                 build_table_cell_fact(
@@ -715,31 +719,85 @@ _SERIAL_MAX = 999
 _SERIAL_MIN_ROWS = 3
 
 
-def _row_label_column(data_rows: Sequence[Sequence[str]]) -> int:
-    """행 이름으로 쓸 열을 고른다. 기본은 첫 열이다.
+def _row_label_layout(
+    data_rows: Sequence[Sequence[str]],
+    merged_columns: frozenset[int] = frozenset(),
+) -> tuple[int, tuple[int, ...]]:
+    """행 이름으로 쓸 열과, 그 왼쪽의 묶음 열을 고른다. 고를 수 없으면 첫 열(0, ())이다.
 
-    첫 열이 연번(1, 2, 3 …처럼 1씩 늘어나는 세 자리 이하 정수)이면, 그 오른쪽에서 칸 대부분이 숫자가 아닌
-    글이고 그 글이 대부분 서로 다른 첫 열을 행 이름으로 쓴다(연번은 칸 값으로 남긴다). 그런 열이 없거나,
-    연도처럼 큰 수, 띄엄띄엄한 번호면 첫 열을 그대로 쓴다.
+    왼쪽부터 보며 연번 열(첫 열이 1씩 늘어나는 세 자리 이하 정수)과 묶음 열(본문에서 세로로 합친 칸이 있고 여러 행이
+    같은 값인 글 열, 예: 계열, 학부)은 건너뛰고, 칸 대부분이 숫자가 아닌 글이고 그 글이 대부분 서로 다른 첫 열을 행 이름으로 쓴다.
+    연번이나 묶음 열을 건너뛴 뒤의 숫자 열(호실 등)도 건너뛴다. 건너뛴 묶음 열의 값은 행 경로로 남긴다.
+    첫 열이 연번이 아닌 숫자 열이면 첫 열을 그대로 쓴다(연도, 띄엄띄엄한 번호 등).
     """
-    first = [_clean_text(row[0]) for row in data_rows if row and _clean_text(row[0])]
-    if len(first) < _SERIAL_MIN_ROWS or not all(re.fullmatch(r"\d{1,3}", value) for value in first):
-        return 0
-    numbers = [int(value) for value in first]
-    steps = sum(1 for a, b in zip(numbers, numbers[1:]) if b == a + 1)
-    if numbers[-1] > _SERIAL_MAX or steps < 0.8 * (len(numbers) - 1):
-        return 0
     width = max((len(row) for row in data_rows), default=0)
-    for column in range(1, width):
-        texts = [
-            value
-            for value in (_clean_text(row[column]) for row in data_rows if column < len(row))
-            if _is_fact_value(value) and not _table_cell_has_compact_value(value)
-        ]
-        # 행 이름은 행을 가려야 한다: 칸 대부분이 글이고, 그 글이 대부분 서로 달라야 한다(학부처럼 여러 행이 같은 열은 뺀다)
-        if len(texts) >= 0.5 * len(data_rows) and len(set(texts)) >= 0.8 * len(texts):
-            return column
-    return 0
+    groups: list[int] = []
+    skipped_leading = False
+    for column in range(width):
+        values = [_clean_text(row[column]) for row in data_rows if column < len(row)]
+        texts = [value for value in values if _is_fact_value(value) and not _table_cell_has_compact_value(value)]
+        if len(texts) >= 0.5 * len(data_rows):
+            # 행 이름은 행을 가려야 한다: 그 글이 대부분 서로 다르면 행 이름, 여러 행이 같으면 묶음 열
+            if len(set(texts)) >= 0.8 * len(texts):
+                return column, tuple(groups)
+            if column in merged_columns:
+                groups.append(column)
+                continue
+            if skipped_leading or groups:
+                # 연번이나 묶음 열을 건너뛴 뒤라면 값이 겹치는 글 열(관리소속 등)도 건너뛴다. 경로에는 넣지 않는다
+                continue
+            # 첫 열부터 합친 칸이 아닌데 값이 겹치는 글 열(참여 여부 같은 상태 열)이면 묶음으로 보지 않고 멈춘다
+            break
+        if column == 0 and _is_serial_column(values):
+            skipped_leading = True
+            continue
+        if skipped_leading or groups:
+            # 연번이나 묶음 열을 건너뛴 뒤에는 호실 같은 숫자 열도 건너뛰고 이름 열을 찾는다
+            continue
+        break
+    return 0, ()
+
+
+def _vertically_merged_columns(element: Mapping[str, Any]) -> frozenset[int]:
+    """둘째 행부터 세로로 합친 칸(row span ≥ 2)이 있는 열 번호(0부터). 첫 행의 합친 칸은 머리글일 수 있어 뺀다."""
+    columns: set[int] = set()
+    rows = element.get("rows") or []
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+        return frozenset()
+    for row_position, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            continue
+        row_number = _positive_int_from_mapping(row, _ROW_NUMBER_KEYS, default=row_position + 1)
+        if row_number <= 1:
+            continue
+        for cell in row.get("cells") or []:
+            if not isinstance(cell, Mapping):
+                continue
+            if _positive_int_from_mapping(cell, _ROW_SPAN_KEYS, default=1) < 2:
+                continue
+            start = _zero_based_column_index(cell, fallback=0)
+            span = _positive_int_from_mapping(cell, _COLUMN_SPAN_KEYS, default=1)
+            columns.update(range(start, start + span))
+    return frozenset(columns)
+
+
+def _is_serial_column(values: Sequence[str]) -> bool:
+    numbers_text = [value for value in values if value]
+    if len(numbers_text) < _SERIAL_MIN_ROWS or not all(re.fullmatch(r"\d{1,3}", value) for value in numbers_text):
+        return False
+    numbers = [int(value) for value in numbers_text]
+    steps = sum(1 for a, b in zip(numbers, numbers[1:]) if b == a + 1)
+    return numbers[-1] <= _SERIAL_MAX and steps >= 0.8 * (len(numbers) - 1)
+
+
+def _row_group_path(row: Sequence[str], group_columns: Sequence[int]) -> tuple[str, ...]:
+    path: list[str] = []
+    for column in group_columns:
+        value = _clean_text(row[column]) if column < len(row) else ""
+        # 「―」처럼 글자가 없는 칸은 경로에 넣지 않는다
+        if value and re.search(r"\w", value) and (not path or path[-1] != value):
+            path.append(value)
+    return tuple(path)
 
 
 def _row_label(row: Sequence[str], label_column: int) -> str:
