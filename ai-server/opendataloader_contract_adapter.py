@@ -260,10 +260,39 @@ def _iter_elements(elements: Iterable[Any]) -> Iterable[Mapping[str, Any]]:
         nested = _nested_text_children(element)
         if not _is_container_only_element(element, nested):
             yield element
+        if element_type == "list":
+            # 목록은 항목 글로만 읽으므로, 항목 아래에 든 표는 따로 꺼내 표 사실을 만들게 한다(#264)
+            yield from _tables_in_list(element)
         if element_type in _SUBTREE_STOP_ELEMENT_TYPES:
             continue
         if nested:
             yield from _iter_elements(nested)
+
+
+_LIST_ITEM_CAPTION_KEY = "_documind_list_item_caption"
+
+
+def _tables_in_list(list_element: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
+    """목록 항목 아래(안쪽 목록 포함)에 든 표를 항목 제목과 함께 꺼낸다. 표 칸 안의 표는 꺼내지 않는다."""
+    items = list_element.get("list items") or list_element.get("items") or []
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+        return
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        title = _clean_text(str(item.get("content") or "").replace("\x00", " "))
+        yield from _tables_under(_nested_text_children(item), title)
+
+
+def _tables_under(elements: Iterable[Mapping[str, Any]], title: str) -> Iterable[Mapping[str, Any]]:
+    for element in elements:
+        element_type = _normalize_element_type(element.get("type"))
+        if element_type == "table":
+            yield {**element, _LIST_ITEM_CAPTION_KEY: title} if title else element
+        elif element_type == "list":
+            yield from _tables_in_list(element)
+        else:
+            yield from _tables_under(_nested_text_children(element), title)
 
 
 def _merge_section_nodes(existing: SectionNode, incoming: SectionNode) -> SectionNode:
@@ -456,11 +485,15 @@ def _table_caption_for_candidate(
     preceding_caption: str | None = None,
     continued_caption: str | None = None,
 ) -> str | None:
-    # 순서: PDF 도구가 표에 이어 준 캡션 → 표 바로 앞의 짧은 제목 줄 → 앞 쪽에서 이어지는 표의 이름 → 제목 경로
+    # 순서: PDF 도구가 표에 이어 준 캡션 → 표를 품은 목록 항목의 제목 → 표 바로 앞의 짧은 제목 줄
+    #       → 앞 쪽에서 이어지는 표의 이름 → 제목 경로
     for content_id in _element_ids(candidate.element):
         caption = linked_caption_by_content_id.get(content_id)
         if caption:
             return caption
+    list_item_caption = candidate.element.get(_LIST_ITEM_CAPTION_KEY)
+    if isinstance(list_item_caption, str) and _is_caption_like_line(list_item_caption):
+        return list_item_caption
     return preceding_caption or continued_caption or _table_caption(heading_path)
 
 
