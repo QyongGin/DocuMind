@@ -608,6 +608,7 @@ def _table_facts_from_rows(
     header_rows = normalized_rows[:header_row_count]
     data_rows = normalized_rows[header_row_count:]
     column_paths = _table_column_paths(header_rows)
+    label_column = _row_label_column(data_rows)
     facts: list[TableFact] = []
     current_row_group: str | None = None
     for row_offset, row in enumerate(data_rows, start=header_row_count):
@@ -624,8 +625,10 @@ def _table_facts_from_rows(
             )
             continue
 
-        row_label = row[0] if row and row[0] else f"row {row_offset + 1}"
-        for column_index, value in enumerate(row[1:], start=1):
+        row_label = _row_label(row, label_column) or f"row {row_offset + 1}"
+        for column_index, value in enumerate(row):
+            if column_index == label_column:
+                continue
             if not _is_fact_value(value):
                 continue
             skip_reason = _table_fact_value_skip_reason(value)
@@ -673,6 +676,43 @@ def _table_facts_from_rows(
                 )
             )
     return tuple(facts)
+
+
+_SERIAL_MAX = 999
+_SERIAL_MIN_ROWS = 3
+
+
+def _row_label_column(data_rows: Sequence[Sequence[str]]) -> int:
+    """행 이름으로 쓸 열을 고른다. 기본은 첫 열이다.
+
+    첫 열이 연번(1, 2, 3 …처럼 1씩 늘어나는 세 자리 이하 정수)이면, 그 오른쪽에서 칸 대부분이 숫자가 아닌
+    글이고 그 글이 대부분 서로 다른 첫 열을 행 이름으로 쓴다(연번은 칸 값으로 남긴다). 그런 열이 없거나,
+    연도처럼 큰 수, 띄엄띄엄한 번호면 첫 열을 그대로 쓴다.
+    """
+    first = [_clean_text(row[0]) for row in data_rows if row and _clean_text(row[0])]
+    if len(first) < _SERIAL_MIN_ROWS or not all(re.fullmatch(r"\d{1,3}", value) for value in first):
+        return 0
+    numbers = [int(value) for value in first]
+    steps = sum(1 for a, b in zip(numbers, numbers[1:]) if b == a + 1)
+    if numbers[-1] > _SERIAL_MAX or steps < 0.8 * (len(numbers) - 1):
+        return 0
+    width = max((len(row) for row in data_rows), default=0)
+    for column in range(1, width):
+        texts = [
+            value
+            for value in (_clean_text(row[column]) for row in data_rows if column < len(row))
+            if _is_fact_value(value) and not _table_cell_has_compact_value(value)
+        ]
+        # 행 이름은 행을 가려야 한다: 칸 대부분이 글이고, 그 글이 대부분 서로 달라야 한다(학부처럼 여러 행이 같은 열은 뺀다)
+        if len(texts) >= 0.5 * len(data_rows) and len(set(texts)) >= 0.8 * len(texts):
+            return column
+    return 0
+
+
+def _row_label(row: Sequence[str], label_column: int) -> str:
+    if label_column < len(row) and row[label_column]:
+        return row[label_column]
+    return row[0] if row and row[0] else ""
 
 
 def _is_fact_value(value: str) -> bool:
