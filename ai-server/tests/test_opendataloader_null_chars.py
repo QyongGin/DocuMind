@@ -48,3 +48,42 @@ def test_null_characters_are_removed_from_row_header_path_of_merged_group_column
     assert paths["가나학과"] == ("공학 계열", "가나학과")
     assert paths["다라학과"] == ("공학 계열", "다라학과")
     assert not any("\x00" in text for text in _all_text(facts))
+
+
+def _caption_of(kids: list[dict]) -> set:
+    page = _page(1, kids)
+    return {fact.caption for fact in adapt_opendataloader_json_page(page, document_id=7, source="가나대학.pdf").table_facts}
+
+
+def test_null_characters_are_removed_from_heading_path_caption():
+    table = _table(3, [["구분", "면접 학과"], ["수시", "가나학과"], ["정시", "다라학과"]])
+    caption = _caption_of([
+        {"type": "heading", "id": 1, "heading level": 1, "content": "Ⅲ.\x00 면접고사"},
+        {"type": "paragraph", "id": 2, "content": "※ 면접 일정은 학과별로 따로 알림"},
+        table,
+    ])
+
+    assert caption == {"Ⅲ. 면접고사"}
+
+
+def test_heading_made_only_of_null_characters_is_not_used_as_caption():
+    table = _table(4, [["구분", "가산점"], ["1등급", "20점"], ["2등급", "16점"]])
+    caption = _caption_of([
+        {"type": "heading", "id": 1, "heading level": 1, "content": "가. 영어 가산점"},
+        {"type": "heading", "id": 2, "heading level": 2, "content": "\x00 \x00"},
+        {"type": "paragraph", "id": 3, "content": "※ 다른 영역에는 가산점 없음"},
+        table,
+    ])
+
+    assert caption == {"가. 영어 가산점"}
+
+
+def test_linked_caption_of_only_null_characters_falls_back_to_heading():
+    table = _table(3, [["학과", "정원"], ["가나학과", "30"], ["다라학과", "40"]])
+    caption = _caption_of([
+        {"type": "heading", "id": 1, "heading level": 1, "content": "1. 학과별 정원"},
+        {"type": "caption", "id": 2, "content": "\x00 \x00", "linked content id": 3},
+        table,
+    ])
+
+    assert caption == {"1. 학과별 정원"}

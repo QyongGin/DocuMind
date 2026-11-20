@@ -491,14 +491,26 @@ def _table_caption_for_candidate(
 ) -> str | None:
     # 순서: PDF 도구가 표에 이어 준 캡션 → 표를 품은 목록 항목의 제목 → 표 바로 앞의 짧은 제목 줄
     #       → 앞 쪽에서 이어지는 표의 이름 → 제목 경로
+    # PDF 빈 문자(\x00)만 든 후보는 정리하면 빈 글이 되므로 건너뛰고 다음 순위로 넘어간다
     for content_id in _element_ids(candidate.element):
-        caption = linked_caption_by_content_id.get(content_id)
+        caption = _caption_text(linked_caption_by_content_id.get(content_id))
         if caption:
             return caption
     list_item_caption = candidate.element.get(_LIST_ITEM_CAPTION_KEY)
     if isinstance(list_item_caption, str) and _is_caption_like_line(list_item_caption):
-        return list_item_caption
-    return preceding_caption or continued_caption or _table_caption(heading_path)
+        caption = _caption_text(list_item_caption)
+        if caption:
+            return caption
+    for option in (preceding_caption, continued_caption, _table_caption(heading_path)):
+        caption = _caption_text(option)
+        if caption:
+            return caption
+    return None
+
+
+def _caption_text(value: str | None) -> str | None:
+    cleaned = _clean_text(str(value or "").replace("\x00", " "))
+    return cleaned or None
 
 
 _CAPTION_LOOKBACK = 2
@@ -609,6 +621,10 @@ def _heading_level(element: Mapping[str, Any]) -> int | None:
 
 
 def _updated_heading_path(current_path: Sequence[str], level: int, title: str) -> list[str]:
+    # PDF 빈 문자(\x00)는 공백으로 바꾸고, 정리해서 빈 글이 되는 제목은 경로를 바꾸지 않는다
+    title = _clean_text(str(title or "").replace("\x00", " "))
+    if not title:
+        return list(current_path)[:6]
     path = list(current_path[: max(level - 1, 0)])
     path.append(title)
     return path[:6]
