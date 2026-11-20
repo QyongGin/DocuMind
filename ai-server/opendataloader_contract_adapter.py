@@ -859,7 +859,7 @@ def _table_header_row_count(rows: Sequence[Sequence[str]]) -> int:
     header_count = 1
     for row in rows[1:3]:
         previous_row = rows[header_count - 1]
-        if _row_looks_like_header_extension(row, previous_row):
+        if _row_looks_like_header_extension(row, previous_row) or _row_is_subheader_of_merged_header(row, previous_row):
             header_count += 1
         else:
             break
@@ -879,6 +879,36 @@ def _row_looks_like_header_extension(
         if cells[0] != previous_first:
             return False
     return not any(_table_cell_has_compact_value(cell) for cell in non_empty)
+
+
+def _row_is_subheader_of_merged_header(row: Sequence[str], previous_row: Sequence[str]) -> bool:
+    """위 줄의 가로로 합친 칸(같은 글이 이웃 열에 이어짐) 아래에 서로 다른 글이 놓인 하위 머리글 줄인가.
+
+    합친 칸 밖의 열은 위 줄과 같은 글(세로로 합친 머리글이 채워진 것)이거나 비어 있어야 하고, 금액·수·날짜 값은 없어야 한다.
+    위 줄 전체가 한 칸으로 합쳐졌으면 표 제목 줄이라 그 아래 줄은 데이터(항목과 값)일 수 있으므로 하위 머리글로 보지 않는다.
+    """
+    cells = [_clean_text(cell) for cell in row]
+    above = [_clean_text(cell) for cell in previous_row]
+    width = min(len(cells), len(above))
+    if width < 2 or any(_table_cell_has_compact_value(cell) for cell in cells if cell):
+        return False
+    under_merged = False
+    column = 0
+    while column < width:
+        end = column
+        while end + 1 < width and above[column] and above[end + 1] == above[column]:
+            end += 1
+        if end > column:
+            if column == 0 and end == width - 1:
+                return False
+            below = cells[column:end + 1]
+            if not all(below) or above[column] in below or len(set(below)) < 2:
+                return False
+            under_merged = True
+        elif cells[column] and cells[column] != above[column]:
+            return False
+        column = end + 1
+    return under_merged
 
 
 def _table_column_paths(header_rows: Sequence[Sequence[str]]) -> tuple[tuple[str, ...], ...]:
