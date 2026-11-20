@@ -424,8 +424,9 @@ def _table_rows(element: Mapping[str, Any]) -> tuple[tuple[str, ...], ...]:
 
         if slots:
             width = max(slots) + 1
+            # PDF 글자 층의 빈 문자(\x00)가 칸 글 끝이나 공백 옆에 섞여 나와, 칸 값·열 이름·행 이름의 재료인 칸 글에서 지운다
             cell_texts = tuple(
-                _clean_text(slots.get(index, ""))
+                _clean_text(slots.get(index, "").replace("\x00", " "))
                 for index in range(width)
             )
             if any(cell_texts):
