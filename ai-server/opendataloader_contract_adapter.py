@@ -601,7 +601,8 @@ def _metadata_for_candidate(
         metadata.setdefault("page_start", page_number)
         metadata.setdefault("page_end", page_number)
     for index, title in enumerate(heading_path[:6], start=1):
-        metadata[f"Header {index}"] = title
+        if title:
+            metadata[f"Header {index}"] = title
     if candidate.fallback_reasons:
         metadata["adapter_fallback_reasons"] = list(candidate.fallback_reasons)
     return metadata
@@ -621,10 +622,9 @@ def _heading_level(element: Mapping[str, Any]) -> int | None:
 
 
 def _updated_heading_path(current_path: Sequence[str], level: int, title: str) -> list[str]:
-    # PDF 빈 문자(\x00)는 공백으로 바꾸고, 정리해서 빈 글이 되는 제목은 경로를 바꾸지 않는다
+    # PDF 빈 문자(\x00)는 공백으로 바꾼다. 정리해서 빈 글이 되는 제목(글자 층에 제목 글이 없는 PDF)도
+    # 새 절이 시작됐다는 뜻이라, 앞 제목을 끝내고 그 자리를 빈 글로 둔다(지난 제목이 다음 표의 이름이 되지 않게)
     title = _clean_text(str(title or "").replace("\x00", " "))
-    if not title:
-        return list(current_path)[:6]
     path = list(current_path[: max(level - 1, 0)])
     path.append(title)
     return path[:6]

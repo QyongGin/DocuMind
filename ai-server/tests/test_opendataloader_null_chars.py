@@ -66,7 +66,8 @@ def test_null_characters_are_removed_from_heading_path_caption():
     assert caption == {"Ⅲ. 면접고사"}
 
 
-def test_heading_made_only_of_null_characters_is_not_used_as_caption():
+def test_heading_made_only_of_null_characters_leaves_table_without_caption():
+    # 글자 층에 제목 글이 없는 제목: 표 이름을 모르므로 빈 문자나 위 단계 제목을 표 이름으로 쓰지 않는다
     table = _table(4, [["구분", "가산점"], ["1등급", "20점"], ["2등급", "16점"]])
     caption = _caption_of([
         {"type": "heading", "id": 1, "heading level": 1, "content": "가. 영어 가산점"},
@@ -75,7 +76,7 @@ def test_heading_made_only_of_null_characters_is_not_used_as_caption():
         table,
     ])
 
-    assert caption == {"가. 영어 가산점"}
+    assert caption == {None}
 
 
 def test_linked_caption_of_only_null_characters_falls_back_to_heading():
@@ -87,3 +88,17 @@ def test_linked_caption_of_only_null_characters_falls_back_to_heading():
     ])
 
     assert caption == {"1. 학과별 정원"}
+
+
+def test_heading_of_only_null_characters_ends_previous_heading_at_its_level():
+    # 빈 제목도 같은 단계의 앞 제목이 끝났다는 뜻이라, 지난 제목(「1. 정원」)을 표 이름으로 끌고 오지 않는다
+    table = _table(4, [["구분", "금액"], ["전형료", "30,000원"], ["면접고사료", "20,000원"]])
+    caption = _caption_of([
+        {"type": "heading", "id": 1, "heading level": 1, "content": "가. 가나대학 모집 안내"},
+        {"type": "heading", "id": 2, "heading level": 2, "content": "1. 정원"},
+        {"type": "heading", "id": 3, "heading level": 2, "content": "\x00"},
+        {"type": "paragraph", "id": 5, "content": "※ 금액은 바뀔 수 있음"},
+        table,
+    ])
+
+    assert caption == {None}
