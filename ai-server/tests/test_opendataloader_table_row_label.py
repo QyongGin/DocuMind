@@ -160,3 +160,29 @@ def test_repeated_column_after_serial_is_skipped_without_path():
 
     assert _row_labels(facts) == ["가나실습실", "다라실습실", "마바실습실"]
     assert {fact.row_header_path for fact in facts} == {("가나실습실",), ("다라실습실",), ("마바실습실",)}
+
+
+def test_cell_merged_across_group_and_name_columns_appears_once_in_row_path():
+    # 학과명, 구분은 세로로 합친 묶음 열, 자격증명은 값이 겹치는 열이라 교과목이 행 이름이 된다.
+    # 한 학과는 「미참여」 한 칸이 구분부터 교과목까지 가로로 합쳐져 있어 묶음 열 값과 행 이름이 같은 칸이다
+    def cell(r, c, text, rs=1, cs=1):
+        return {"type": "table cell", "row number": r, "column number": c, "row span": rs, "column span": cs,
+                "kids": [{"type": "paragraph", "content": text}]}
+
+    rows = [
+        [cell(1, 1, "학과명"), cell(1, 2, "구분"), cell(1, 3, "자격증명"), cell(1, 4, "매칭 교과목")],
+        [cell(2, 1, "가나학과", rs=2), cell(2, 2, "국가기술자격", rs=2), cell(2, 3, "가나산업기사"), cell(2, 4, "가나실습")],
+        [cell(3, 3, "가나산업기사"), cell(3, 4, "다라실습")],
+        [cell(4, 1, "마바학과"), cell(4, 2, "미참여", cs=3)],
+        [cell(5, 1, "사아학과"), cell(5, 2, "민간자격"), cell(5, 3, "사아자격"), cell(5, 4, "사아실습")],
+    ]
+    table = {"type": "table", "id": 2,
+             "rows": [{"type": "table row", "row number": n, "cells": cs} for n, cs in enumerate(rows, start=1)]}
+    page = _page(1, [{"type": "list", "id": 1, "content": "가. 학점인정 자격증"}, table])
+    facts = adapt_opendataloader_json_page(page, document_id=7, source="가나대학.pdf").table_facts
+
+    paths = {fact.row_header_path for fact in facts}
+    assert all(len(path) == len(set(path)) for path in paths)
+    assert ("마바학과", "미참여") in paths
+    assert ("가나학과", "국가기술자격", "가나실습") in paths
+    assert {fact.row_label for fact in facts} == {"가나실습", "다라실습", "미참여", "사아실습"}

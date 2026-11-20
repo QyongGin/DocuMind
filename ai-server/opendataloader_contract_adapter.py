@@ -691,10 +691,13 @@ def _table_facts_from_rows(
                 else (f"column {column_index + 1}",)
             )
             column_label = " > ".join(column_path)
+            # 가로로 합친 칸은 묶음 열과 행 이름 열에 같은 글로 채워져(예: 「미참여」 한 칸) 경로에 거듭 들어가므로 한 번만 둔다
             row_header_path = tuple(
-                part
-                for part in (current_row_group, *_row_group_path(row, group_columns), row_label)
-                if part
+                dict.fromkeys(
+                    part
+                    for part in (current_row_group, *_row_group_path(row, group_columns), row_label)
+                    if part
+                )
             )
             facts.append(
                 build_table_cell_fact(
