@@ -501,7 +501,11 @@ def _table_caption_for_candidate(
         caption = _caption_text(list_item_caption)
         if caption:
             return caption
-    for option in (preceding_caption, continued_caption, _table_caption(heading_path)):
+    heading_caption = _caption_text(_table_caption(heading_path))
+    if heading_caption and not _is_table_name_shape(heading_caption):
+        # 제목 경로 끝이 문장이나 기호뿐인 줄이면 표 이름으로 쓰지 않는다
+        heading_caption = None
+    for option in (preceding_caption, continued_caption, heading_caption):
         caption = _caption_text(option)
         if caption:
             return caption
@@ -542,7 +546,27 @@ def _is_caption_like_line(line: str) -> bool:
         and not line.startswith("※")
         and not line.endswith(">")
         and len(re.findall(r"\d{4}\.\d", line)) < 2
+        and _is_table_name_shape(line)
     )
+
+
+# 표 이름이 될 수 없는 줄 모양: 단위 표시 「(단위: 명)」, 기준 시점 「’25년 4월 기준」, 구분 줄 「- 아 래 -」, 문장 「…합니다.」
+_UNIT_LINE = re.compile(r"[(（\[［].*단위.*[)）\]］]")
+_BASIS_LINE = re.compile(r"[(（\[［]?\s*[’‘'`]?[\d\s.,/~·년월일-]+기준\s*[)）\]］]?")
+_MARKER_LINE = re.compile(r"[-–—\s]*(아\s*래|다\s*음)[-–—\s]*")
+_SENTENCE_END = re.compile(r"(니다|다\.)$")
+
+
+def _is_table_name_shape(line: str) -> bool:
+    """줄 모양만 보고 표 이름이 될 수 있는지 가린다(낱말 내용은 보지 않는다)."""
+    text = line.strip()
+    if _UNIT_LINE.fullmatch(text) or _BASIS_LINE.fullmatch(text) or _MARKER_LINE.fullmatch(text):
+        return False
+    if _SENTENCE_END.search(text):
+        return False
+    # 로마 숫자, 번호, 기호만 있는 줄(「IV」, 「5.」, 「❍」)은 이름 글자가 없다
+    words = re.findall(r"[가-힣]+|[A-Za-z]+", text)
+    return any(not re.fullmatch(r"[IVXLivxl]+", word) for word in words)
 
 
 def _is_first_content_on_page(candidates: Sequence[_ElementCandidate], position: int) -> bool:

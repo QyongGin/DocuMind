@@ -135,3 +135,47 @@ def test_index_artifacts_pass_caption_to_table_continued_on_next_page():
 
     captions = {doc.metadata.get("table_fact_caption") for doc in artifacts.table_fact_docs}
     assert captions == {"4. 학과별 실습실"}
+
+
+def _caption_after(line: str, heading: str = "라. 학과별 모집인원") -> set[str | None]:
+    page = _page(1, [
+        {"type": "heading", "id": 1, "heading level": 2, "content": heading},
+        {"type": "paragraph", "id": 2, "content": line},
+        _table(3, [["학과", "모집인원"], ["가나학과", "30"]]),
+    ])
+    return _captions(adapt_opendataloader_json_page(page, document_id=7, source="가나대학 모집요강.pdf"))
+
+
+def test_unit_or_basis_line_before_table_is_not_caption():
+    # 표 바로 앞의 단위 표시나 기준 시점 줄은 표 이름이 아니므로 다음 순위(제목 경로)로 넘어간다
+    assert _caption_after("(단위: 명, 천 원)") == {"라. 학과별 모집인원"}
+    assert _caption_after("(2027. 3. 2. 기준, 단위:명)") == {"라. 학과별 모집인원"}
+    assert _caption_after("’27년 3월 기준") == {"라. 학과별 모집인원"}
+
+
+def test_line_without_name_text_before_table_is_not_caption():
+    # 로마 숫자나 번호, 기호만 있는 줄과 「- 아 래 -」 같은 구분 줄은 표 이름이 될 수 없다
+    for line in ("IV", "Ⅲ", "5.", "❍", "▶", "- 아 래 -"):
+        assert _caption_after(line) == {"라. 학과별 모집인원"}, line
+
+
+def test_sentence_line_before_table_is_not_caption():
+    assert _caption_after("아래와 같이 가나대학 장학생을 선발합니다.") == {"라. 학과별 모집인원"}
+    assert _caption_after("8) 이 요강에 없는 사항은 입시위원회가 정한다.") == {"라. 학과별 모집인원"}
+
+
+def test_heading_that_cannot_be_table_name_is_not_caption():
+    page = _page(1, [
+        {"type": "heading", "id": 1, "heading level": 2, "content": "본인은 가나대학에 입학하고자 지원합니다."},
+        _table(2, [["이름", "연락처"], ["가나", "010"]]),
+    ])
+
+    result = adapt_opendataloader_json_page(page, document_id=7, source="가나대학 지원서.pdf")
+
+    assert _captions(result) == {None}
+
+
+def test_title_lines_with_symbols_or_basis_words_stay_captions():
+    # 줄 모양만 보므로 기호로 시작하는 제목, 「기준」으로 끝나는 제목, 괄호에 기준 연도가 든 제목은 그대로 쓴다
+    for line in ("□ 선발 방법", "2) 동점자 처리 기준", "□ 등록금 (2027학년도 기준)", "Symbols", "○ 진행 절차"):
+        assert _caption_after(line) == {line}, line
