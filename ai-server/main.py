@@ -41,6 +41,12 @@ from rag_table_fact_selector import (
     select_table_facts_for_question,
 )
 from opendataloader_contract_adapter import adapt_opendataloader_json_page
+from table_numbering import (
+    TABLE_NUMBERS_METADATA_KEY,
+    ChunkText,
+    LoaderPage,
+    number_document_tables,
+)
 from format_loaders import (
     SUPPORTED_EXTENSIONS as TABLE_GRID_EXTENSIONS,
     UnsupportedDocumentError,
@@ -1745,6 +1751,8 @@ class OpenDataLoaderJsonIndexArtifacts:
     source_docs: list[Document]
     table_fact_docs: list[Document]
     diagnostics_count: int = 0
+    # 쪽마다 (쪽 번호, JSON). 쪽을 넘는 표를 한 표 번호로 묶는 데 쓴다(#269).
+    json_pages: tuple[tuple[int | None, dict], ...] = ()
 
 
 @app.on_event("startup")
@@ -2015,7 +2023,9 @@ def _build_opendataloader_json_index_artifacts(
 
     heading_path: tuple[str, ...] = ()
     previous_table_caption: str | None = None
+    json_pages: list[tuple[int | None, dict]] = []
     for json_doc in json_docs:
+        json_pages.append(_opendataloader_json_page(json_doc))
         # 쪽마다 따로 읽되, 제목 경로와 쪽 끝 표의 이름은 다음 쪽으로 넘긴다(쪽을 넘는 표가 이름을 잃지 않게, #264)
         result = adapt_opendataloader_json_page(
             json_doc.page_content,
@@ -2063,7 +2073,68 @@ def _build_opendataloader_json_index_artifacts(
         source_docs=list(source_docs_by_id.values()),
         table_fact_docs=table_fact_docs,
         diagnostics_count=diagnostics_count,
+        json_pages=tuple(page for page in json_pages if page[1]),
     )
+
+
+def _opendataloader_json_page(json_doc: Document) -> tuple[int | None, dict]:
+    """OpenDataLoader JSON 쪽 문서를 (쪽 번호, JSON)으로 읽는다. 읽을 수 없으면 빈 JSON."""
+    try:
+        data = json.loads(json_doc.page_content)
+    except (TypeError, ValueError):
+        return None, {}
+    if not isinstance(data, dict):
+        return None, {}
+    page = json_doc.metadata.get("page") or data.get("page number")
+    try:
+        return int(page), data
+    except (TypeError, ValueError):
+        return None, data
+
+
+def _set_table_numbers(metadata: dict, numbers: list[int]) -> None:
+    """표 번호 목록을 메타데이터에 넣는다. Chroma는 빈 배열을 받지 않으므로 표가 없으면 키를 넣지 않는다."""
+    if numbers:
+        metadata[TABLE_NUMBERS_METADATA_KEY] = list(numbers)
+
+
+def _number_index_tables(
+    loader_docs: list[Document],
+    final_docs: list[Document],
+    raw_metadatas: list[dict],
+    document_id: int,
+    opendataloader_json_artifacts: OpenDataLoaderJsonIndexArtifacts | None,
+):
+    """문서 안 표에 번호를 매긴다. 원문 청크는 `{document_id}_{chunk_index}`, 표 원문 블록은 부모 청크 id로 찾는다."""
+    artifacts = opendataloader_json_artifacts or _empty_opendataloader_json_index_artifacts()
+    return number_document_tables(
+        loader_pages=[LoaderPage(doc.metadata.get("page"), doc.page_content) for doc in loader_docs],
+        chunks=[
+            ChunkText(
+                key=f"{document_id}_{chunk_index}",
+                text=doc.page_content,
+                page_start=metadata.get("page_start"),
+                page_end=metadata.get("page_end"),
+            )
+            for chunk_index, (doc, metadata) in enumerate(zip(final_docs, raw_metadatas))
+        ],
+        json_pages=artifacts.json_pages,
+        table_blocks=[
+            ChunkText(
+                key=str(doc.metadata.get("source_parent_chunk_id")),
+                text=doc.page_content,
+                page_start=doc.metadata.get("page_start"),
+            )
+            for doc in artifacts.source_docs
+        ],
+    )
+
+
+def _with_table_numbers(doc: Document, numbers: list[int]) -> Document:
+    """글은 그대로 두고 표 번호만 더한 새 Document."""
+    metadata = dict(doc.metadata)
+    _set_table_numbers(metadata, numbers)
+    return Document(page_content=doc.page_content, metadata=metadata)
 
 
 def _build_index_documents(
@@ -2072,19 +2143,37 @@ def _build_index_documents(
     document_id: int,
     page_lookup: list[dict],
     opendataloader_json_artifacts: OpenDataLoaderJsonIndexArtifacts | None = None,
+    loader_docs: list[Document] | None = None,
 ) -> tuple[list[Document], list[Document], list[Document], float, int]:
-    """원본 청크, 검색용 table fact, source block, retrieval chunk 문서를 함께 만든다."""
+    """원본 청크, 검색용 table fact, source block, retrieval chunk 문서를 함께 만든다.
+
+    loader_docs(청크로 나누기 전 로더 글)를 주면 문서 안 표에 번호를 매겨, 표 조각이 든 항목의 메타데이터에
+    `table_numbers`(정수 배열)를 더한다. 글·id·항목 수는 바뀌지 않는다(#269).
+    """
     index_docs: list[Document] = []
     source_docs: list[Document] = []
     retrieval_docs: list[Document] = []
     page_match_elapsed = 0.0
     table_fact_count = 0
 
+    raw_metadatas: list[dict] = []
     for chunk_index, doc in enumerate(final_docs):
         metadata_start = time.perf_counter()
-        raw_metadata = _build_chunk_metadata(doc, filename, document_id, chunk_index, page_lookup)
+        raw_metadatas.append(_build_chunk_metadata(doc, filename, document_id, chunk_index, page_lookup))
         page_match_elapsed += time.perf_counter() - metadata_start
+
+    numbering = None
+    if loader_docs is not None:
+        numbering = _number_index_tables(
+            loader_docs, final_docs, raw_metadatas, document_id, opendataloader_json_artifacts
+        )
+
+    for chunk_index, doc in enumerate(final_docs):
+        raw_metadata = raw_metadatas[chunk_index]
         raw_metadata["chunk_role"] = "raw"
+        if numbering is not None:
+            # 원문 청크에서 복사해 만드는 source block·retrieval chunk·표 사실도 같은 번호를 이어받는다
+            _set_table_numbers(raw_metadata, numbering.numbers_for_chunk(f"{document_id}_{chunk_index}"))
         source_doc = _build_source_block_document(doc, filename, document_id, chunk_index, raw_metadata)
         source_docs.append(source_doc)
         raw_metadata["source_block_id"] = source_doc.metadata["source_block_id"]
@@ -2117,8 +2206,19 @@ def _build_index_documents(
             table_fact_count += 1
 
     if opendataloader_json_artifacts is not None:
-        source_docs.extend(opendataloader_json_artifacts.source_docs)
-        index_docs.extend(opendataloader_json_artifacts.table_fact_docs)
+        odl_source_docs = opendataloader_json_artifacts.source_docs
+        odl_table_fact_docs = opendataloader_json_artifacts.table_fact_docs
+        if numbering is not None:
+            odl_source_docs = [
+                _with_table_numbers(doc, numbering.numbers_for_block(str(doc.metadata.get("source_parent_chunk_id"))))
+                for doc in odl_source_docs
+            ]
+            odl_table_fact_docs = [
+                _with_table_numbers(doc, numbering.numbers_for_block(str(doc.metadata.get("parent_chunk_id"))))
+                for doc in odl_table_fact_docs
+            ]
+        source_docs.extend(odl_source_docs)
+        index_docs.extend(odl_table_fact_docs)
         table_fact_count += len(opendataloader_json_artifacts.table_fact_docs)
 
     return index_docs, source_docs, retrieval_docs, page_match_elapsed, table_fact_count
@@ -2241,6 +2341,7 @@ def _store_document_chunks(
     page_lookup: list[dict],
     opendataloader_json_artifacts: OpenDataLoaderJsonIndexArtifacts | None = None,
     document_metadata: dict | None = None,
+    loader_docs: list[Document] | None = None,
 ) -> tuple[float, float, float, int, int, int]:
     """
     문서 청크를 batch embedding 후 ChromaDB에 batch 저장한다.
@@ -2252,6 +2353,7 @@ def _store_document_chunks(
         document_id,
         page_lookup,
         opendataloader_json_artifacts,
+        loader_docs,
     )
     _apply_document_metadata([*index_docs, *source_docs, *retrieval_docs], document_metadata)
     embedding_elapsed = 0.0
@@ -2615,6 +2717,7 @@ async def _run_upload_pipeline(
             page_lookup,
             opendataloader_json_artifacts,
             document_metadata,
+            loader_docs=raw_docs,
         )
         _set_document_progress(document_id, 95, "chroma", "벡터 저장을 마무리하고 있습니다.")
         total_elapsed = time.perf_counter() - total_start
