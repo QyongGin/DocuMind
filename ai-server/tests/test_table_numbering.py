@@ -208,9 +208,8 @@ def test_raw_chunk_and_source_block_carry_table_numbers():
     assert [d.metadata.get("table_numbers") for d in retrieval_docs] == [[1], [1], [2], None]
 
 
-def test_opendataloader_source_blocks_and_table_facts_get_json_table_number():
-    import main
-
+def _opendataloader_inputs(main):
+    """쪽을 넘는 PDF 표 하나(JSON 앞·뒤 표 id로 이어짐)와 그 마크다운 로더 글."""
     pages = [
         Document(page_content=json.dumps({"page number": 1, "kids": [
             {"type": "heading", "id": 1, "heading level": 2, "content": "가. 모집인원"},
@@ -227,7 +226,28 @@ def test_opendataloader_source_blocks_and_table_facts_get_json_table_number():
         Document(page_content="| 마바학과 | 40 |\n| --- | --- |\n| 사아학과 | 20 |", metadata={"page": 2}),
     ]
     final_docs = [Document(page_content=doc.page_content, metadata={}) for doc in loader_docs]
+    return artifacts, loader_docs, final_docs
 
+
+def test_opendataloader_path_keeps_text_ids_and_count():
+    import main
+
+    artifacts, loader_docs, final_docs = _opendataloader_inputs(main)
+    before = main._build_index_documents(final_docs, "가나대학 모집요강.pdf", 7, [], artifacts)
+    after = main._build_index_documents(final_docs, "가나대학 모집요강.pdf", 7, [], artifacts, loader_docs=loader_docs)
+
+    for old_docs, new_docs in zip(before[:3], after[:3]):
+        assert [d.page_content for d in old_docs] == [d.page_content for d in new_docs]
+        assert [main._build_index_document_id(7, d.metadata, i) for i, d in enumerate(old_docs)] == \
+            [main._build_index_document_id(7, d.metadata, i) for i, d in enumerate(new_docs)]
+        for old, new in zip(old_docs, new_docs):
+            assert {k: v for k, v in new.metadata.items() if k != "table_numbers"} == old.metadata
+
+
+def test_opendataloader_source_blocks_and_table_facts_get_json_table_number():
+    import main
+
+    artifacts, loader_docs, final_docs = _opendataloader_inputs(main)
     index_docs, source_docs, _, _, _ = main._build_index_documents(
         final_docs, "가나대학 모집요강.pdf", 7, [], artifacts, loader_docs=loader_docs
     )
