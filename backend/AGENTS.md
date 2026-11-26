@@ -1,6 +1,6 @@
 # Backend Review Guide
 
-> 이 파일은 GitHub PR에서 `@codex review`가 backend 변경을 검토할 때 참고하도록 저장소에 커밋된 공개 리뷰 체크리스트다.
+> 이 파일은 backend 변경 PR을 리뷰할 때(사람 리뷰어와 AI 리뷰 도구 모두) 보는 공개 리뷰 체크리스트다.
 > 비밀값, 로컬 운영 정보, 현재 진행률은 넣지 않는다. 실제 Spring Boot 구조와 맞지 않는 항목은 잘못된 리뷰를 유도하므로 바로 수정하거나 제거한다.
 
 ## Review guidelines

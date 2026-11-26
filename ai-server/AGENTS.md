@@ -1,6 +1,6 @@
 # AI Server Review Guide
 
-> 이 파일은 GitHub PR에서 `@codex review`가 ai-server 변경을 검토할 때 참고하도록 저장소에 커밋된 공개 리뷰 체크리스트다.
+> 이 파일은 ai-server 변경 PR을 리뷰할 때(사람 리뷰어와 AI 리뷰 도구 모두) 보는 공개 리뷰 체크리스트다.
 > 비밀값, 로컬 운영 정보, 현재 진행률은 넣지 않는다. 실제 FastAPI/RAG 구조와 맞지 않는 항목은 잘못된 리뷰를 유도하므로 바로 수정하거나 제거한다.
 
 ## Review guidelines
@@ -27,6 +27,8 @@
 ## Project-specific focus
 
 - Two-Pass 청킹은 Markdown header 경계를 우선 보존하고, 큰 청크만 재분할하는 구조를 유지한다.
-- 한글 문서에서 3개 이상 개행 정규화와 50자 수동 overlap이 검색 품질을 해치지 않는지 확인한다.
+- 한글 문서에서 3개 이상 개행 정규화와 청크 overlap(환경변수 `CHUNK_OVERLAP`)이 검색 품질을 해치지 않는지 확인한다.
 - 문서 삭제 또는 재업로드 기능이 추가될 때 ChromaDB collection의 기존 chunk 정리 여부를 반드시 확인한다.
 - `/query/stream`은 토큰 스트리밍 중 오류가 나도 클라이언트가 종료 이벤트나 오류 이벤트를 받을 수 있어야 한다.
+- 검색 순서는 순위 융합(ADR-0032)이다. 표 청크의 표 번호 메타데이터(`table_numbers`)와 표 사실 청크가 색인과 질의에서 같은 표를 가리키는지 확인한다.
+- 프롬프트 생성 함수(`_build_rag_prompt`, `_format_context_block` 등)를 바꾸면 학습 데이터와 측정 입력도 바뀐다. 운영과 학습이 같은 함수를 쓰는지 확인한다.
