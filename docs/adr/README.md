@@ -71,7 +71,7 @@
 | 작업 방식(말하기·결정 방식), 커밋·PR 규칙 | 루트 `AGENTS.md` §4·§5, `docs/workflow/` |
 | 한 번 하고 끝난 운영 작업(브랜치 정리, 예전 Docker 자원 삭제, 예전 색인 정리 등) | 그 작업의 PR과 보고서 |
 | 진행 순서·일정 | 총괄계획 §4(로드맵), GitHub Issues·Projects |
-| 지금 위치와 다음 할 일 | `docs/project/현재-상태.md` |
+| 지금 위치와 다음 할 일 | 로컬 `docs/local/현재-상태.md`(ADR-0021 변경 메모), 클라우드 세션은 GitHub 이슈와 `docs/rag/m2/README.md` |
 
 ## 쓰는 법
 

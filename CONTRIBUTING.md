@@ -24,7 +24,7 @@ DocuMind는 사내 문서를 외부로 보내지 않는 on-premise(내부 설치
 | `frontend/AGENTS.md` | Frontend 공개 리뷰 체크리스트 |
 | `ai-server/AGENTS.md` | AI server 공개 리뷰 체크리스트 |
 
-루트 `AGENTS.md`(`CLAUDE.md`는 그 심볼릭 링크)와 `docs/`는 AI 에이전트와 함께 쓰는 작업 문서다. 현재 문서는 커밋하고, 지난 기록(`docs/archive/`)과 접속 정보(`docs/local/`)·학교 데이터(`Assets/`)는 커밋하지 않는다. 결정은 `docs/adr/`(ADR), 지금 위치는 `docs/project/현재-상태.md`에 둔다. 공개 협업 규칙은 이 `CONTRIBUTING.md`와 모듈별 `AGENTS.md`에 둔다.
+루트 `AGENTS.md`(`CLAUDE.md`는 그 심볼릭 링크)와 `docs/`는 AI 에이전트와 함께 쓰는 작업 문서다. 현재 문서는 커밋하고, 지난 기록(`docs/archive/`)과 접속 정보(`docs/local/`)·학교 데이터(`Assets/`)는 커밋하지 않는다. 결정은 `docs/adr/`(ADR), 마일스톤 작업 문서는 `docs/rag/m1/`, `docs/rag/m2/`에 둔다. 인수인계 노트와 계획 같은 작업 메모는 `docs/local/`(커밋 안 함)에 둔다. 공개 협업 규칙은 이 `CONTRIBUTING.md`와 모듈별 `AGENTS.md`에 둔다.
 
 ## 2. 작업 단위
 
