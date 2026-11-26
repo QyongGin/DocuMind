@@ -12,9 +12,9 @@
 | compose 명령 | `docker compose --project-name documind_desktop -f docker-compose.yml -f docker-compose.gpu.yml --env-file .env up -d --build` — **gpu.yml 필수, 빼면 CPU로 돈다** | `docker compose --project-name documind_local up -d --build` (대형 PDF 임베딩은 부적합) |
 | FRONTEND_PORT | **19580** (데스크탑 .env에 설정) | 기본 **80** (.env.example 기준) |
 | SSH 접속 | 맥북에서 `ssh desktop` (= `<사용자>@<WSL IP>`, WSL/Ubuntu 노드. `~/.ssh/config` 별칭, keepalive 포함) | — |
-| 브라우저 테스트 | `http://<WSL IP>:19580` (WSL Tailscale IP — 백엔드 CORS 허용 주소). Windows IP `<Windows IP>:19580`은 화면은 열리지만 로그인·질문(POST)이 403으로 막힌다(2026-10-03 확인) | `http://127.0.0.1:80` |
+| 브라우저 테스트 | 맥북에서 `ssh -N -L 19580:127.0.0.1:19580 desktop-win`을 연 뒤 `http://localhost:19580`(2026-11-09부터. WSL 주소로는 큰 응답이 멈추고 Windows 주소는 로그인·질문이 403, `알려진-문제.md`) | `http://127.0.0.1:80` |
 | 외부 시연 | `ssh -t desktop 'cloudflared tunnel --url http://localhost:19580'` → trycloudflare 임시 URL | — |
-| 금지 | `docker compose down -v`, `git reset --hard`, GCP(사용자 명시 전) | 동일 |
+| 금지 | `docker compose down -v`, `git reset --hard`, GCP | 동일 |
 
 코드 반영 루프(맥북 push → SSH → 데스크탑 pull → compose up)는 루트 `AGENTS.md` §3. 실제 주소(`<WSL IP>`·`<Windows IP>`·`<사용자>`)는 로컬 전용 `docs/local/접속정보.md`.
 
