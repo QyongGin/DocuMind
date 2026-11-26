@@ -59,7 +59,7 @@ DocuMind는 사내 문서를 외부로 보내지 않는 on-premise(내부 설치
 - 일반 PR target은 `develop`이다.
 - `main`으로 직접 PR을 만들지 않는다. 예외는 release PR과 긴급 hotfix(긴급 수정)뿐이다.
 - `develop`에 모인 작업을 충분히 검증한 뒤 release PR로 `main`에 병합한다.
-- merge된 작업 branch는 원격과 로컬에서 정리한다.
+- merge된 작업 branch는 원격과 로컬에서 정리한다. squash 머지한 branch는 커밋이 `develop`의 조상으로 보이지 않으므로 `git merge-base`만 보지 말고 GitHub PR이 `MERGED`인지 확인한 뒤 지운다. PR이 없고 용도를 모르는 branch는 바로 지우지 않고 담당자에게 묻는다.
 
 ## 4. 브랜치 이름
 
@@ -138,6 +138,8 @@ CI의 `PR 규칙` 잡(`.github/scripts/check_pr_rules.py`)이 아래를 검사�
 - debug log(디버그 로그), 임시 script(스크립트), 실험 output(출력물)은 의도적으로 리뷰할 파일이 아니면 커밋하지 않는다.
 - 같은 로직이 반복되면 작은 함수, 값 객체, command object(명령 객체), DTO(데이터 전달 객체)로 책임을 분리한다.
 - null(값 없음), 빈 값, 권한 없음, 외부 서버 실패, 중복 요청 같은 edge case(경계 사례)를 함께 고려한다.
+- 점검 기준은 새로 쓰거나 고친 코드에 먼저 적용한다. 기존 코드 전체를 한 번에 고치지 않는다. 프레임워크 특성상 그대로 따르기 어려우면 PR '주의할 점'이나 보고서에 이유를 짧게 적는다.
+- 모듈별 점검표는 `backend/AGENTS.md`, `frontend/AGENTS.md`, `ai-server/AGENTS.md`에 있다.
 
 ## 8. Backend 규칙
 
