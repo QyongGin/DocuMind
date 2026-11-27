@@ -48,7 +48,15 @@ from prompt_dates import (
     date_lines as academic_date_lines,
     validate_term_months,
 )
-from prompt_tokens import load_prompt_token_counter
+from prompt_tokens import load_prompt_token_counter, nfc as nfc_prompt
+from table_blocks import (
+    Evidence as TableBlockEvidence,
+    OdlPiece,
+    RawPiece,
+    TableBlockAssembler,
+    TableSource,
+    render_body as render_table_block_body,
+)
 from table_numbering import (
     TABLE_NUMBERS_METADATA_KEY,
     ChunkText,
@@ -206,6 +214,14 @@ ACADEMIC_YEAR_START_MONTH, SECOND_SEMESTER_START_MONTH = _term_month_settings()
 # 근거 블록에 청크 원문을 늘 넣는다(M2 개선 설계 A1). 기본은 꺼짐 — 지금처럼 표 검색 정보나 질문 의도 추출 정보가 있으면
 # 발췌만 넣는다. 켜면 발췌 뒤에 원문 전체를 붙여, 발췌가 답 줄을 고르지 못해도 답이 프롬프트에 남는다
 CONTEXT_FULL_TEXT_ENABLED = _env_bool("AI_CONTEXT_FULL_TEXT_ENABLED", False)
+# 표 블록(#274, 표 읽기 입력 틀): 표 번호(table_numbers)가 있는 근거는 같은 문서의 같은 표 조각을 모아 표 전체와 표 아래 주석을
+# 한 블록으로 넣는다. 켜면 표 사실 문장('표 검색 정보')과 그것을 가리키는 지시문 두 줄, 질문 의도 추출 정보의 표 조합 줄을 빼고,
+# 프롬프트를 NFC로 정규화해 토큰을 센 뒤 상한을 넘을 때만 표를 줄인다. 기본은 꺼짐 — 꺼져 있으면 프롬프트가 그 전과 같다
+TABLE_BLOCK_ENABLED = _env_bool("AI_TABLE_BLOCK_ENABLED", False)
+# 같은 표를 합쳐 줄어든 근거 자리를 다음 순위 근거로 채운다(표 블록이 켜졌을 때만). 기본값은 단계 B 측정 뒤 정한다
+TABLE_BLOCK_FILL_ENABLED = _env_bool("AI_TABLE_BLOCK_FILL_ENABLED", False)
+# 검색에 표 사실 청크를 쓴다(어휘 표 사실 검색과 벡터 검색의 표 사실 결과). 끄면 원문 청크·검색 청크만 후보가 된다
+TABLE_FACT_RETRIEVAL_ENABLED = _env_bool("AI_TABLE_FACT_RETRIEVAL_ENABLED", True)
 SERVICE_TIMEZONE = ZoneInfo("Asia/Seoul")
 # 평가 전용 제외 목록이 있을 때 벡터 검색을 늘려 받는 상한. 빼고 남은 후보가 검색 개수에 못 미치면 두 배씩 늘린다
 VECTOR_EXCLUSION_MAX_RESULTS = _env_int("AI_VECTOR_EXCLUSION_MAX_RESULTS", 400)
@@ -2905,12 +2921,18 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
+# 표 사실 문장('표 검색 정보')을 가리키는 지시문 두 줄. 표 블록이 켜지면 표 사실 문장과 함께 뺀다(#274, 명세 4절).
+# 규칙 번호는 다시 매기지 않는다(학습 데이터 도구가 거절 규칙 9·11을 번호째로 찾는다)
+TABLE_FACT_RULE = "4. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다."
+TABLE_FACT_CHECK = "- [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다."
+
+
 MANDATORY_RAG_PROMPT = (
     "필수 답변 규칙:\n"
     "1. 반드시 [검색 근거]에 있는 내용만 사용한다.\n"
     "2. [검색 근거]에 없는 절차, 조건, 날짜, 숫자, 서류, 주의사항, 조언은 만들지 않는다.\n"
     "3. 질문이 방법, 절차, 주의사항을 묻는 경우 [검색 근거]의 절차, 유의사항, 안내 문구를 우선 추출한다.\n"
-    "4. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다.\n"
+    f"{TABLE_FACT_RULE}\n"
     "5. 표에서 숫자, 날짜, 인원, 점수, 기간을 답할 때는 질문의 행 이름과 열 이름에 직접 대응하는 값만 사용한다.\n"
     "6. 여러 표가 검색되면 질문의 단어와 가장 많이 겹치는 표 제목, 행 이름, 열 이름을 가진 근거를 우선한다.\n"
     "7. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
@@ -4547,8 +4569,8 @@ def _format_academic_year_label(meta: dict) -> str:
         return ""
 
 
-def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analysis: QueryAnalysis) -> str:
-    """LLM이 검색 근거 단위를 구분할 수 있도록 출처 metadata와 청크 본문을 함께 포맷한다."""
+def _format_block_metadata(meta: dict, chunk_id: str, include_chunk: bool = True) -> str:
+    """근거 블록 머리말(문서, 게시, 위치, 청크, 학년도, 섹션). 표 블록은 여러 청크를 이은 블록이라 청크 줄을 넣지 않는다(#274)."""
     source_name = str(meta.get("source", "")).strip() or "알 수 없는 문서"
     metadata_lines = [f"문서: {source_name}"]
     posted_label = _format_posted_label(meta)
@@ -4559,7 +4581,7 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     if page_label:
         metadata_lines.append(f"위치: {page_label}")
 
-    chunk_label = _format_chunk_label(meta, chunk_id)
+    chunk_label = _format_chunk_label(meta, chunk_id) if include_chunk else ""
     if chunk_label:
         metadata_lines.append(f"청크: {chunk_label}")
 
@@ -4570,13 +4592,23 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     header_path = _format_header_path(meta)
     if header_path:
         metadata_lines.append(f"섹션: {header_path}")
+    return "\n".join(metadata_lines)
 
-    metadata = "\n".join(metadata_lines)
-    evidence_facts = _extract_query_evidence_facts(doc, analysis, meta=meta)
+
+def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analysis: QueryAnalysis) -> str:
+    """LLM이 검색 근거 단위를 구분할 수 있도록 출처 metadata와 청크 본문을 함께 포맷한다.
+
+    표 블록이 켜져 있으면(#274) 표가 아닌 블록에서도 표 사실 문장('표 검색 정보')과 질문 의도 추출 정보의 표 조합 줄
+    (표 사실에서 만든 줄, metadata query_evidence_facts)을 넣지 않는다. 나머지 구성(추출 정보 + 발췌, 발췌 + 전체 내용,
+    전체 내용)은 그대로다.
+    """
+    metadata = _format_block_metadata(meta, chunk_id)
+    fact_meta = {key: value for key, value in meta.items() if key != "query_evidence_facts"} if TABLE_BLOCK_ENABLED else meta
+    evidence_facts = _extract_query_evidence_facts(doc, analysis, meta=fact_meta)
     relevant_excerpt = _select_relevant_excerpt(doc, analysis.primary_terms)
     if not relevant_excerpt:
         relevant_excerpt = _select_relevant_excerpt(doc, analysis.context_terms)
-    matched_table_facts = _get_matched_table_facts(meta)
+    matched_table_facts = [] if TABLE_BLOCK_ENABLED else _get_matched_table_facts(meta)
     fact_text = "\n".join(matched_table_facts)
 
     table_fact_block = f"\n표 검색 정보:\n{fact_text}" if fact_text else ""
@@ -4599,6 +4631,188 @@ def _build_context(docs: list[str], metadatas: list[dict], ids: list[str], analy
     for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids), start=1):
         blocks.append(_format_context_block(index, doc, meta or {}, chunk_id, analysis))
     return "\n\n".join(blocks)
+
+
+def _table_numbers_from_metadata(meta: dict) -> tuple[int, ...]:
+    """메타데이터의 표 번호 목록(#269). 정수 배열이 아니면 빈 tuple."""
+    values = meta.get(TABLE_NUMBERS_METADATA_KEY)
+    if not isinstance(values, (list, tuple)):
+        return ()
+    numbers = []
+    for value in values:
+        number = _metadata_int(value)
+        if number is not None:
+            numbers.append(number)
+    return tuple(sorted(set(numbers)))
+
+
+def _load_table_sources(document_id: str, numbers) -> dict[int, TableSource]:
+    """문서 하나에서 표 번호가 든 조각을 source_blocks 컬렉션에서 모두 꺼낸다(#274).
+
+    source_blocks에는 원문 청크마다 같은 글의 사본(청크 번호 chunk_index)과 OpenDataLoader 표 원문 블록(부모 청크 번호가
+    OPENDATALOADER_JSON_PARENT_CHUNK_INDEX_OFFSET 이상)이 함께 있고, 둘 다 색인 때 붙인 table_numbers를 갖는다.
+    조회에 실패하면 빈 dict(표를 잇지 못한 근거는 청크 글 그대로 둔다).
+    """
+    wanted = sorted({int(number) for number in numbers})
+    if not document_id or not wanted:
+        return {}
+    conditions = [{TABLE_NUMBERS_METADATA_KEY: {"$contains": number}} for number in wanted]
+    number_filter = conditions[0] if len(conditions) == 1 else {"$or": conditions}
+    try:
+        result = source_block_collection.get(
+            where={"$and": [{"document_id": str(document_id)}, number_filter]},
+            include=["documents", "metadatas"],
+        )
+    except Exception:
+        logger.exception("[table_block] failed_to_load_table_pieces document_id=%s numbers=%s", document_id, wanted)
+        return {}
+    sources = {number: TableSource(str(document_id), number) for number in wanted}
+    for piece_id, text, meta in zip(result.get("ids") or [], result.get("documents") or [], result.get("metadatas") or []):
+        meta = meta or {}
+        piece_numbers = _table_numbers_from_metadata(meta)
+        parent_index = _metadata_int(meta.get("source_parent_chunk_index"))
+        if parent_index is not None and parent_index >= OPENDATALOADER_JSON_PARENT_CHUNK_INDEX_OFFSET:
+            page = _metadata_int(meta.get("page_start")) or _metadata_int(meta.get("page")) or 0
+            piece = OdlPiece(
+                chunk_id=str(meta.get("source_parent_chunk_id") or piece_id),
+                order=(page, parent_index),
+                text=str(text or ""),
+            )
+            for number in piece_numbers:
+                if number in sources:
+                    sources[number].odl_pieces.append(piece)
+            continue
+        chunk_index = _metadata_int(meta.get("chunk_index"))
+        if chunk_index is None:
+            continue
+        raw_piece = RawPiece(chunk_index=chunk_index, text=str(text or ""), numbers=piece_numbers)
+        for number in piece_numbers:
+            if number in sources:
+                sources[number].raw_pieces.append(raw_piece)
+    return sources
+
+
+def _table_block_evidence(doc: str, meta: dict, chunk_id: str) -> TableBlockEvidence:
+    """검색된 근거 하나를 표 블록 조립 입력으로 바꾼다. 표 원문 블록 근거는 청크 번호로 가른다(부모 청크 번호가 기준값 이상)."""
+    chunk_index = _parse_chunk_index(str(chunk_id))
+    return TableBlockEvidence(
+        chunk_id=str(chunk_id),
+        text=str(doc or ""),
+        document_id=str(meta.get("document_id") or "").strip(),
+        numbers=_table_numbers_from_metadata(meta),
+        is_odl=chunk_index is not None and chunk_index >= OPENDATALOADER_JSON_PARENT_CHUNK_INDEX_OFFSET,
+        section_line=_format_header_path(meta),
+    )
+
+
+@dataclass
+class TableBlockPrompt:
+    """표 블록으로 만든 근거 글과 프롬프트(둘 다 NFC), 조립에 쓴 근거 수, 기록용 요약."""
+
+    context: str
+    prompt: str
+    considered: int
+    block_of: dict[str, int | None]
+    info: dict
+
+
+def _build_table_block_prompt(
+    system_prompt: str | None,
+    question: str,
+    today: date | None,
+    docs: list[str],
+    metadatas: list[dict],
+    ids: list[str],
+    top_k: int,
+    analysis: QueryAnalysis,
+) -> TableBlockPrompt:
+    """순위대로 받은 후보로 표 블록 근거 글과 프롬프트를 만든다(#274, 명세 7·9절).
+
+    상위 top_k개 후보를 블록으로 만든다. 같은 표의 뒤 순위 블록이 빠지면 블록이 줄어드는데, 빈자리 채움이 켜져 있으면
+    블록이 top_k개가 될 때까지 다음 순위 후보를 더 받는다. 프롬프트는 NFC로 정규화한 글을 A.X 토크나이저로 세고,
+    상한(PROMPT_TOKEN_LIMIT)을 넘을 때만 표를 줄인다: 높은 순위 표부터 통째로 넣고, 안 들어가는 표는 검색된 조각과 머리글,
+    주석만 「표 일부:」로 넣는다.
+    """
+    started = time.perf_counter()
+    assembler = TableBlockAssembler(_load_table_sources)
+    considered = 0
+    block_of: dict[str, int | None] = {}
+    plain_inputs: dict[int, tuple[str, dict, str]] = {}
+    metas_by_block: dict[int, tuple[dict, str]] = {}
+    for doc, meta, chunk_id in zip(docs, metadatas, ids):
+        if len(assembler.blocks) >= top_k or (not TABLE_BLOCK_FILL_ENABLED and considered >= top_k):
+            break
+        considered += 1
+        meta = meta or {}
+        block = assembler.add(_table_block_evidence(doc, meta, chunk_id))
+        if block is None:
+            block_of[str(chunk_id)] = None
+            continue
+        block_of[str(chunk_id)] = len(assembler.blocks)
+        metas_by_block[id(block)] = (meta, str(chunk_id))
+        if block.plain:
+            plain_inputs[id(block)] = (doc, meta, str(chunk_id))
+
+    placed_keys = [key for block in assembler.blocks for key in block.tables]
+    partial_lines = {
+        key: assembler.tables[key].partial(assembler.retrieved_runs.get(key, []), assembler.retrieved_odl.get(key, set()))
+        for key in placed_keys
+    }
+
+    def render(modes: dict) -> tuple[str, str]:
+        blocks_text = []
+        for number, block in enumerate(assembler.blocks, start=1):
+            if block.plain:
+                doc, meta, chunk_id = plain_inputs[id(block)]
+                blocks_text.append(_format_context_block(number, doc, meta, chunk_id, analysis))
+                continue
+            meta, chunk_id = metas_by_block[id(block)]
+            header = _format_block_metadata(meta, chunk_id, include_chunk=False)
+            body = render_table_block_body(block, modes, partial_lines)
+            blocks_text.append(f"[출처 {number}]\n{header}\n{body}" if body else f"[출처 {number}]\n{header}")
+        context = nfc_prompt("\n\n".join(blocks_text))
+        return context, nfc_prompt(_build_rag_prompt(system_prompt, context, question, today=today))
+
+    modes = {key: "full" for key in placed_keys}
+    context, prompt = render(modes)
+    tokens = PROMPT_TOKEN_COUNTER.count(prompt)
+    if tokens > PROMPT_TOKEN_LIMIT:
+        reducible = [key for key in placed_keys if partial_lines[key] != assembler.tables[key].full]
+        modes.update({key: "partial" for key in reducible})
+        for key in reducible:
+            modes[key] = "full"
+            context, prompt = render(modes)
+            tokens = PROMPT_TOKEN_COUNTER.count(prompt)
+            if tokens > PROMPT_TOKEN_LIMIT:
+                modes[key] = "partial"
+        context, prompt = render(modes)
+        tokens = PROMPT_TOKEN_COUNTER.count(prompt)
+    over_limit = tokens > PROMPT_TOKEN_LIMIT
+    if over_limit:
+        logger.warning("[table_block] prompt_over_limit tokens=%s limit=%s blocks=%s", tokens, PROMPT_TOKEN_LIMIT,
+                       len(assembler.blocks))
+    info = {
+        "blocks": [
+            {
+                "block": number,
+                "chunk_id": block.evidence.chunk_id,
+                "table_numbers": list(block.evidence.numbers),
+                "table_block": not block.plain,
+                "tables": [{"table_number": key[1], "shape": assembler.tables[key].shape, "mode": modes[key]}
+                           for key in block.tables],
+            }
+            for number, block in enumerate(assembler.blocks, start=1)
+        ],
+        "dropped_chunk_ids": [evidence.chunk_id for evidence in assembler.dropped],
+        "considered": considered,
+        "fill_enabled": TABLE_BLOCK_FILL_ENABLED,
+        "prompt_tokens": tokens,
+        "prompt_token_limit": PROMPT_TOKEN_LIMIT,
+        "partial_tables": [f"{key[0]}:{key[1]}" for key in placed_keys if modes[key] == "partial"],
+        "over_limit": over_limit,
+        "elapsed": time.perf_counter() - started,
+    }
+    return TableBlockPrompt(context=context, prompt=prompt, considered=considered, block_of=block_of, info=info)
 
 
 def _load_parent_chunk(parent_chunk_id: str) -> tuple[str | None, dict | None]:
@@ -4928,17 +5142,24 @@ def _build_rag_prompt(
     question: str,
     today: date | None = None,
 ) -> str:
-    """검색 근거와 사용자 질문을 LLM 입력 프롬프트로 조합한다. today가 있으면 맨 위에 날짜 줄 세 줄을 둔다(날짜 줄 켜짐일 때만)."""
+    """검색 근거와 사용자 질문을 LLM 입력 프롬프트로 조합한다. today가 있으면 맨 위에 날짜 줄 세 줄을 둔다(날짜 줄 켜짐일 때만).
+    표 블록이 켜져 있으면 표 사실 문장을 가리키는 규칙 4번 줄과 [답변 직전 확인]의 한 줄을 뺀다(#274)."""
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
     date_block = ""
     if today:
         lines = academic_date_lines(today, ACADEMIC_YEAR_START_MONTH, SECOND_SEMESTER_START_MONTH)
         date_block = "\n".join(lines) + "\n"
+    rules = MANDATORY_RAG_PROMPT
+    table_fact_check = f"{TABLE_FACT_CHECK}\n"
+    if TABLE_BLOCK_ENABLED:
+        # 표 블록에는 표 사실 문장이 없으므로 그것을 가리키는 두 줄을 뺀다(#274)
+        rules = rules.replace(f"{TABLE_FACT_RULE}\n", "")
+        table_fact_check = ""
     # MANDATORY_RAG_PROMPT 뒤의 빈 줄 둘은 규칙 경로(#169에서 삭제)의 흔적이다. [답변 직전 확인]에서 그 경로가 만들던
     # 절([우선 표 근거], [우선 질의 근거])을 가리키던 두 줄은 #273에서 뺐다. 빈 줄 둘은 바꾸지 않고 그대로 둔다.
     return f"""{date_block}{prompt_policy}
 
-{MANDATORY_RAG_PROMPT}
+{rules}
 
 
 [검색 근거]
@@ -4949,8 +5170,7 @@ def _build_rag_prompt(
 
 [답변 직전 확인]
 - 답변은 [검색 근거]에 직접 적힌 내용만 사용한다.
-- [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다.
-- [검색 근거]의 '질문 의도 추출 정보'가 있으면 답변에 우선 사용한다.
+{table_fact_check}- [검색 근거]의 '질문 의도 추출 정보'가 있으면 답변에 우선 사용한다.
 - [검색 근거]의 '질문 관련 발췌'가 있으면 그 발췌에 직접 적힌 항목만 우선 사용한다.
 - 질문 단어와 일치하는 섹션 제목이 있으면 해당 섹션 아래 내용만 답변한다.
 - 같은 청크 안에 다른 섹션이 있어도 질문과 맞지 않으면 답변에 섞지 않는다.
@@ -6074,7 +6294,7 @@ def _trace_query_retrieval(
         )
 
     bm25_candidates = _lookup_bm25_raw_chunk_candidates(analysis, limit=top_k)
-    table_fact_candidates = _lookup_lexical_table_fact_candidates(question)
+    table_fact_candidates = _lookup_lexical_table_fact_candidates(question) if TABLE_FACT_RETRIEVAL_ENABLED else []
     _record_retrieval_traces(trace_by_id, (vector_docs, vector_metadatas, vector_ids), vector_distances,
                              bm25_candidates, table_fact_candidates, metric)
 
@@ -6091,13 +6311,21 @@ def _trace_query_retrieval(
         for index, (doc, meta, chunk_id) in enumerate(zip(*ordered.fused))
     ]
     docs, metadatas, ids = ordered.final
-    final_docs = docs[:top_k]
-    final_metadatas = metadatas[:top_k]
-    final_ids = ids[:top_k]
-    context = _build_context(final_docs, final_metadatas, final_ids, analysis) if final_docs else ""
-    prompt = _build_rag_prompt(system_prompt, context, question, today=_prompt_today()) if final_docs else ""
+    table_block = (
+        _build_table_block_prompt(system_prompt, question, _prompt_today(), docs, metadatas, ids, top_k, analysis)
+        if TABLE_BLOCK_ENABLED and docs else None
+    )
+    used = table_block.considered if table_block else top_k
+    final_docs = docs[:used]
+    final_metadatas = metadatas[:used]
+    final_ids = ids[:used]
+    if table_block:
+        context, prompt = table_block.context, table_block.prompt
+    else:
+        context = _build_context(final_docs, final_metadatas, final_ids, analysis) if final_docs else ""
+        prompt = _build_rag_prompt(system_prompt, context, question, today=_prompt_today()) if final_docs else ""
     final_candidates = [
-        _format_trace_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, index < top_k)
+        _format_trace_candidate(index + 1, doc, meta, chunk_id, trace_by_id, question, analysis, index < used)
         for index, (doc, meta, chunk_id) in enumerate(zip(docs, metadatas, ids))
     ]
     for candidate in final_candidates:
@@ -6158,6 +6386,7 @@ def _trace_query_retrieval(
         "rerank": {key: value for key, value in ordered.rerank.items() if key != "scores"},
         "final_context": context,
         "final_prompt_preview": _preview_text(prompt, 3000),
+        **({"table_block": table_block.info} if table_block else {}),
         "timing": {
             "embedding_elapsed": _round_float(embedding_elapsed, 4),
             "chroma_elapsed": _round_float(chroma_elapsed, 4),
@@ -6221,6 +6450,12 @@ def _order_retrieval_results(
     표 사실 → BM25 → 벡터 순으로 넣어 순위 융합하고(점수가 같으면 앞 목록이 앞선다), 표 사실을 부모 청크로 펼친 뒤
     질문에 맞는 표 사실을 메타데이터에 붙인다. 재순위가 켜져 있으면 앞 후보를 다시 매긴다. 호출자가 상위 top_k를 자른다.
     """
+    if not TABLE_FACT_RETRIEVAL_ENABLED:
+        # 표 사실 청크 검색을 끄면 어휘 표 사실 후보와 벡터 검색의 표 사실 결과를 모두 뺀다(#274, 단계 B 견줌용)
+        table_fact = ([], [], [])
+        vector = tuple(map(list, zip(*[
+            item for item in zip(*vector) if (item[1] or {}).get("chunk_role") != "table_fact"
+        ]))) or ([], [], [])
     docs, metadatas, ids = _fuse_reciprocal_rank([table_fact, bm25, vector])
     docs, metadatas, ids = _expand_table_fact_results(docs, metadatas, ids)
     metadatas = _attach_runtime_table_facts(question, docs, metadatas, analysis)
@@ -6373,7 +6608,9 @@ def _prepare_query(
     legacy_vector_hits = int(results.get("legacy_vector_hits") or 0)
     lexical_start = time.perf_counter()
     bm25_candidates = _lookup_bm25_raw_chunk_candidates(analysis, limit=top_k, **exclude_kwargs)
-    table_fact_candidates = _lookup_lexical_table_fact_candidates(question, **exclude_kwargs)
+    table_fact_candidates = (
+        _lookup_lexical_table_fact_candidates(question, **exclude_kwargs) if TABLE_FACT_RETRIEVAL_ENABLED else []
+    )
     lexical_elapsed = time.perf_counter() - lexical_start
     # 처리 기록(ADR-0052): 후보마다 어느 검색기가 몇 위·몇 점으로 찾았는지. /debug/rag-trace와 같은 기록 함수를 쓴다
     retrieval_by_id: dict[str, dict] = {}
@@ -6402,9 +6639,16 @@ def _prepare_query(
                            {"rerank_score": [rerank_info["scores"].get(str(chunk_id)) for chunk_id in ids]})
     if eval_stages is not None:
         eval_stages["rerank"] = {key: value for key, value in rerank_info.items() if key != "scores"}
-    docs = docs[:top_k]
-    metadatas = metadatas[:top_k]
-    ids = ids[:top_k]
+    # 표 블록(#274): 같은 표의 뒤 순위 블록이 빠지고 빈자리 채움이 켜져 있으면 top_k보다 많은 후보를 쓴다.
+    # final 단계와 근거 후보 기록은 블록 조립에 넣은 후보 전부이고, 후보마다 몇 번째 블록이 됐는지(빠졌으면 None)를 함께 남긴다
+    table_block = (
+        _build_table_block_prompt(system_prompt, question, _prompt_today(as_of), docs, metadatas, ids, top_k, analysis)
+        if TABLE_BLOCK_ENABLED and docs else None
+    )
+    used = table_block.considered if table_block else top_k
+    docs = docs[:used]
+    metadatas = metadatas[:used]
+    ids = ids[:used]
     _record_eval_stage(eval_stages, "final", docs, metadatas, ids)
     # 처리 기록(ADR-0052)에 담는 값: 근거 후보별 점수, 재순위 사용 여부. 로그용 metrics와 함께 돌려준다
     trace_values = {
@@ -6413,6 +6657,10 @@ def _prepare_query(
         "lexical_elapsed": lexical_elapsed,
         "rerank_elapsed": rerank_info["elapsed"],
     }
+    if table_block:
+        for candidate in trace_values["candidates"]:
+            candidate["block"] = table_block.block_of.get(candidate["chunk_id"])
+        trace_values["prompt_tokens"] = table_block.info["prompt_tokens"]
 
     if not docs:
         prepare_elapsed = time.perf_counter() - prepare_start
@@ -6452,12 +6700,18 @@ def _prepare_query(
         return None, [], metrics
 
     context_build_start = time.perf_counter()
-    context = _build_context(docs, metadatas, ids, analysis)
-    # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
-    prompt = _build_rag_prompt(system_prompt, context, question, today=_prompt_today(as_of))
+    if table_block:
+        # 표 블록 프롬프트는 NFC로 정규화한 글이고, 토큰을 센 그 글을 그대로 생성 모델에 보낸다
+        context, prompt = table_block.context, table_block.prompt
+    else:
+        context = _build_context(docs, metadatas, ids, analysis)
+        # 프롬프트 조합: 관리자 설정을 반영하되 문서 외 내용 답변 방지 제약은 서버에서 항상 덧붙인다.
+        prompt = _build_rag_prompt(system_prompt, context, question, today=_prompt_today(as_of))
     if eval_stages is not None:
         eval_stages["context"] = context
         eval_stages["prompt"] = prompt
+        if table_block:
+            eval_stages["table_block"] = table_block.info
         if exclusion or as_of:
             eval_stages["exclusion"] = {"ledger_ids": len(exclusion.ledger_ids) if exclusion else 0,
                                         "chunk_ids": len(exclusion.chunk_ids) if exclusion else 0,
@@ -6716,6 +6970,10 @@ def _model_settings() -> dict:
         "academic_year_start_month": ACADEMIC_YEAR_START_MONTH,
         "second_semester_start_month": SECOND_SEMESTER_START_MONTH,
         "context_full_text": CONTEXT_FULL_TEXT_ENABLED,
+        "table_block": TABLE_BLOCK_ENABLED,
+        "table_block_fill": TABLE_BLOCK_FILL_ENABLED,
+        "table_fact_retrieval": TABLE_FACT_RETRIEVAL_ENABLED,
+        "prompt_token_limit": PROMPT_TOKEN_LIMIT,
     }
 
 
@@ -6752,6 +7010,8 @@ def _answer_trace(prompt: str | None, metrics: dict, **generation_seconds: float
         "candidates": metrics.get("candidates", []),
         "rerank": metrics.get("rerank"),
         "model": _model_settings(),
+        # 표 블록이 켜졌을 때만: A.X 토크나이저로 센 프롬프트 토큰 수(#274)
+        **({"prompt_tokens": metrics["prompt_tokens"]} if "prompt_tokens" in metrics else {}),
     }
 
 

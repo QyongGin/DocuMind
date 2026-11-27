@@ -22,6 +22,8 @@ golden 파일과 **byte 단위로** 비교한다. 의도한 블록만 바뀌었�
 
 프롬프트 전문(full_*) 케이스는 가나대학 합성 청크 셋을 ``_build_context`` 로 근거 블록으로 만들고
 ``_build_rag_prompt`` 로 조립한 전체를 잠근다. 날짜 줄 켬(기준 날짜 고정)과 꺼짐 두 가지다(#273).
+``full_table_block_on`` 은 표 블록을 켠 새 입력 틀이다(#274): 두 청크로 나뉜 표의 한 조각과 표가 아닌 청크 둘,
+같은 표의 뒤 조각이 근거에 들고, 표 조각은 메모리 Chroma의 source_blocks에서 표 번호로 꺼낸다.
 학습 데이터와 평가 입력은 서버가 만든 이 프롬프트를 그대로 쓰므로, 머리말 한 줄이 바뀌어도 테스트가 알린다.
 
 입력은 전부 합성(synthetic)이다. 실제 PDF/임베딩/DB 가 필요 없다.
@@ -41,6 +43,7 @@ import os
 from datetime import date
 from pathlib import Path
 
+import chromadb
 import pytest
 
 import main
@@ -138,3 +141,41 @@ def test_prompt_matches_golden(case_name):
 @pytest.mark.parametrize("case_name", sorted(FULL_CASES))
 def test_full_prompt_matches_golden(case_name, monkeypatch):
     _assert_golden(case_name, _render_full_prompt(FULL_CASES[case_name], monkeypatch))
+
+
+# 표 블록 케이스(#274): 표 1이 청크 3, 4에 나뉜다. 청크 4 끝에 표 아래 주석과 주석이 아닌 글이 있다
+_TABLE_QUESTION = "가나대학 항공기계공학과 수시 1차 모집 인원은 몇 명이야?"
+_TABLE_META = {"document_id": "31", "source": "2027학년도 가나대학 신입생 모집요강.pdf", "posted_at": "2026-05-20",
+               "academic_year": 2027, "Header 1": "Ⅰ. 2027학년도 모집인원", "Header 2": "1. 정원내 전형 모집인원"}
+_TABLE_CHUNKS = {
+    3: ("# Ⅰ. 2027학년도 모집인원\n## 1. 정원내 전형 모집인원\n|계열|모집단위|모집 정원|수시1차|\n|---|---|---|---|\n"
+        "|공학|기계공학과|90|50|\n| |항공기계공학과|110|50|", 2),
+    4: ("## 1. 정원내 전형 모집인원\n|계열|모집단위|모집 정원|수시1차|\n|---|---|---|---|\n|자연|화학과|40|20|\n"
+        "|인문|국어국문과|30|15|\n※ 동일 모집시기 내 1개 전형에만 지원 가능함\n그러나 복수 지원이 확인되면 합격을 취소합니다.", 3),
+}
+
+
+def _render_table_block_prompt(monkeypatch) -> str:
+    monkeypatch.setattr(main, "PROMPT_DATE_LINES_ENABLED", True)
+    monkeypatch.setattr(main, "TABLE_BLOCK_ENABLED", True)
+    monkeypatch.setattr(main, "TABLE_BLOCK_FILL_ENABLED", False)
+    client = chromadb.EphemeralClient()
+    # 메모리 Chroma는 같은 프로세스에서 상태를 함께 쓴다. 실행마다 새 이름의 컬렉션을 쓰고 지우지 않는다(test_table_blocks와 같은 이유)
+    collection = client.create_collection(f"golden_table_block_source_blocks_{id(monkeypatch)}")
+    monkeypatch.setattr(main, "source_block_collection", collection)
+    metas = {}
+    for index, (text, page) in _TABLE_CHUNKS.items():
+        meta = {**_TABLE_META, "chunk_index": index, "page": page, "page_start": page, "page_end": page, "table_numbers": [1]}
+        collection.add(ids=[f"31_{index}_source"], documents=[text], embeddings=[[0.0]],
+                       metadatas=[{**meta, "chunk_role": "source_block", "source_parent_chunk_id": f"31_{index}"}])
+        metas[index] = {**meta, "chunk_role": "raw"}
+    docs = [_TABLE_CHUNKS[3][0], _FULL_DOCS[2], _TABLE_CHUNKS[4][0], _FULL_DOCS[0]]
+    metadatas = [metas[3], dict(_FULL_METAS[2]), metas[4], dict(_FULL_METAS[0])]
+    ids = ["31_3", "13_0", "31_4", "11_5"]
+    result = main._build_table_block_prompt(None, _TABLE_QUESTION, main._prompt_today(_FULL_AS_OF), docs, metadatas,
+                                            ids, 8, _analyze_query(_TABLE_QUESTION))
+    return result.prompt
+
+
+def test_table_block_prompt_matches_golden(monkeypatch):
+    _assert_golden("full_table_block_on", _render_table_block_prompt(monkeypatch))
