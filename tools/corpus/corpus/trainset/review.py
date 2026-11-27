@@ -168,6 +168,8 @@ def highlight(target: str, question: str, blocks: dict[int, str]) -> dict:
 
 
 META_LINE = re.compile(r"^(문서|게시|청크|섹션):\s*")
+# 프롬프트 첫 줄의 기준 날짜. #273 뒤 모양은 '오늘: 2026-10-31 (2026학년도 2학기)'라 '오늘:' 뒤를 통째로 읽지 않고 날짜만 꺼낸다
+TODAY_LINE = re.compile(r"오늘:\s*(\d{4}-\d{2}-\d{2})")
 SECTION_HEAD = re.compile(r"^[^:]{1,20}:\s*$")  # '질문 의도 추출 정보:' 같은 칸 제목 줄
 LINE_LABEL = re.compile(r"^-\s*[^:]{1,20}:\s*")  # '- 관련 근거: ' 같은 줄 앞머리
 CONTEXT_LINES = 1  # 칠한 줄 앞뒤로 함께 보일 줄 수
@@ -215,10 +217,10 @@ def page(records: list[dict], batch: str) -> str:
         cited = {int(number) for number in checks.CITE.findall(target)}
         blocks = {number: text.strip() for number, text in checks.evidence_blocks(record.get("prompt") or "").items()}
         marks = highlight(target, record.get("question") or "", blocks)
-        first_line = (record.get("prompt") or "").split("\n", 1)[0]
+        today = TODAY_LINE.match(record.get("prompt") or "")
         examples.append({
             "id": record["id"], "kind": KINDS[record["kind"]].label, "user": record.get("user_actual") or record["user"],
-            "today": first_line[len("오늘:"):].strip() if first_line.startswith("오늘:") else "",
+            "today": today.group(1) if today else "",
             "question": record.get("question") or "", "question_marks": marks["question"],
             "target": target, "target_marks": marks["target"],
             "notes": (record.get("result") or {}).get("ga", {}).get("judge_notes") or [],
