@@ -7071,8 +7071,9 @@ async def debug_rag_trace(request: RagTraceRequest):
     """
     답변 생성 없이 RAG 검색 파이프라인을 단계별로 추적한다.
     벡터·BM25·표 사실 후보와 순위 융합 뒤 후보를 JSON으로 반환해 검색 품질 디버깅에 사용한다.
+    서버 실행 설정(runtime)도 함께 준다(#275): 학습 데이터 도구가 생성 없이 근거 수와 입력 틀 판 번호를 읽는다.
     """
-    return await asyncio.to_thread(
+    trace = await asyncio.to_thread(
         _trace_query_retrieval,
         request.question,
         request.top_k,
@@ -7080,6 +7081,7 @@ async def debug_rag_trace(request: RagTraceRequest):
         request.include_vectors,
         request.vector_preview_size,
     )
+    return {**trace, "runtime": _eval_runtime_settings()}
 
 
 def _eval_response(response: dict, eval_stages: dict | None, answer_path: str, generation: dict | None = None) -> dict:

@@ -184,3 +184,11 @@ def test_query_without_pins_calls_prepare_without_pin_argument(monkeypatch):
     monkeypatch.setattr(main, "_prepare_query", prepare)
     TestClient(main.app).post("/query", json={"question": "가나대학 장학금"})
     assert seen == {}
+
+
+def test_rag_trace_returns_runtime_settings(fake_retrieval):
+    # 학습 데이터 도구가 생성 없이 근거 수와 입력 틀 판 번호를 읽는다(지정 청크의 자리를 근거 수 안에서 고르려고)
+    body = TestClient(main.app).post("/debug/rag-trace", json={"question": "가나대학 안내"}).json()
+    assert body["runtime"]["default_top_k"] == main.DEFAULT_TOP_K
+    assert body["runtime"]["prompt_template_version"] == main.PROMPT_TEMPLATE_VERSION
+    assert body["answer_generated"] is False
