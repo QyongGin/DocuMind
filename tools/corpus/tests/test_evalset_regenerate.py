@@ -117,3 +117,20 @@ def test_prompt_filling_context_is_counted_as_truncated(base_run, tmp_path):
     counts = again(base_run, tmp_path / "out", FakeOllama(prompt_tokens=8191), num_ctx=8192)
     assert counts["truncated"] == 1
     assert runner.read_answers(tmp_path / "out")["ev-0001"]["eval_trace"]["generation"]["prompt_truncated"] is True
+
+
+def test_context_and_output_limits_default_to_the_server_values_of_the_base_run(base_run, tmp_path):
+    # 문맥 길이·출력 상한을 주지 않으면 기준 실행에 서버가 남긴 값(#275). 도구 쪽 기본값은 두지 않는다
+    session = FakeOllama()
+    regenerate.regenerate(base_run, tmp_path / "out", "http://gana:11435/", "gana-big", session=session, log=None,
+                          now=lambda: "2026-10-13T20:00:00")
+    assert session.requests[0][1]["options"]["num_ctx"] == BASE_RUNTIME["num_ctx"]
+    assert session.requests[0][1]["options"]["num_predict"] == BASE_RUNTIME["num_predict"]
+
+
+def test_refuses_without_server_limits(base_run, tmp_path):
+    manifest = json.loads((base_run / runner.MANIFEST).read_text(encoding="utf-8"))
+    manifest["runtime"] = {"llm_temperature": 0.0}
+    (base_run / runner.MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="num-ctx"):
+        regenerate.regenerate(base_run, tmp_path / "out", "http://gana:11435/", "gana-big", session=FakeOllama(), log=None)
