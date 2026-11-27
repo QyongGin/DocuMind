@@ -35,10 +35,13 @@ golden 파일과 **byte 단위로** 비교한다. 의도한 블록만 바뀌었�
     DOCUMIND_UPDATE_GOLDEN=1 venv/bin/python -m pytest tests/test_prompt_golden.py
 
 로 golden 파일을 다시 쓴다. 평소 실행에서 프롬프트가 1줄이라도 달라지면 실패한다.
+골든을 갱신하면 입력 틀 판 번호(``main.PROMPT_TEMPLATE_VERSION``)도 올리고 맨 아래 ``TEMPLATE_FINGERPRINTS``에
+새 판 줄을 더한다(#275). 판 번호를 그대로 두면 ``test_prompt_template_version_matches_golden``이 실패한다.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import date
 from pathlib import Path
@@ -179,3 +182,28 @@ def _render_table_block_prompt(monkeypatch) -> str:
 
 def test_table_block_prompt_matches_golden(monkeypatch):
     _assert_golden("full_table_block_on", _render_table_block_prompt(monkeypatch))
+
+
+# 입력 틀 판 번호(#275): 골든 글이 바뀌면 판 번호를 올리게 한다. 학습 데이터는 서버가 준 프롬프트를 그대로 쓰고 판 번호를
+# 기록하므로, 틀이 바뀌었는데 판 번호가 그대로면 다른 틀로 만든 학습 데이터를 같은 틀로 착각한다.
+# 틀을 바꾸면: 골든을 갱신하고 main.PROMPT_TEMPLATE_VERSION을 올린 뒤, 아래 표에 새 판 줄을 더한다(지난 줄은 고치지 않는다).
+TEMPLATE_FINGERPRINTS = {
+    1: "fc94f06020d0535143064414f42f067bb702df56d15e4a882e8bc9fb8d83107f",  # #273 날짜 줄과 학년도 줄, #274 표 블록
+}
+TEMPLATE_GOLDEN_CASES = (*CASES, *FULL_CASES, "full_table_block_on")
+
+
+def golden_fingerprint() -> str:
+    """골든 파일 전부(케이스 이름 순)의 SHA-256."""
+    digest = hashlib.sha256()
+    for name in sorted(TEMPLATE_GOLDEN_CASES):
+        digest.update(name.encode("utf-8") + b"\n" + (GOLDEN_DIR / f"{name}.txt").read_bytes() + b"\n")
+    return digest.hexdigest()
+
+
+def test_prompt_template_version_matches_golden():
+    assert main.PROMPT_TEMPLATE_VERSION == max(TEMPLATE_FINGERPRINTS), "새 판 줄을 TEMPLATE_FINGERPRINTS에 더한다"
+    assert len(set(TEMPLATE_FINGERPRINTS.values())) == len(TEMPLATE_FINGERPRINTS), "판마다 골든 글이 달라야 한다"
+    assert golden_fingerprint() == TEMPLATE_FINGERPRINTS[main.PROMPT_TEMPLATE_VERSION], (
+        "골든 프롬프트가 바뀌었는데 입력 틀 판 번호가 그대로다. main.PROMPT_TEMPLATE_VERSION을 올리고 "
+        "TEMPLATE_FINGERPRINTS에 새 판 줄(지금 값 " + golden_fingerprint() + ")을 더한다")
