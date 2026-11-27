@@ -37,6 +37,7 @@ DocuMind는 인하공업전문대학 문서에 근거해 답하는 RAG(검색 �
 - PR 하나에는 한 가지 목적의 변경만 담는다. 작업(이슈) 하나는 PR 하나 이상이 될 수 있지만, 작업 여러 개를 PR 하나에 넣지 않는다. 구글 코드 리뷰 지침은 알맞은 크기를 "one self-contained change"로 보고([Small CLs](https://google.github.io/eng-practices/review/developer/small-cls.html)), GitHub 문서는 커진 PR을 "smaller pull requests that each serve one purpose"로 나누라고 한다([Helping others review your changes](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/getting-started/helping-others-review-your-changes)).
 - 작업을 시작할 때 이슈를 만들고, 작업이 끝나면 그 PR을 바로 올려 머지한다(본문에 `Closes #이슈`). 여러 작업을 한 브랜치에 쌓아 단계 끝에 한꺼번에 올리지 않고, 작업 계획에 'PR'을 따로 한 단계로 두지 않는다. 결정 문서(ADR)와 보고서는 그 변경의 PR에 함께 넣는다.
 - 이슈 제목에는 할 일만 쓴다. 유형(Feature, Bug 등), 영역(AI/RAG, Backend 등), 우선순위는 라벨로, 단계(M2 등)는 마일스톤으로 단다. 제목 앞에 `[Feature]`, `[AI/RAG]` 같은 머리말을 붙이지 않는다. 같은 정보가 제목과 라벨 두 곳에 생기면 라벨을 바꿀 때 제목이 따라오지 않는다.
+- 이슈 제목은 짧은 명사형 구로 쓴다. 「~을 ~한다」 같은 서술형 문장으로 쓰지 않는다. 예: `표 전체와 표 아래 주석을 한 근거 블록으로 조립`(「표가 든 청크가 검색되면 표 전체와 표 아래 주석을 한 근거 블록으로 넣는다」로 쓰지 않는다). 조건과 이유는 본문에 쓴다.
 - 한 작업이 서버 API와 그 API를 쓰는 코드에 걸치면 서버 쪽 PR을 먼저 따로 올려도 된다. 두 PR 본문에 서로를 적는다.
 - 관련 없는 대규모 리팩토링은 현재 작업에 끼워 넣지 않고 별도 issue로 분리한다.
 - 기존 사용자 동작, API response contract(응답 계약), DB schema(스키마), RAG evidence(근거) 품질을 바꾸는 작업은 테스트 또는 수동 검증 기록을 남긴다.
@@ -122,6 +123,7 @@ PR은 리뷰어가 위험 지점을 빠르게 찾을 수 있어야 한다. 기�
 - 본문은 `.github/PULL_REQUEST_TEMPLATE.md`를 그대로 따른다. 섹션은 관련 이슈, 배경, 변경 내용, 확인한 내용, 주의할 점 다섯 개뿐이다.
 - 이모지, AI 서명, 템플릿에 없는 섹션은 넣지 않는다. 필요한 내용만 쓴다.
 - 제목은 `type(scope): 요약` 형식으로 쓴다. 예: `fix(ai): 생성 temperature 기본값 0`. type은 5장의 커밋 type과 같다.
+- 요약은 바뀐 대상과 결과를 짧은 명사형 구로 쓴다. 「~을 ~한다」 같은 서술형 문장으로 쓰지 않는다. 예: `feat(ai): 프롬프트 날짜 줄 세 줄과 근거 학년도 줄 추가`(「프롬프트 맨 위에 날짜 세 줄을, 근거 머리말에 학년도 줄을 만든다」로 쓰지 않는다).
 - 제목에 이슈 번호는 넣지 않는다. 이슈는 본문 `Closes #번호`로 연결한다. squash 머지하면 GitHub이 제목 뒤에 PR 번호를 붙여 `develop`의 커밋 제목이 된다. 제목에 이슈 번호까지 넣으면 `(#105) (#107)`처럼 번호가 두 번 붙는다.
 
 이슈를 완전히 끝내면 `Closes #이슈번호`를 사용한다. 일부 범위만 처리했거나 후속 검증이 남으면 `Related #이슈번호`를 사용한다. `develop`에 머지되면 `Closes`로 적은 이슈는 워크플로가 닫는다(기본 브랜치가 `main`이라 GitHub 자동 닫기가 동작하지 않는다, `docs/workflow/PR-작성-및-머지-절차.md` 6장).
