@@ -257,7 +257,8 @@ def test_verify_prompts_command_fails_without_request_record(tmp_path, capsys):
 def test_probe_fails_without_server_runtime(tmp_path):
     folder = tmp_path / "p"
     pipeline.write(folder, "plan", [{"id": "p1", "kind": "fact"}], mode="w")
-    pipeline.write(folder, "attached", [{"id": "p1", "prompt": PROMPT, "runtime": {"prompt_template_version": 1}}])
+    pipeline.write(folder, "attached", [{"id": "p1", "prompt": PROMPT,
+                                         "runtime": {"prompt_template_version": 1, "llm_model": "ax40light:q4km"}}])
     session = FakeSession({"response": "답"})
     assert pipeline.run_probe(folder, session, "http://o", samples=1, log=lambda line: None) == {"error": 1}
     assert session.sent == []  # 도구 쪽 기본값(12288, 512)으로 부르지 않는다
