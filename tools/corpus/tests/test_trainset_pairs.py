@@ -182,12 +182,12 @@ def test_pairs_command_writes_only_when_every_answer_is_judged(tmp_path, capsys)
 
 
 def test_pairs_refuse_prompts_with_legacy_rules(tmp_path):
-    legacy = PROMPT.replace("[검색 근거]", f"{prompts.LEGACY_REFUSAL_RULES[0][0]}\n\n[검색 근거]")
+    legacy = PROMPT.replace(prompts.REFUSAL, prompts.LEGACY_REFUSALS[0])  # 입력 규칙이 지난 거절 문장
     batch = write_batch(tmp_path / "train" / "old", [("o1", "refuse_guide", "휴학 수수료?", GUIDE,
                                                       ["휴학 수수료는 10,000원입니다.", REFUSAL, REFUSAL, REFUSAL])], prompt=legacy)
     lines, manifest = pairs.build([batch], MODEL)
-    # 3회차 답은 지난 규칙으로 받은 답이라, 입력만 지금 규칙으로 바꾸면 쌍의 입력과 답이 어긋난다
-    assert manifest["legacy_prompts"] == 1 and lines[0]["prompt"][0]["content"] != legacy
+    # 입력은 서버가 준 그대로 두고(#275) 지난 규칙 입력을 세어 쌍 파일을 쓰지 않게 한다
+    assert manifest["legacy_prompts"] == 1 and lines[0]["prompt"][0]["content"] == legacy
 
 
 def copy_setup(tmp_path):

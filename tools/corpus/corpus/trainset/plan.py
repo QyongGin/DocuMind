@@ -230,7 +230,8 @@ def plan(documents: list[dict], quotas: dict[str, int], fetch_chunks: Callable[[
                                 title=document.get("title"), topic=document.get("topic"), format=document.get("format"),
                                 chunks=[{"id": chunk.get("id"), "chunk_index": chunk.get("chunk_index"),
                                          "content": chunk["content"],
-                                         "draft_text": draft_text(chunk["content"], boilerplate)} for chunk in chunks])
+                                         "draft_text": draft_text(chunk["content"], boilerplate),
+                                         "table_numbers": chunk.get("table_numbers") or []} for chunk in chunks])
                     break
             if item["chunks"]:
                 break

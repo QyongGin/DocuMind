@@ -12,7 +12,7 @@ from datetime import date
 from pathlib import Path
 from typing import Callable
 
-from . import checks, clients, evidence, prompts, timeline
+from . import checks, clients, evidence, gold, prompts, timeline
 from .plan import KINDS, ROUND1, USERS, scale
 
 STEPS = ("plan", "questions", "attached", "probes", "targets", "checked", "judged", "human")
@@ -116,24 +116,37 @@ def _construct_refusal(session, ai_url: str, record: dict, attached: dict, optio
         if not blocks:
             return attached, {"removed_chunks": removed}
         for number in blocks:
-            entry = attached["retrieved"][number - 1] if number - 1 < len(attached["retrieved"]) else {}
-            chunk_id = str(entry.get("chunk_id") or "")
-            if chunk_id and chunk_id not in removed:
-                removed.append(chunk_id)
+            for chunk_id in block_chunk_ids(attached, number):
+                if chunk_id not in removed:
+                    removed.append(chunk_id)
         attached = clients.attach(session, ai_url, record["question"], exclude_chunk_ids=removed, **options)
     if checks.hint_blocks(hint, attached["prompt"]):
         raise ValueError(f"답이 든 청크 {len(removed)}개를 빼도 근거에 답이 남음")
     return attached, {"removed_chunks": removed}
 
 
-def refusal_contact_blocks(record: dict, retrieved: list[dict], family: dict | None) -> list[int]:
+def evidence_entries(attached: dict) -> list[tuple[int, dict]]:
+    """근거 블록 [출처 N]마다 (N, 그 블록이 된 청크). 서버가 블록 번호를 남긴 기록(#275)이면 그것으로, 옛 기록은 근거 순서로 잇는다
+    (표 블록 전에는 N번째 근거가 [출처 N]이었다)."""
+    if attached.get("blocks") is not None and attached.get("retrieval"):
+        return [(entry["block"], entry) for entry in attached["blocks"]]
+    return list(enumerate(attached.get("retrieved") or [], 1))
+
+
+def block_chunk_ids(attached: dict, number: int) -> list[str]:
+    """[출처 number]가 된 청크 id. 같은 표의 뒤 순위 조각이 남아 다음에 그 표를 다시 채우면 다음 회차에서 그 조각을 뺀다
+    (REFUSAL_ROUNDS)."""
+    return [str(entry.get("chunk_id")) for block, entry in evidence_entries(attached) if block == number and entry.get("chunk_id")]
+
+
+def refusal_contact_blocks(record: dict, attached: dict, family: dict | None) -> list[int]:
     """답없음 예시의 확인처를 고를 근거 블록 번호: 재료 문서의 다른 청크, 같은 게시글(본문·첨부), 같은 묶음의 문서.
     family(문서 → (게시글, 묶음))가 없으면 재료 문서만 본다."""
     family = family or {}
     material = str(record.get("ledger_id") or "")
     post, group = family.get(material, (material, None))
     blocks = []
-    for number, entry in enumerate(retrieved, 1):
+    for number, entry in evidence_entries(attached):
         ledger_id = str(entry.get("ledger_id") or "")
         other_post, other_group = family.get(ledger_id, (ledger_id, None))
         if ledger_id and (ledger_id == material or other_post == post or (group and other_group == group)):
@@ -143,8 +156,12 @@ def refusal_contact_blocks(record: dict, retrieved: list[dict], family: dict | N
 
 def run_attach(batch_dir: Path, session, ai_url: str, limit: int | None = None,
                log: Callable[[str], None] = print, dates: dict[str, timeline.Dates] | None = None,
-               today: str | None = None, family: dict | None = None, require_rerank: bool = False) -> Counter:
-    """근거 붙이기: 데이터셋 AI 서버 /query(평가용 옵션)로 운영 프롬프트·근거 8개·학습 전 A.X 답을 받는다.
+               today: str | None = None, family: dict | None = None, require_rerank: bool = False,
+               pinned_share: float = 0.0, seed: int = 0) -> Counter:
+    """근거 붙이기: 데이터셋 AI 서버 /query(평가용 옵션)로 운영 프롬프트·근거·학습 전 A.X 답을 받는다.
+
+    프롬프트는 서버가 준 글 그대로 쓴다(#275). 받은 요청(request)과 서버 실행 설정(runtime, 입력 틀 판 번호 포함)을 예시에
+    남겨, 학습 파일의 프롬프트를 서버에 다시 요청해 대조할 수 있게 한다. 기준 날짜(as_of)는 늘 보낸다(대조할 때 같은 날짜).
 
     require_rerank면 재순위가 실제로 쓰인 근거만 받는다(답없음 예시를 만들려고 다시 붙일 때도 같다, ADR-0055 결정 1).
     쓰이지 않은 예시는 실패로 남아 다음 실행에서 다시 붙인다.
@@ -152,24 +169,44 @@ def run_attach(batch_dir: Path, session, ai_url: str, limit: int | None = None,
     dates(문서 대장의 게시일·유효 기간)를 주면 예시마다 그날의 서비스 색인 모양으로 근거를 붙인다(ADR-0047):
     그날 없던 문서를 검색 후보에서 빼고 프롬프트의 기준 날짜를 그날로 준다. 어떻게 붙였는지 예시의 timeline에 남긴다.
     거절 + 확인처 종류는 답이 든 청크를 빼서 근거에 답이 없게 만들고(ADR-0048 결정 2), 확인처를 고를 블록을 refusal에 남긴다.
+
+    pinned_share(0~1)만큼의 답 있는 예시는 정답 청크(질문을 만든 청크)를 근거의 무작위 자리(1~서버 근거 수)에 지정해 붙인다
+    (#275). 몫은 단계 C에서 정한다. 예시마다 실제 검색인지 지정인지와 정답 청크의 자리를 gold에 남긴다. 실제 검색에서 정답
+    청크가 근거에 못 들고 답 근거도 프롬프트에 없으면 목표 답을 거절로 둔다(gold.refusal_target, 확인처 블록은 refusal).
     """
     counts = Counter()
     today = today or date.today().isoformat()
+    top_k = None
     for record in _todo(batch_dir, "attached", lambda r: r.get("possible") and r.get("question"), limit):
         try:
             options, info = ({"require_rerank": True} if require_rerank else {}), {}
+            options["as_of"] = today
             if dates is not None:
                 day = timeline.the_day(record.get("ledger_id"), dates, today)
                 keep_old = timeline.keeps_old_versions(record["id"])
                 excluded = timeline.excluded_ledger_ids(day, dates, keep_old)
                 options.update({"exclude_ledger_ids": excluded, "as_of": day})
                 info = {"timeline": {"as_of": day, "old_versions": keep_old, "excluded_ledgers": len(excluded)}}
+            planned = record.get("kind_planned") or record["kind"]
+            answerable = KINDS[planned].answerable
+            mode = gold.pick_mode(record, pinned_share, seed, answerable)
+            if mode == gold.PINNED:
+                if top_k is None:  # 근거 수는 서버 실행 설정에서 한 번 읽는다
+                    top_k = clients.server_runtime(session, ai_url, record["question"])["default_top_k"]
+                options["pinned_chunks"] = gold.pinned_chunks(record, top_k, seed)
             attached = clients.attach(session, ai_url, record["question"], **options)
             if record["kind"] == "refuse_guide":
                 attached, refusal = _construct_refusal(session, ai_url, record, attached, options)
-                info["refusal"] = {**refusal,
-                                   "contact_blocks": refusal_contact_blocks(record, attached["retrieved"], family)}
-            result = {"id": record["id"], **attached, **info}
+                info["refusal"] = {**refusal, "contact_blocks": refusal_contact_blocks(record, attached, family)}
+            found = gold.gold_record(record, attached, mode)
+            hint = (record.get("hint") or "").strip()
+            if (mode == gold.REAL and answerable and found["chunks"] and not found["in_evidence"]
+                    and not (hint and checks.hint_blocks(hint, attached["prompt"]))):
+                # 정답 청크가 근거에 못 들고 답 근거도 다른 블록에 없다: 목표 답을 거절로 둔다(명세 10절 작업 3).
+                # 답 근거가 거의 같은 다른 문서 블록에 있으면 답할 수 있는 예시로 둔다(ADR-0048 결정 3)
+                found["refusal_target"] = True
+                info["refusal"] = {"removed_chunks": [], "contact_blocks": refusal_contact_blocks(record, attached, family)}
+            result = {"id": record["id"], **attached, **info, "gold": found}
             counts["attached"] += 1
         except (ValueError, KeyError, OSError) as error:
             result = {"id": record["id"], "error": str(error)}
@@ -206,10 +243,10 @@ def run_probe(batch_dir: Path, session, ollama_url: str, samples: int = PROBE_SA
     counts = Counter()
     for record in _todo(batch_dir, step, lambda r: bool(r.get("prompt")), limit):
         runtime = record.get("runtime") or {}
-        name = model or runtime.get("llm_model") or "ax40light:q4km"
-        options = {"temperature": temperature, "num_ctx": runtime.get("num_ctx") or 12288,
-                   "num_predict": runtime.get("num_predict") or 512}
         try:
+            # 모델·문맥 길이·답 상한은 근거를 붙일 때 서버가 준 실행 설정에서만 읽는다(#275). 없으면 그 예시는 실패로 둔다
+            name = model or runtime["llm_model"]
+            options = {"temperature": temperature, "num_ctx": runtime["num_ctx"], "num_predict": runtime["num_predict"]}
             outs = [clients.generate(session, ollama_url, name, record["prompt"], **options) for _ in range(samples)]
             result = {"id": record["id"], "ax_samples": [out["text"].strip() for out in outs],
                       "probe_generation": {"model": name, **options, "samples": samples}}
@@ -230,11 +267,13 @@ def draft_target(record: dict, session, ollama_url: str, model: str, shapes: tup
     지시문은 계획한 종류로 만든다. 자동 검사 뒤에는 종류(kind)가 그 목표 답의 행동으로 정한 값이라(ADR-0041), 떨어진 목표 답을
     다시 쓸 때 kind를 쓰면 답이 없게 만든 근거에 답 근거를 함께 주게 된다. 계획한 종류를 쓰면 처음 쓸 때와 같은 지시문이다."""
     planned = record.get("kind_planned") or record["kind"]
-    hint = record.get("hint") if KINDS[planned].answerable else ""
+    # 실제 검색에서 정답 청크가 근거에 못 들어 거절로 둔 예시(#275)는 거절 + 확인처처럼 쓴다: 답 근거를 주지 않는다
+    forced_refusal = checks.refusal_target(record)
+    hint = record.get("hint") if KINDS[planned].answerable and not forced_refusal else ""
     # 답 근거가 든 블록 번호는 코드가 짚어 준다(ADR-0048 결정 3) — 초안 모델이 번호를 찾다 틀리던 출처 번호 오류를 줄인다
     sources = checks.hint_blocks(hint, record["prompt"]) if hint else []
     # 답없음 예시는 코드가 고른 블록의 연락처·사이트만 확인처 후보로 보인다(ADR-0048 결정 2)
-    constructed = record.get("refusal") if planned == "refuse_guide" else None
+    constructed = record.get("refusal") if planned == "refuse_guide" or forced_refusal else None
     guidance_blocks = constructed.get("contact_blocks") or [] if constructed is not None else None
     result = {"id": record["id"], "target_generation": {"model": model, **TARGET_OPTIONS}}
     for shape in shapes:
@@ -415,14 +454,6 @@ def current_refusal(text: str) -> str:
     return text
 
 
-def current_rules(prompt: str) -> str:
-    """학습 입력(운영 프롬프트)의 지난 거절 규칙 9·11을 지금 운영 규칙으로 바꾼다. 목표 답의 문장과 입력 규칙이 같아야 한다."""
-    for legacy in prompts.LEGACY_REFUSAL_RULES:
-        for old, new in zip(legacy, prompts.REFUSAL_RULES):
-            prompt = prompt.replace(old, new)
-    return prompt
-
-
 def training_target(text: str) -> str:
     """학습 파일에 쓰는 목표 답. 옛 거절 문장은 새 문장으로 바꾸고, 거절 문장 뒤에 출처 번호만 있으면 번호를 지운다
     (ADR-0050 결정 4) — 답이 없는데 출처를 다는 버릇을 학습하지 않게. 거절 뒤에 확인처 문장이 있으면 그 번호는 확인처가
@@ -431,14 +462,40 @@ def training_target(text: str) -> str:
     return prompts.REFUSAL if CITATION.sub("", text).strip() == prompts.REFUSAL else text
 
 
+def template_version(record: dict):
+    """예시의 입력 틀 판 번호(근거를 붙일 때 서버 실행 설정에 실려 온 값, #275). 판 번호 전 서버로 붙인 예시는 None."""
+    return (record.get("runtime") or {}).get("prompt_template_version")
+
+
 def training_line(record: dict, shape: str) -> dict:
-    """학습 파일 한 줄(A.X 채팅 형식): 사용자 = 운영 프롬프트, 답 = 목표 답. A.X는 시스템 메시지 없이 사용자 한 턴으로 답한다
-    (deploy/models 틀). 옛 거절 문장은 입력 규칙과 목표 답에서 함께 새 문장으로 바꾼다."""
+    """학습 파일 한 줄(A.X 채팅 형식): 사용자 = 서버가 준 프롬프트 그대로(#275), 답 = 목표 답. A.X는 시스템 메시지 없이
+    사용자 한 턴으로 답한다(deploy/models 틀). 옛 거절 문장은 목표 답에서만 새 문장으로 바꾼다.
+
+    meta에 입력 틀 판 번호, 실제 검색인지 지정인지와 정답 청크의 근거 블록 번호, 서버에 보낸 요청을 남긴다. 요청은
+    `trainset verify-prompts`가 같은 프롬프트를 다시 받아 글자까지 대조하는 데 쓴다."""
+    found = record.get("gold") or {}
     return {"id": record["id"],
-            "messages": [{"role": "user", "content": current_rules(record["prompt"])},
+            "messages": [{"role": "user", "content": record["prompt"]},
                          {"role": "assistant", "content": training_target(record[f"target_{shape}"])}],
             "meta": {key: record.get(key) for key in ("kind", "kind_planned", "user_actual", "style", "ledger_id", "group_id")}
-                    | {"drafter": (record.get("drafter") or {}).get("model"), "shape": shape}}
+                    | {"drafter": (record.get("drafter") or {}).get("model"), "shape": shape,
+                       "prompt_template_version": template_version(record), "retrieval_mode": found.get("mode"),
+                       "gold_blocks": [chunk.get("block") for chunk in found.get("chunks") or []],
+                       "request": record.get("request")}}
+
+
+def prompt_problems(records: list[dict]) -> dict:
+    """학습 파일로 쓰면 안 되는 입력: 판 번호가 없는 예시(판 번호 전 서버로 붙임), 입력 규칙의 거절 문장이 지금 문장이 아닌
+    예시, 판 번호가 둘 이상 섞임. 고치지 않고 세기만 한다 — 학습 입력은 서버가 준 프롬프트 그대로다(#275)."""
+    versions = Counter(str(template_version(record)) for record in records)
+    return {"prompt_template_versions": dict(versions),
+            "no_template_version": versions.get("None", 0),
+            "mixed_template_versions": len([version for version in versions if version != "None"]) > 1,
+            "old_rule_refusal": sum(not prompts.current_rule_refusal(record["prompt"]) for record in records)}
+
+
+def prompt_problem_count(problems: dict) -> int:
+    return problems["no_template_version"] + problems["old_rule_refusal"] + int(problems["mixed_template_versions"])
 
 
 def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple[str, ...] = ("ga",),
@@ -466,11 +523,13 @@ def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple
                 "removed_refusal_citations": {shape: sum(training_target(record[f"target_{shape}"])
                                                          != current_refusal(record[f"target_{shape}"]) for record in chosen)
                                               for shape in shapes},
-                # 지난 거절 문장을 지금 문장으로 바꾼 목표 답·입력 수와, 바꾼 뒤에도 지난 문장이나 자리표시가 남은 줄 수(0이어야
-                # 한다 — 규칙 글자가 다른 지난 프롬프트가 섞이면 입력과 목표 답의 문장이 어긋난다)
+                # 지난 거절 문장을 지금 문장으로 바꾼 목표 답 수와, 바꾼 뒤에도 지난 문장이나 자리표시가 남은 줄 수(0이어야
+                # 한다 — 입력 규칙이 지난 문장인 프롬프트가 섞이면 입력과 목표 답의 문장이 어긋난다)
                 "reworded_refusals": {"targets": {shape: sum(current_refusal(record[f"target_{shape}"]) != record[f"target_{shape}"]
-                                                            for record in chosen) for shape in shapes},
-                                      "prompts": sum(current_rules(record["prompt"]) != record["prompt"] for record in chosen)},
+                                                            for record in chosen) for shape in shapes}},
+                # 입력 틀 판 번호별 예시 수와 학습 파일로 쓰면 안 되는 입력 수(#275)
+                **prompt_problems(chosen),
+                "retrieval_modes": dict(Counter(str((record.get("gold") or {}).get("mode")) for record in chosen)),
                 "old_refusal_left": sum(any(mark in json.dumps(training_line(record, shape), ensure_ascii=False) for mark in LEFTOVERS)
                                         for record in chosen for shape in shapes),
                 "ids": [record["id"] for record in chosen]}
@@ -479,16 +538,16 @@ def export_round(batch_dirs: list[Path], out_dir: Path, size: int, shapes: tuple
 
 
 def export(batch_dir: Path, out_file: Path, shape: str = "ga", verdicts: dict[str, str] | None = None) -> int:
-    """한 묶음의 학습 파일(training_line 형식). 자동 검사 통과(중복 아님)이고, 판정(verdicts)을 주면 '통과'인 예시만."""
-    kept = 0
+    """한 묶음의 학습 파일(training_line 형식). 자동 검사 통과(중복 아님)이고, 판정(verdicts)을 주면 '통과'인 예시만.
+    학습 파일로 쓰면 안 되는 입력(prompt_problems)이 있으면 파일을 쓰지 않고 멈춘다."""
+    records = [record for record in merged(batch_dir) if (record.get("keep") or {}).get(shape)
+               and (verdicts is None or verdicts.get(record["id"]) == "통과")]
+    problems = prompt_problems(records)
+    if prompt_problem_count(problems):
+        raise ValueError(f"학습 파일로 쓰면 안 되는 입력이 있다 {problems} — 지금 서버로 근거를 다시 붙인다")
     out_file = Path(out_file)
     out_file.parent.mkdir(parents=True, exist_ok=True)
     with out_file.open("w", encoding="utf-8") as out:
-        for record in merged(batch_dir):
-            if not (record.get("keep") or {}).get(shape):
-                continue
-            if verdicts is not None and verdicts.get(record["id"]) != "통과":
-                continue
+        for record in records:
             out.write(json.dumps(training_line(record, shape), ensure_ascii=False) + "\n")
-            kept += 1
-    return kept
+    return len(records)

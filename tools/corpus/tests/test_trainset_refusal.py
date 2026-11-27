@@ -25,10 +25,12 @@ WITHOUT_ANSWER = evidence(("학위복 대여 안내.html", "학위복은 졸업�
                           ("가나대학 축제 안내.html", "축제는 5월에 열린다. 문의 02-111-2222"))
 FIRST = {"answer_path": "llm", "prompt": WITH_ANSWER, "stages": {"final": [
     {"chunk_id": "77_0", "document_id": "77", "ledger_id": MATERIAL, "chunk_index": 0},
-    {"chunk_id": "90_0", "document_id": "90", "ledger_id": "gana/bbs/90", "chunk_index": 0}]}}
+    {"chunk_id": "90_0", "document_id": "90", "ledger_id": "gana/bbs/90", "chunk_index": 0}]},
+    "runtime": {"prompt_template_version": 1}}
 SECOND = {"answer_path": "llm", "prompt": WITHOUT_ANSWER, "stages": {"final": [
     {"chunk_id": "77_1", "document_id": "77", "ledger_id": MATERIAL, "chunk_index": 1},  # 재료 문서의 다른 청크
-    {"chunk_id": "90_0", "document_id": "90", "ledger_id": "gana/bbs/90", "chunk_index": 0}]}}
+    {"chunk_id": "90_0", "document_id": "90", "ledger_id": "gana/bbs/90", "chunk_index": 0}]},
+    "runtime": {"prompt_template_version": 1}}
 
 
 def batch_with_refusal_question(tmp_path, hint=HINT):
@@ -74,8 +76,22 @@ def test_contact_blocks_follow_post_and_group():
     family = {MATERIAL: (MATERIAL, "공지:학위복"), "gana/bbs/77/a1": (MATERIAL, "공지:학위복"),
               "gana/bbs/55": ("gana/bbs/55", "공지:학위복"), "gana/bbs/90": ("gana/bbs/90", "공지:축제")}
     retrieved = [{"ledger_id": "gana/bbs/77/a1"}, {"ledger_id": "gana/bbs/90"}, {"ledger_id": "gana/bbs/55"}, {}]
-    assert pipeline.refusal_contact_blocks({"ledger_id": MATERIAL}, retrieved, family) == [1, 3]  # 같은 게시글 첨부, 같은 묶음
-    assert pipeline.refusal_contact_blocks({"ledger_id": MATERIAL}, retrieved, None) == []  # 관계를 모르면 재료 문서만
+    attached = {"retrieved": retrieved}  # 블록 번호 기록이 없는 옛 근거: N번째 근거가 [출처 N]
+    assert pipeline.refusal_contact_blocks({"ledger_id": MATERIAL}, attached, family) == [1, 3]  # 같은 게시글 첨부, 같은 묶음
+    assert pipeline.refusal_contact_blocks({"ledger_id": MATERIAL}, attached, None) == []  # 관계를 모르면 재료 문서만
+
+
+def test_contact_blocks_follow_server_block_numbers_when_tables_merge():
+    # 표 블록(#274): 같은 표의 뒤 순위 청크(77_2)가 1번 블록에 합쳐져, 셋째 근거(90_0)가 [출처 2]다
+    family = {MATERIAL: (MATERIAL, "공지:학위복"), "gana/bbs/90": ("gana/bbs/90", "공지:학위복")}
+    attached = {"retrieved": [{"chunk_id": "77_1", "ledger_id": "gana/bbs/77"}, {"chunk_id": "77_2", "ledger_id": "gana/bbs/77"},
+                              {"chunk_id": "90_0", "ledger_id": "gana/bbs/90"}],
+                "retrieval": [{"chunk_id": "77_1", "block": 1}, {"chunk_id": "77_2", "block": None},
+                              {"chunk_id": "90_0", "block": 2}]}
+    attached["blocks"] = [{**attached["retrieved"][0], "block": 1}, {**attached["retrieved"][2], "block": 2}]
+    # 근거 순서로 이으면 [1, 2, 3]이 되어 없는 [출처 3]을 확인처로 준다
+    assert pipeline.refusal_contact_blocks({"ledger_id": MATERIAL}, attached, family) == [1, 2]
+    assert pipeline.block_chunk_ids(attached, 2) == ["90_0"]
 
 
 def test_target_prompt_offers_only_contacts_from_allowed_blocks():

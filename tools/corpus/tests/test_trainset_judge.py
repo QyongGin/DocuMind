@@ -178,7 +178,9 @@ def test_export_prefers_human_over_claude(tmp_path):
     batch = tmp_path / "r1"
     pipeline.write(batch, "plan", [{"id": "a", "kind": "fact", "user": "재학생", "style": "정중체", "chunks": []},
                                    {"id": "b", "kind": "fact", "user": "재학생", "style": "정중체", "chunks": []}], mode="w")
-    pipeline.write(batch, "attached", [{"id": "a", "prompt": PROMPT}, {"id": "b", "prompt": PROMPT}])
+    runtime = {"prompt_template_version": 1}
+    pipeline.write(batch, "attached", [{"id": "a", "prompt": PROMPT, "runtime": runtime},
+                                       {"id": "b", "prompt": PROMPT, "runtime": runtime}])
     pipeline.write(batch, "targets", [{"id": "a", "target_ga": "답 가\n[출처 1]"}, {"id": "b", "target_ga": "답 나\n[출처 1]"}])
     pipeline.write(batch, "checked", [{"id": "a", "keep": {"ga": True}}, {"id": "b", "keep": {"ga": True}}], mode="w")
     pipeline.write(batch, "judged", [{"id": "a", "verdict": "통과"}, {"id": "b", "verdict": "통과"}])
