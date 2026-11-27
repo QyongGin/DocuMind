@@ -19,6 +19,7 @@ import math
 import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime
+from pathlib import Path
 from threading import Lock
 from zoneinfo import ZoneInfo
 
@@ -47,6 +48,7 @@ from prompt_dates import (
     date_lines as academic_date_lines,
     validate_term_months,
 )
+from prompt_tokens import load_prompt_token_counter
 from table_numbering import (
     TABLE_NUMBERS_METADATA_KEY,
     ChunkText,
@@ -141,6 +143,16 @@ OLLAMA_NUM_CTX = _env_int("OLLAMA_NUM_CTX", 12288)
 OLLAMA_EMBEDDING_NUM_CTX = _env_int("OLLAMA_EMBEDDING_NUM_CTX", 2048)
 OLLAMA_NUM_PREDICT = _env_int("OLLAMA_NUM_PREDICT", 512)
 OLLAMA_NUM_THREAD = _env_int("OLLAMA_NUM_THREAD", 0, minimum=0) or None
+# 프롬프트 토큰 수를 세는 생성 모델 토크나이저(#274). 시작할 때 모델 설정 파일(recipe.env)의 TOKENIZER_SHA256과 견주고,
+# 파일이 없거나 해시가 다르면 서버가 뜨지 않는다. Docker에서는 docker-compose.yml이 모델 설정 파일을 같은 상대 위치에 붙인다
+AI_SERVER_DIR = Path(__file__).resolve().parent
+PROMPT_TOKENIZER_PATH = AI_SERVER_DIR / "tokenizer" / "ax40light" / "tokenizer.json"
+MODEL_RECIPE_PATH = Path(
+    os.getenv("AI_MODEL_RECIPE_PATH") or AI_SERVER_DIR.parent / "deploy" / "models" / "ax40light" / "recipe.env"
+)
+PROMPT_TOKEN_COUNTER = load_prompt_token_counter(PROMPT_TOKENIZER_PATH, MODEL_RECIPE_PATH)
+# 프롬프트 상한 = 문맥 길이 - 답 상한 - 채팅 틀 토큰 수(지금 설정으로 12,288 - 512 - 5 = 11,771)
+PROMPT_TOKEN_LIMIT = PROMPT_TOKEN_COUNTER.prompt_limit(OLLAMA_NUM_CTX, OLLAMA_NUM_PREDICT)
 CHUNK_SIZE = _env_int("CHUNK_SIZE", 800, minimum=100)
 CHUNK_OVERLAP = _env_int("CHUNK_OVERLAP", 80, minimum=0)
 CHUNK_MERGE_MIN_SIZE = _env_int("CHUNK_MERGE_MIN_SIZE", 300, minimum=0)
