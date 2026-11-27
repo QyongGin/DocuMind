@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # 변환한 GGUF를 채팅 틀과 함께 데스크탑 Ollama에 등록하고, 틀이 공식 채팅 틀과 같은 입력을 만드는지 확인한다(ADR-0036).
+# recipe.env에 PROMPT_TOKEN_CHECKS가 있으면 숫자가 든 글의 입력 토큰 수도 공식 토크나이저 값과 대조한다(이슈 #279).
+# 확인이 실패해도 등록은 된 상태로 멈춘다(채팅 틀 확인과 같다).
 #
 # 사용법(데스크탑 WSL, 저장소 루트에서, compose의 ollama가 떠 있을 때): deploy/models/import.sh deploy/models/ax40light
 # 읽는 파일: 볼륨 model_work 안 <NAME>/<NAME>-<QUANT>.gguf(convert.sh 결과, 또는 학습 서버에서 옮겨 온 파일)
@@ -37,10 +39,15 @@ sed "s#__GGUF__#$gguf#" "${TEMPLATE_DIR:-$dir}/Modelfile.tmpl" \
   | docker run --rm -i -v "$VOLUME":/work --entrypoint sh "$OLLAMA_IMAGE" -c "cat > /work/$NAME/Modelfile"
 ollama_cli create "$OLLAMA_NAME" -f "/work/$NAME/Modelfile"
 
-if [ -n "${EXPECTED_PROMPT_TOKENS:-}" ]; then
-  # 시스템 글 없이 "안녕하세요" 한 마디를 보내 Ollama가 센 입력 토큰 수를 공식 틀의 값과 비교한다
-  stats=$(ollama_cli run --verbose "$OLLAMA_NAME" "안녕하세요" 2>&1)
+# 시스템 글 없이 글 하나를 보내 Ollama가 센 입력 토큰 수(prompt eval count)를 받는다. 결과는 전역 stats·tokens에 둔다
+count_prompt_tokens() {
+  stats=$(ollama_cli run --verbose "$OLLAMA_NAME" "$1" 2>&1)
   tokens=$(printf '%s\n' "$stats" | sed -n 's/^prompt eval count: *\([0-9]*\) token.*/\1/p' | head -1)
+}
+
+if [ -n "${EXPECTED_PROMPT_TOKENS:-}" ]; then
+  # "안녕하세요" 한 마디의 입력 토큰 수를 공식 틀의 값과 비교한다
+  count_prompt_tokens "안녕하세요"
   if [ "$tokens" = "$EXPECTED_PROMPT_TOKENS" ]; then
     echo "채팅 틀 확인: 입력 토큰 $tokens개, 공식 틀과 같다"
   else
@@ -48,5 +55,24 @@ if [ -n "${EXPECTED_PROMPT_TOKENS:-}" ]; then
     printf '%s\n' "$stats" >&2
     exit 1
   fi
+fi
+
+# 숫자가 든 글의 입력 토큰 수를 공식 토크나이저 값 + 채팅 틀 5와 비교한다(recipe.env의 PROMPT_TOKEN_CHECKS, 이슈 #279).
+# 「안녕하세요」에는 숫자가 없어 숫자 분리 규칙이 달라도 같은 수가 나온다
+failed=0
+for check in ${PROMPT_TOKEN_CHECKS[@]+"${PROMPT_TOKEN_CHECKS[@]}"}; do
+  text=${check%|*}
+  want=${check##*|}
+  count_prompt_tokens "$text"
+  if [ "$tokens" = "$want" ]; then
+    echo "토큰 수 확인: 「$text」 $tokens개, 공식 토크나이저와 같다"
+  else
+    echo "토큰 수 확인 실패: 「$text」 ${tokens:-?}개, 공식 토크나이저 값은 ${want}개" >&2
+    failed=1
+  fi
+done
+if [ "$failed" = 1 ]; then
+  echo "숫자를 자르는 규칙이 공식 토크나이저와 다르다 — recipe.env의 PRE_TOKENIZER와 convert.sh 결과의 PRE_TOKENIZER_CHECK.json을 확인한다" >&2
+  exit 1
 fi
 echo "등록함: $OLLAMA_NAME"

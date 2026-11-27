@@ -5,8 +5,14 @@
 # 학습한 모델(학습 서버에서 합친 Hugging Face 폴더)은 SOURCE_DIR로 그 폴더를 주면 내려받지 않고 그 폴더를 바꾼다:
 #   SOURCE_DIR=~/merged/ax40light-r1 deploy/models/convert.sh deploy/models/ax40light-r1
 # 결과: Docker 볼륨 model_work 안 <NAME>/ 폴더에 <NAME>-<QUANT>.gguf, 원본 LICENSE·config.json·tokenizer_config.json,
-#       SHA256SUMS, LLAMA_CPP_VERSION. 원본(약 14.5GB)과 16비트 GGUF(약 13.8GB)는 변환 뒤 지운다.
+#       SHA256SUMS, LLAMA_CPP_VERSION(PRE_TOKENIZER가 있으면 PRE_TOKENIZER_CHECK.json도). 원본(약 14.5GB)과 16비트 GGUF(약 13.8GB),
+#       분리 규칙을 바꾸기 전 4비트 GGUF는 다음 단계가 끝나면 지운다.
 # 시간: 원본 내려받기 포함 약 8분(RTX 4070 Super 데스크탑, 2026-10-01).
+#
+# recipe.env에 PRE_TOKENIZER가 있으면 양자화한 GGUF의 토크나이저 분리 규칙 이름(tokenizer.ggml.pre)을 그 값으로 바꾼다(이슈 #279).
+# llama.cpp는 변환 때 A.X 4.0에 붙는 이름 a.x-4.0을 숫자 줄을 한 덩어리로 자르는 GPT-2 규칙에 묶어,
+# 숫자를 한 글자씩 자르는 공식 tokenizer.json과 토큰이 달라진다. 텐서는 그대로이고, 바꾼 뒤 메타데이터 한 칸만 달라졌는지 확인한다.
+# 값이 없는 레시피는 바꾸지 않는다(그전에 만든 파일과 같은 SHA256).
 #
 # 환경값: MODEL_VOLUME(기본 model_work, 절대 경로면 그 폴더), LLAMA_CPP_IMAGE(기본은 아래 고정 판), SOURCE_DIR(내려받는 대신 바꿀 로컬 폴더)
 set -euo pipefail
@@ -45,6 +51,7 @@ if [ -n "$SOURCE_DIR" ]; then
 fi
 docker run --rm -i -v "$VOLUME":/work ${source_mount[@]+"${source_mount[@]}"} \
   -e NAME="$NAME" -e HF_REPO="${HF_REPO:-}" -e HF_REVISION="${HF_REVISION:-}" -e QUANT="$QUANT" \
+  -e PRE_TOKENIZER="${PRE_TOKENIZER:-}" \
   --entrypoint bash "$LLAMA_CPP_IMAGE" -s <<'INNER'
 set -euo pipefail
 out=/work/$NAME
@@ -67,8 +74,59 @@ cp "$src/LICENSE" "$src/config.json" "$src/tokenizer_config.json" "$out/"
 # 아래 명령들은 표준 입력을 막는다: 이 스크립트 자체가 표준 입력으로 들어오고 있어, 읽으면 뒤 줄을 먹는다
 python3 /app/convert_hf_to_gguf.py "$src" --outtype bf16 --outfile "$out/$NAME-bf16.gguf" < /dev/null
 rm -rf "$out/hf"
-/app/llama-quantize "$out/$NAME-bf16.gguf" "$out/$NAME-$QUANT.gguf" "$QUANT" < /dev/null
-rm -f "$out/$NAME-bf16.gguf"
+if [ -z "${PRE_TOKENIZER:-}" ]; then
+  /app/llama-quantize "$out/$NAME-bf16.gguf" "$out/$NAME-$QUANT.gguf" "$QUANT" < /dev/null
+  rm -f "$out/$NAME-bf16.gguf"
+else
+  # 양자화한 파일을 중간 파일로 두고, 분리 규칙 이름만 바꾼 사본을 최종 파일로 쓴다. 16비트 GGUF를 먼저 지워 디스크를 더 쓰지 않는다
+  orig=$out/$NAME-$QUANT.pre-orig.gguf
+  /app/llama-quantize "$out/$NAME-bf16.gguf" "$orig" "$QUANT" < /dev/null
+  rm -f "$out/$NAME-bf16.gguf"
+  # 바꾸기나 확인이 실패하면 두 파일을 모두 지운다(다시 돌릴 때 「이미 있음」에 걸리지 않고, 4GB 넘는 파일을 남기지 않는다)
+  trap 'rm -f "$orig" "$out/$NAME-$QUANT.gguf"' ERR
+  export PYTHONPATH=/app/gguf-py${PYTHONPATH:+:$PYTHONPATH}
+  python3 /app/gguf-py/gguf/scripts/gguf_new_metadata.py --pre-tokenizer "$PRE_TOKENIZER" "$orig" "$out/$NAME-$QUANT.gguf" < /dev/null
+  # 메타데이터는 tokenizer.ggml.pre 한 칸만, 텐서는 이름·모양·자료형·데이터 해시가 모두 같아야 한다
+  python3 - "$orig" "$out/$NAME-$QUANT.gguf" > "$out/PRE_TOKENIZER_CHECK.json" <<'PY'
+import hashlib, json, os, sys
+from gguf import GGUFReader
+
+def fields(reader):
+    out = {}
+    for key, field in reader.fields.items():
+        if key.startswith("GGUF."):
+            continue
+        try:
+            out[key] = field.contents()
+        except Exception:
+            out[key] = [bytes(part).hex() for part in field.parts]
+    return out
+
+a, b = GGUFReader(sys.argv[1]), GGUFReader(sys.argv[2])
+fa, fb = fields(a), fields(b)
+meta_diff = {k: [fa.get(k), fb.get(k)] for k in sorted(set(fa) | set(fb)) if fa.get(k) != fb.get(k)}
+ta, tb = {t.name: t for t in a.tensors}, {t.name: t for t in b.tensors}
+tensor_diff = []
+for name in sorted(set(ta) | set(tb)):
+    x, y = ta.get(name), tb.get(name)
+    if x is None or y is None:
+        tensor_diff.append([name, "missing"])
+    elif list(x.shape) != list(y.shape) or x.tensor_type != y.tensor_type:
+        tensor_diff.append([name, "shape/type"])
+    elif hashlib.sha256(x.data.tobytes()).digest() != hashlib.sha256(y.data.tobytes()).digest():
+        tensor_diff.append([name, "data"])
+result = {"meta_keys": len(fa), "meta_diff": meta_diff, "tensors": len(ta), "tensor_diff": tensor_diff}
+print(json.dumps(result, ensure_ascii=False, default=str))
+want = os.environ["PRE_TOKENIZER"]
+ok = (not tensor_diff and set(meta_diff) <= {"tokenizer.ggml.pre"} and fb.get("tokenizer.ggml.pre") == want)
+if not ok:
+    print(f"분리 규칙 바꾸기 확인 실패: {json.dumps(result, ensure_ascii=False, default=str)}", file=sys.stderr)
+    sys.exit(1)
+print(f"분리 규칙 {fa.get('tokenizer.ggml.pre')} → {want}, 텐서 {len(ta)}개 같음", file=sys.stderr)
+PY
+  trap - ERR
+  rm -f "$orig"
+fi
 { /app/llama-cli --version 2>&1 < /dev/null || true; } | grep -E "^(version|built with)" > "$out/LLAMA_CPP_VERSION" || true
 cd "$out" && sha256sum "$NAME-$QUANT.gguf" > SHA256SUMS
 ls -la "$out"
