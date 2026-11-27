@@ -56,6 +56,8 @@ def attach(session, ai_url: str, question: str, timeout: float = 600.0,
     재순위 기록(켜짐·사용 여부·실패 이유)을 함께 돌려준다. require_rerank면 재순위가 실제로 쓰이지 않은 근거를 실패로
     돌려준다: 재순위 서버가 답하지 않으면 AI 서버는 순위 융합 순서 그대로 답하기 때문이다(ADR-0055 결정 1).
     후보별 단계 순위(retrieval)와 표 블록 목록(table_blocks), 조립에 넣은 후보 수(considered)도 돌려준다(#275).
+    프롬프트 길이 상한 때문에 뺀 청크(limit_dropped_chunk_ids, 그 블록에 합쳐져 있던 청크는
+    limit_dropped_merged_chunk_ids)와 블록 하나만 남아 끝 줄을 자른 줄 수(truncated_lines, 안 잘랐으면 None)도 옮긴다.
     """
     request = {"question": question, "system_prompt": None}
     for key, value in (("exclude_ledger_ids", exclude_ledger_ids), ("exclude_chunk_ids", exclude_chunk_ids),
@@ -77,12 +79,13 @@ def attach(session, ai_url: str, question: str, timeout: float = 600.0,
     if require_rerank and not (rerank or {}).get("used"):
         raise ValueError(f"재순위가 쓰이지 않은 근거(rerank={rerank})")
     stages = trace.get("stages") or {}
+    table_stage = stages.get("table_block") or {}
     final = stages.get("final") or []
     documents = {str(candidate.get("chunk_id")): str(candidate.get("document_id")) for candidate in final}
     table_blocks = [{"block": block.get("block"), "chunk_id": block.get("chunk_id"),
                      "document_id": documents.get(str(block.get("chunk_id"))),
                      "table_numbers": block.get("table_numbers") or [], "table_block": bool(block.get("table_block"))}
-                    for block in (stages.get("table_block") or {}).get("blocks") or []]
+                    for block in table_stage.get("blocks") or []]
     retrieved = [{key: candidate.get(key) for key in ("chunk_id", "document_id", "ledger_id", "chunk_index", "chunk_role")}
                  for candidate in final]
     # 근거 블록 [출처 N]마다 그 블록이 된 청크. 표 블록이 켜지면 같은 표의 뒤 순위 청크가 앞 블록에 합쳐져 빠지므로
@@ -93,5 +96,9 @@ def attach(session, ai_url: str, question: str, timeout: float = 600.0,
     return {"prompt": trace["prompt"], "context": trace.get("context") or "", "rerank": rerank,
             "retrieved": retrieved, "blocks": blocks,
             "retrieval": trace.get("retrieval") or [], "pinned": trace.get("pinned"), "table_blocks": table_blocks,
-            "dropped_chunk_ids": (stages.get("table_block") or {}).get("dropped_chunk_ids") or [],
+            "dropped_chunk_ids": table_stage.get("dropped_chunk_ids") or [],
+            # 프롬프트 길이 상한 때문에 뺀 블록의 청크, 그 블록에 합쳐져 있던 청크, 블록 하나만 남아 자른 줄 수
+            "limit_dropped_chunk_ids": table_stage.get("limit_dropped_chunk_ids") or [],
+            "limit_dropped_merged_chunk_ids": table_stage.get("limit_dropped_merged_chunk_ids") or [],
+            "truncated_lines": table_stage.get("truncated_lines"),
             "considered": len(final), "ax_answer": body.get("answer"), "runtime": runtime, "request": request}

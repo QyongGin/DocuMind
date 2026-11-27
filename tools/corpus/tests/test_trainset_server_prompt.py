@@ -101,10 +101,11 @@ def test_real_retrieval_records_gold_block(tmp_path):
 
 
 # 근거에 못 든 이유
-ATTACHED = {"considered": 8, "dropped_chunk_ids": ["5_4"],
+ATTACHED = {"considered": 8, "dropped_chunk_ids": ["5_4", "5_6"],
+            "limit_dropped_chunk_ids": ["6_0"], "limit_dropped_merged_chunk_ids": ["5_6"],
             "table_blocks": [{"block": 1, "chunk_id": "5_3", "document_id": "5", "table_numbers": [1], "table_block": True}],
             "retrieval": retrieval(("1_0", 12, None, None), ("2_0", 5, 11, None), ("3_0", 15, 9, None), ("5_3", 1, None, 1),
-                                   ("5_4", 3, None, None))}
+                                   ("5_4", 3, None, None), ("6_0", 4, None, None), ("5_6", 6, None, None))}
 
 
 @pytest.mark.parametrize("chunk, document_id, expected", [
@@ -116,6 +117,10 @@ ATTACHED = {"considered": 8, "dropped_chunk_ids": ["5_4"],
     ({"id": "5_9", "table_numbers": [2]}, 5, {"in_evidence": False, "same_table": False}),  # 다른 표
     ({"id": "5_4", "table_numbers": [1]}, 5, {"in_evidence": True, "merged": True, "block": 1}),  # 같은 표 블록에 합쳐짐
     ({"id": "5_3", "table_numbers": [1]}, 5, {"in_evidence": True, "block": 1}),
+    # 근거 수 안에 들었지만 프롬프트 길이 상한 때문에 서버가 그 블록을 뺐다(재순위나 융합 탓이 아니다)
+    ({"id": "6_0"}, 6, {"in_evidence": False, "reason": gold.LIMIT, "fused_rank": 4}),
+    # 합쳐진 블록이 상한 때문에 빠졌다: 합쳐진 경우보다 먼저 본다
+    ({"id": "5_6", "table_numbers": [2]}, 5, {"in_evidence": False, "reason": gold.LIMIT, "merged": None}),
 ])
 def test_chunk_status_reasons(chunk, document_id, expected):
     status = gold.chunk_status(chunk, document_id, ATTACHED)
@@ -123,11 +128,11 @@ def test_chunk_status_reasons(chunk, document_id, expected):
 
 
 def gold_batch(tmp_path):
-    """이유별 수를 세는 가나대학 묶음: 실제 검색 답 예시 다섯(근거에 듦 하나, 못 듦 넷), 거절 + 확인처 하나, 지정 예시 둘."""
+    """이유별 수를 세는 가나대학 묶음: 실제 검색 답 예시 여섯(근거에 듦 하나, 못 듦 다섯), 거절 + 확인처 하나, 지정 예시 둘."""
     folder = tmp_path / "g"
     rows = [("g1", "fact", "7_2", []), ("g2", "table", "5_9", [1]), ("g3", "procedure", "2_0", []),
             ("g4", "fact", "1_0", []), ("g5", "multi", "5_3", [1]), ("g6", "refuse_guide", "8_0", []),
-            ("g7", "fact", "7_2", []), ("g8", "table", "5_3", [1])]
+            ("g7", "fact", "7_2", []), ("g8", "table", "5_3", [1]), ("g9", "fact", "6_0", [])]
     pipeline.write(folder, "plan", [{"id": i, "kind": kind, "document_id": int(chunk.split("_")[0]),
                                      "chunks": [{"id": chunk, "table_numbers": numbers}]
                                      + ([{"id": "9_9", "table_numbers": []}] if i == "g5" else [])}
@@ -137,7 +142,8 @@ def gold_batch(tmp_path):
     for i, kind, _, _ in rows:
         record = next(r for r in pipeline.merged(folder) if r["id"] == i)
         mode = gold.PINNED if i in ("g7", "g8") else gold.REAL
-        found = gold.gold_record(record, attached, mode)
+        # g7은 블록 하나만 남아도 상한을 넘어 서버가 끝 줄을 자른 지정 예시
+        found = gold.gold_record(record, {**attached, "truncated_lines": 40} if i == "g7" else attached, mode)
         if i == "g4":
             found["refusal_target"] = True
         records.append({"id": i, "gold": found})
@@ -147,11 +153,12 @@ def gold_batch(tmp_path):
 
 def test_count_reasons_counts_only_real_retrieval_answer_examples(tmp_path):
     counts = gold.count_reasons(pipeline.merged(gold_batch(tmp_path)), lambda kind: KINDS[kind].answerable)
-    assert counts["실제 검색 예시"] == 5 and counts["정답 청크가 근거에 듦"] == 1 and counts["정답 청크가 근거에 못 듦"] == 4
-    # 못 든 청크: g2 5_9(후보 없음, 같은 표 듦), g3 2_0(재순위), g4 1_0(융합), g5의 9_9(후보 없음). g5의 5_3은 듦
-    assert counts["못 든 청크의 이유"] == {gold.NOT_CANDIDATE: 2, gold.FUSION: 1, gold.RERANK: 1}
-    assert counts["못 든 청크 중 같은 표의 다른 조각이 근거에 듦"] == {"예": 1, "아니오": 0, "표 번호 모름": 3}
-    assert counts["거절로 둔 예시"] == 1 and counts["지정 예시"] == 2
+    assert counts["실제 검색 예시"] == 6 and counts["정답 청크가 근거에 듦"] == 1 and counts["정답 청크가 근거에 못 듦"] == 5
+    # 못 든 청크: g2 5_9(후보 없음, 같은 표 듦), g3 2_0(재순위), g4 1_0(융합), g5의 9_9(후보 없음), g9 6_0(길이 상한).
+    # g5의 5_3은 듦
+    assert counts["못 든 청크의 이유"] == {gold.NOT_CANDIDATE: 2, gold.FUSION: 1, gold.RERANK: 1, gold.LIMIT: 1}
+    assert counts["못 든 청크 중 같은 표의 다른 조각이 근거에 듦"] == {"예": 1, "아니오": 0, "표 번호 모름": 4}
+    assert counts["거절로 둔 예시"] == 1 and counts["지정 예시"] == 2 and counts["끝 줄을 자른 예시"] == 1
     assert counts["지정 예시의 정답 블록"] == {1: 1, 2: 1}
 
 
@@ -159,7 +166,8 @@ def test_gold_report_command_prints_counts(tmp_path, capsys):
     folder = gold_batch(tmp_path / "train")
     assert main(["--root", str(tmp_path / "corpus"), "trainset", "gold-report", "--batches", folder.name]) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["못 든 청크의 이유"][gold.NOT_CANDIDATE] == 2
+    assert out["못 든 청크의 이유"][gold.NOT_CANDIDATE] == 2 and out["못 든 청크의 이유"][gold.LIMIT] == 1
+    assert out["끝 줄을 자른 예시"] == 1
 
 
 # 정답 청크가 근거에 못 든 실제 검색 예시는 거절로 둔다
@@ -180,6 +188,29 @@ def test_missing_gold_without_hint_in_prompt_becomes_refusal_target(tmp_path):
     # 거절하지 않은 목표 답은 떨어진다
     wrong = checks.check({**record, **result, "target_ga": "8월 29일까지입니다.\n[출처 1]"})
     assert wrong["drop"]
+
+
+def test_gold_dropped_by_prompt_limit_is_recorded_from_server_and_becomes_refusal_target(tmp_path):
+    # 정답 청크 7_2는 재순위 뒤 2위였지만 프롬프트가 길이 상한을 넘어 서버가 블록 2를 뺐다. 블록 1은 끝 줄이 잘렸다
+    folder = batch(tmp_path)
+    table_block = {"blocks": [{"block": 1, "chunk_id": "9_0", "table_numbers": [], "table_block": False}],
+                   "dropped_chunk_ids": [], "limit_dropped_chunk_ids": ["7_2"], "limit_dropped_merged_chunk_ids": ["7_3"],
+                   "truncated_lines": 31}
+    session = Server(lambda body: trace(prompt=NO_ANSWER, ranks=retrieval(("9_0", 1, None, 1), ("7_2", 2, None, None)),
+                                        final=["9_0", "7_2"], table_block=table_block))
+    pipeline.run_attach(folder, session, "http://ai", log=lambda line: None)
+    attached = pipeline.read(folder, "attached")["b-0001"]
+    assert attached["limit_dropped_chunk_ids"] == ["7_2"] and attached["limit_dropped_merged_chunk_ids"] == ["7_3"]
+    assert attached["truncated_lines"] == 31
+    record = pipeline.merged(folder)[0]
+    assert record["gold"]["chunks"][0]["reason"] == gold.LIMIT and record["gold"]["truncated_lines"] == 31
+    assert record["gold"]["refusal_target"] is True
+    # 표 블록 기록이 없으면(표 블록이 꺼진 서버) 빈 값이다
+    plain = Server(lambda body: trace(ranks=retrieval(("7_2", 1, None, 1)), final=["7_2"]))
+    pipeline.run_attach(batch(tmp_path / "plain"), plain, "http://ai", log=lambda line: None)
+    attached = pipeline.read(tmp_path / "plain" / "b", "attached")["b-0001"]
+    assert attached["limit_dropped_chunk_ids"] == [] and attached["limit_dropped_merged_chunk_ids"] == []
+    assert attached["truncated_lines"] is None
 
 
 def test_missing_gold_with_hint_in_another_block_stays_an_answer(tmp_path):

@@ -13,7 +13,8 @@ from collections import Counter
 
 REAL, PINNED = "검색", "지정"
 NOT_CANDIDATE, FUSION, RERANK = "검색 후보에 없음", "순위 융합에서 밀림", "재순위에서 밀림"
-REASONS = (NOT_CANDIDATE, FUSION, RERANK)
+LIMIT = "길이 상한으로 빠짐"  # 근거 수 안에 들었지만 프롬프트가 상한을 넘어 서버가 그 블록을 뺐다
+REASONS = (NOT_CANDIDATE, FUSION, RERANK, LIMIT)
 RANK_KEYS = ("retrieval_methods", "vector_rank", "bm25_rank", "table_fact_rank", "fused_rank", "rerank_rank",
              "final_rank", "block")
 
@@ -63,13 +64,22 @@ def chunk_status(chunk: dict, document_id, attached: dict) -> dict:
     들었는지(same_table, 청크의 표 번호를 모르면 None)를 남긴다.
 
     표 블록이 켜지면 같은 표의 뒤 순위 청크는 앞 블록에 합쳐져 자기 블록이 없다(dropped_chunk_ids). 그 표가 근거에 있으므로
-    든 것으로 보고 합쳐진 블록 번호를 쓴다(merged)."""
+    든 것으로 보고 합쳐진 블록 번호를 쓴다(merged).
+
+    프롬프트가 길이 상한을 넘으면 서버가 뒤 블록부터 뺀다. 그 블록의 청크와 그 블록에 합쳐져 있던 청크는 근거에 없으므로
+    합쳐진 경우보다 먼저 보고 이유를 LIMIT로 둔다."""
     ranks = {str(entry.get("chunk_id")): entry for entry in attached.get("retrieval") or []}
     entry = ranks.get(str(chunk["id"])) or {}
     status = {"chunk_id": chunk["id"], **{key: entry.get(key) for key in RANK_KEYS}}
     sibling = _same_table_block(chunk, document_id, attached)
+    has_numbers = bool(chunk.get("table_numbers"))
+    same_table = (sibling is not None) if has_numbers else None
     if entry.get("block"):
         return {**status, "in_evidence": True}
+    limit_dropped = {str(chunk_id) for key in ("limit_dropped_chunk_ids", "limit_dropped_merged_chunk_ids")
+                     for chunk_id in attached.get(key) or []}
+    if str(chunk["id"]) in limit_dropped:
+        return {**status, "in_evidence": False, "reason": LIMIT, "same_table": same_table}
     if str(chunk["id"]) in {str(chunk_id) for chunk_id in attached.get("dropped_chunk_ids") or []}:
         return {**status, "in_evidence": True, "merged": True, "block": sibling}
     if entry.get("fused_rank") is None:
@@ -78,22 +88,23 @@ def chunk_status(chunk: dict, document_id, attached: dict) -> dict:
         reason = RERANK  # 순위 융합 순서였으면 근거에 들었다
     else:
         reason = FUSION
-    has_numbers = bool(chunk.get("table_numbers"))
-    return {**status, "in_evidence": False, "reason": reason, "same_table": (sibling is not None) if has_numbers else None}
+    return {**status, "in_evidence": False, "reason": reason, "same_table": same_table}
 
 
 def gold_record(record: dict, attached: dict, mode: str) -> dict:
-    """예시의 정답 청크 기록: 실제 검색/지정, 청크마다 chunk_status, 모두 근거에 들었는지."""
+    """예시의 정답 청크 기록: 실제 검색/지정, 청크마다 chunk_status, 모두 근거에 들었는지, 서버가 끝 줄을 자른 줄 수
+    (블록 하나만 남아도 상한을 넘을 때, 안 잘랐으면 None)."""
     chunks = [chunk_status(chunk, record.get("document_id"), attached) for chunk in gold_chunks(record)]
     return {"mode": mode, "chunks": chunks, "in_evidence": bool(chunks) and all(chunk["in_evidence"] for chunk in chunks),
-            "pinned": attached.get("pinned")}
+            "pinned": attached.get("pinned"), "truncated_lines": attached.get("truncated_lines")}
 
 
 def count_reasons(records: list[dict], answerable) -> dict:
     """정답 청크가 근거에 못 든 예시의 이유별 수. answerable(kind) → 답이 있는 종류인가.
 
     실제 검색이고 계획이 답 있는 종류인 예시만 센다(거절 + 확인처는 답이 든 청크를 일부러 뺀다). 이유는 못 든 정답 청크마다
-    센다(여러 근거 합치기는 청크가 둘). 같은 표 조각은 못 든 청크 중 같은 표의 다른 조각이 근거에 든 수다."""
+    센다(여러 근거 합치기는 청크가 둘). 같은 표 조각은 못 든 청크 중 같은 표의 다른 조각이 근거에 든 수다.
+    끝 줄을 자른 예시는 실제 검색과 지정을 모두 센다(잘린 줄에 답 값이 있으면 근거 대조 검사가 그 예시를 떨어뜨린다)."""
     counted = [record for record in records if (record.get("gold") or {}).get("mode") == REAL
                and answerable(record.get("kind_planned") or record["kind"]) and (record["gold"].get("chunks"))]
     missing = [chunk for record in counted for chunk in record["gold"]["chunks"] if not chunk["in_evidence"]]
@@ -108,6 +119,7 @@ def count_reasons(records: list[dict], answerable) -> dict:
             "아니오": sum(chunk["same_table"] is False for chunk in missing),
             "표 번호 모름": sum(chunk["same_table"] is None for chunk in missing)},
         "거절로 둔 예시": sum(bool(record["gold"].get("refusal_target")) for record in counted),
+        "끝 줄을 자른 예시": sum((record.get("gold") or {}).get("truncated_lines") is not None for record in records),
         "지정 예시": len(pinned),
         "지정 예시의 정답 블록": dict(sorted(Counter(chunk.get("block") for record in pinned
                                              for chunk in record["gold"]["chunks"]).items(),
