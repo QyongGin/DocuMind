@@ -1,6 +1,6 @@
 # DocuMind Contributing Guide
 
-DocuMind는 사내 문서를 외부로 보내지 않는 on-premise(내부 설치형) RAG(검색 증강 생성) 시스템이다. 이 문서는 공개 저장소에서 개발자와 리뷰어가 같은 기준으로 작업하기 위한 협업 규칙이다.
+DocuMind는 인하공업전문대학 문서에 근거해 답하는 RAG(검색 증강 생성) 챗봇이다. 이 문서는 공개 저장소에서 개발자와 리뷰어가 같은 기준으로 작업하기 위한 협업 규칙이다.
 
 이 문서에는 공개해도 되는 개발 절차만 둔다. 개인 서버 주소, 실제 `.env` 값, 로컬 배포 alias(별칭), 비공개 운영 메모는 넣지 않는다.
 
@@ -19,12 +19,16 @@ DocuMind는 사내 문서를 외부로 보내지 않는 on-premise(내부 설치
 | `frontend/` | React 19 + Vite 기반 사용자 화면 |
 | `backend/` | Spring Boot + Java 기반 REST API 서버 |
 | `ai-server/` | FastAPI + Python 기반 문서 parsing(파싱), chunking(청킹), retrieval(검색), answer generation(답변 생성) 서버 |
+| `tools/corpus/` | 학교 문서 수집, 문서 대장, 평가셋, 학습 데이터 명령(`python -m corpus`) |
+| `tools/train/` | 답변 모델 학습(QLoRA, DPO) 스크립트와 절차 |
+| `deploy/` | 모델 변환과 등록, DB·색인 백업과 복원 |
+| `docs/` | 설계, 결정(ADR), 작업 보고서. 지도는 `docs/README.md` |
 | `docker-compose.yml` | 로컬 또는 서버 실행용 서비스 묶음 |
 | `backend/AGENTS.md` | Backend 공개 리뷰 체크리스트 |
 | `frontend/AGENTS.md` | Frontend 공개 리뷰 체크리스트 |
 | `ai-server/AGENTS.md` | AI server 공개 리뷰 체크리스트 |
 
-루트 `AGENTS.md`(`CLAUDE.md`는 그 심볼릭 링크)와 `docs/`는 AI 에이전트와 함께 쓰는 작업 문서다. 현재 문서는 커밋하고, 지난 기록(`docs/archive/`)과 접속 정보(`docs/local/`)·학교 데이터(`Assets/`)는 커밋하지 않는다. 결정은 `docs/adr/`(ADR), 지금 위치는 `docs/project/현재-상태.md`에 둔다. 공개 협업 규칙은 이 `CONTRIBUTING.md`와 모듈별 `AGENTS.md`에 둔다.
+루트 `AGENTS.md`(`CLAUDE.md`는 그 심볼릭 링크)와 `docs/`는 AI 에이전트와 함께 쓰는 작업 문서다. 현재 문서는 커밋하고, 지난 기록(`docs/archive/`)과 접속 정보(`docs/local/`)·학교 데이터(`Assets/`)는 커밋하지 않는다. 결정은 `docs/adr/`(ADR), 마일스톤 작업 문서는 `docs/rag/m1/`, `docs/rag/m2/`에 둔다. 인수인계 노트와 계획 같은 작업 메모는 `docs/local/`(커밋 안 함)에 둔다. 공개 협업 규칙은 이 `CONTRIBUTING.md`와 모듈별 `AGENTS.md`에 둔다.
 
 ## 2. 작업 단위
 
@@ -59,7 +63,7 @@ DocuMind는 사내 문서를 외부로 보내지 않는 on-premise(내부 설치
 - 일반 PR target은 `develop`이다.
 - `main`으로 직접 PR을 만들지 않는다. 예외는 release PR과 긴급 hotfix(긴급 수정)뿐이다.
 - `develop`에 모인 작업을 충분히 검증한 뒤 release PR로 `main`에 병합한다.
-- merge된 작업 branch는 원격과 로컬에서 정리한다.
+- merge된 작업 branch는 원격과 로컬에서 정리한다. squash 머지한 branch는 커밋이 `develop`의 조상으로 보이지 않으므로 `git merge-base`만 보지 말고 GitHub PR이 `MERGED`인지 확인한 뒤 지운다. PR이 없고 용도를 모르는 branch는 바로 지우지 않고 담당자에게 묻는다.
 
 ## 4. 브랜치 이름
 
@@ -86,17 +90,19 @@ chore/update-env-example
 커밋 메시지는 Conventional Commits(커밋 메시지 표준) 형식을 따른다.
 
 ```text
-type(scope): 작업 내용 (#이슈번호)
+type(scope): 작업 내용
 ```
 
 예시:
 
 ```text
-feat(chat): SSE 답변 중단 API 추가 (#12)
-fix(auth): refresh token 만료 처리 수정 (#18)
-refactor(rag): 검색 후보 정규화 로직 분리 (#21)
-docs(api): 문서 업로드 API 설명 추가 (#24)
+feat(chat): SSE 답변 중단 API 추가
+fix(auth): refresh token 만료 처리 수정
+refactor(rag): 검색 후보 정규화 로직 분리
+docs(api): 문서 업로드 API 설명 추가
 ```
+
+PR은 squash 머지하므로 `develop`의 커밋 제목은 PR 제목에 GitHub이 PR 번호를 붙인 것(`PR 제목 (#PR번호)`)이 된다. 브랜치 안의 커밋에는 이슈 번호를 붙이지 않아도 된다(이슈는 PR 본문 `Closes #번호`로 연결, 6장).
 
 자주 사용하는 `type`은 다음과 같다.
 
@@ -138,6 +144,8 @@ CI의 `PR 규칙` 잡(`.github/scripts/check_pr_rules.py`)이 아래를 검사�
 - debug log(디버그 로그), 임시 script(스크립트), 실험 output(출력물)은 의도적으로 리뷰할 파일이 아니면 커밋하지 않는다.
 - 같은 로직이 반복되면 작은 함수, 값 객체, command object(명령 객체), DTO(데이터 전달 객체)로 책임을 분리한다.
 - null(값 없음), 빈 값, 권한 없음, 외부 서버 실패, 중복 요청 같은 edge case(경계 사례)를 함께 고려한다.
+- 점검 기준은 새로 쓰거나 고친 코드에 먼저 적용한다. 기존 코드 전체를 한 번에 고치지 않는다. 프레임워크 특성상 그대로 따르기 어려우면 PR '주의할 점'이나 보고서에 이유를 짧게 적는다.
+- 모듈별 점검표는 `backend/AGENTS.md`, `frontend/AGENTS.md`, `ai-server/AGENTS.md`에 있다.
 
 ## 8. Backend 규칙
 
@@ -181,7 +189,8 @@ AI server는 FastAPI와 Python을 사용한다. RAG 관련 변경은 특정 문�
 
 - parser(파서), cleanup(정리), chunking(청킹), embedding(임베딩), retrieval(검색), reranking(재정렬), prompt construction(프롬프트 구성), answer generation(답변 생성)의 책임을 구분한다.
 - ChromaDB metadata(메타데이터)에는 문서 ID, 원본 파일명, source(출처), page/span(페이지/범위)처럼 삭제와 출처 표시에 필요한 값을 유지한다.
-- `table_fact`, `layout_parallel`, `query_evidence_facts` 같은 구조화 근거는 원문 raw text(원문 텍스트)와 역할을 섞지 않는다.
+- 표 사실(`table_fact`), 질문 의도 추출 정보(`query_evidence_facts`) 같은 구조화 근거는 원문 raw text(원문 텍스트)와 역할을 섞지 않는다.
+- 프롬프트 생성 함수를 바꾸면 학습 데이터와 측정 입력도 바뀐다. 운영 서버와 학습 파이프라인은 같은 함수로 입력을 만든다.
 - `/debug/rag-trace`, `evaluate_rag.py`, `check_chunks.py` 결과로 검색 후보와 답변 근거를 확인한다.
 - PDF, DOCX, PPTX, XLSX 중 한 형식만 좋아지고 다른 형식이 깨지는 format asymmetry(형식 비대칭)를 주의한다.
 - 검색 결과가 없거나 근거가 부족할 때는 LLM이 추측하지 않도록 unsupported(근거 부족) 답변 흐름을 유지한다.
@@ -190,9 +199,7 @@ AI server 변경 후 가능한 범위에서 아래 명령을 확인한다.
 
 ```bash
 cd ai-server
-python3 -m py_compile main.py document_blocks.py layout_blocks.py layout_confidence.py check_chunks.py evaluate_rag.py compare_pdf_layout.py
-python3 evaluate_rag.py --help
-python3 check_chunks.py --help
+OLLAMA_BASE_URL=http://127.0.0.1:9 venv/bin/python -m pytest -q
 ```
 
 ## 11. Docker와 환경 변수
@@ -213,7 +220,7 @@ docker compose -f docker-compose.yml --env-file .env.example config --quiet
 |---|---|
 | Backend API | 단위/통합 테스트, 인증/인가 실패 케이스, 예외 응답 |
 | Frontend UI | lint, build, 주요 사용자 흐름 수동 확인 |
-| AI/RAG | `py_compile`, trace 확인, 평가 질문 또는 대표 질문 수동 확인 |
+| AI/RAG | `pytest`, trace 확인, 평가 질문 또는 대표 질문 수동 확인 |
 | DB schema | migration 적용 가능성, 기존 데이터 호환성 |
 | Docker/infra | Compose config 검증, 환경 변수 예시 확인 |
 | 문서만 변경 | 맞춤법, 공개 가능성, 링크/명령어 정확성, trailing whitespace(줄 끝 공백) 확인 |

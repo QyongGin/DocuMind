@@ -1,6 +1,6 @@
 # Backend Review Guide
 
-> 이 파일은 GitHub PR에서 `@codex review`가 backend 변경을 검토할 때 참고하도록 저장소에 커밋된 공개 리뷰 체크리스트다.
+> 이 파일은 backend 변경 PR을 리뷰할 때(사람 리뷰어와 AI 리뷰 도구 모두) 보는 공개 리뷰 체크리스트다.
 > 비밀값, 로컬 운영 정보, 현재 진행률은 넣지 않는다. 실제 Spring Boot 구조와 맞지 않는 항목은 잘못된 리뷰를 유도하므로 바로 수정하거나 제거한다.
 
 ## Review guidelines
@@ -27,6 +27,11 @@
 - 원시값이나 문자열이 반복적으로 정책 의미를 가지면 상수, 값 객체, record로 분리할 수 있는지 검토한다.
 - 같은 조건문이나 문자열 가공 로직이 중복되면 작은 private helper로 추출할 수 있는지 검토한다.
 - DTO와 Entity의 역할이 섞이지 않았는지 확인한다.
+- 코드 스타일은 [Google Java Style Guide](https://google.github.io/styleguide/javaguide.html)와 기존 스타일을 따른다.
+- 컬렉션에 검증, 필터링, 계산, 정렬 규칙이 붙으면 일급 컬렉션으로 분리할 수 있는지 검토한다.
+- 필드가 3개 이상인 클래스나 public 메서드가 늘어난 클래스는 책임이 섞였는지 확인한다.
+- 핵심 도메인 객체는 getter로 상태를 꺼내 바깥에서 조작하지 않고 의미 있는 행위 메서드를 둔다.
+- 한 줄에 객체 탐색(`.`)이 길게 이어지면 디미터 법칙에 맞게 감쌀 수 있는지 확인한다.
 
 ## Project-specific focus
 
