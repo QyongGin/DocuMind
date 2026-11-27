@@ -81,3 +81,12 @@ def test_model_names_are_the_same_everywhere():
         values.update({f"compose {i}": v for i, v in enumerate(compose)})
         values.update({f"compose gpu {i}": v for i, v in enumerate(gpu)})
         assert len(set(values.values())) == 1, (name, values)
+
+
+def test_term_month_defaults_are_the_same_everywhere():
+    # 날짜 줄 계산의 학년도 시작 월과 2학기 시작 월(#273)은 AI 서버·compose·환경 예시에 있다
+    for name, server_value in (("AI_ACADEMIC_YEAR_START_MONTH", main.ACADEMIC_YEAR_START_MONTH),
+                               ("AI_SECOND_SEMESTER_START_MONTH", main.SECOND_SEMESTER_START_MONTH)):
+        values = {"ai-server main.py": server_value, ".env.example": env_example(name),
+                  "compose": compose_default(name)}
+        assert len(set(values.values())) == 1, (name, values)

@@ -131,7 +131,8 @@ def test_date_lines_when_enabled(monkeypatch):
     assert main._prompt_today(date(2025, 8, 13)) == date(2025, 8, 13)  # 평가 요청의 날짜
     assert isinstance(main._prompt_today(), date)  # 없으면 한국 시간 오늘
     prompt = main._build_rag_prompt(None, "근거", "질문", today=date(2025, 8, 13))
-    assert prompt.startswith("오늘: 2025-08-13\n")
+    assert prompt.startswith("오늘: 2025-08-13 (2025학년도 1학기)\n지금 모집 중인 입시: 2026학년도\n"
+                             "직전 입시(작년에 치른 입시): 2025학년도\n")
     analysis = main._analyze_query("가나대학 장학금 신청 기간")
     block = main._format_context_block(1, "가나대학 장학금 신청 기간은 9월 10일까지다.",
                                        {"source": "장학 공지.html", "posted_at": "2025-08-13T09:00:00"}, "70_0", analysis)
