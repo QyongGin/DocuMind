@@ -41,6 +41,12 @@ from rag_table_fact_selector import (
     select_table_facts_for_question,
 )
 from opendataloader_contract_adapter import adapt_opendataloader_json_page
+from prompt_dates import (
+    DEFAULT_ACADEMIC_YEAR_START_MONTH,
+    DEFAULT_SECOND_SEMESTER_START_MONTH,
+    date_lines as academic_date_lines,
+    validate_term_months,
+)
 from table_numbering import (
     TABLE_NUMBERS_METADATA_KEY,
     ChunkText,
@@ -156,9 +162,35 @@ TABLE_FACT_MAX_PER_CHUNK = _env_int("TABLE_FACT_MAX_PER_CHUNK", 40)
 TABLE_FACT_MAX_CHARS = _env_int("TABLE_FACT_MAX_CHARS", 420)
 EMBED_TABLE_RAW_CHUNKS = _env_bool("EMBED_TABLE_RAW_CHUNKS", True)
 QUERY_RETRIEVAL_CHUNKS_ENABLED = _env_bool("QUERY_RETRIEVAL_CHUNKS_ENABLED", True)
-# 프롬프트 날짜 줄(ADR-0047 결정 4): 맨 위 '오늘: YYYY-MM-DD'와 근거 머리말 '게시: YYYY-MM-DD'(색인 메타데이터 posted_at).
+# 프롬프트 날짜 줄(ADR-0047 결정 4, #273): 맨 위 세 줄(오늘과 학년도 학기, 지금 모집 중인 입시, 직전 입시)과
+# 근거 머리말 '게시: YYYY-MM-DD'(색인 메타데이터 posted_at), '학년도: YYYY'(색인 메타데이터 academic_year).
 # 기본은 꺼짐 — 개발셋으로 해가 없는지 잰 뒤(ADR-0047 측정 1단계) 켠다. 오늘은 한국 시간, 평가 요청의 as_of가 있으면 그 날짜
 PROMPT_DATE_LINES_ENABLED = _env_bool("AI_PROMPT_DATE_LINES_ENABLED", False)
+
+
+def _term_month_settings() -> tuple[int, int]:
+    """날짜 줄 계산에 쓰는 학년도 시작 월과 2학기 시작 월. 잘못된 값이면 서버가 뜨지 않게 ValueError를 낸다.
+    다른 정수 설정처럼 기본값으로 되돌리지 않는다. 틀린 월로 조용히 뜨면 모든 프롬프트의 학년도가 어긋난다."""
+    months = []
+    for name, default in (
+        ("AI_ACADEMIC_YEAR_START_MONTH", DEFAULT_ACADEMIC_YEAR_START_MONTH),
+        ("AI_SECOND_SEMESTER_START_MONTH", DEFAULT_SECOND_SEMESTER_START_MONTH),
+    ):
+        raw_value = (os.getenv(name) or "").strip()
+        try:
+            months.append(int(raw_value) if raw_value else default)
+        except ValueError:
+            raise ValueError(f"{name}={raw_value!r} 값이 정수가 아니다") from None
+    try:
+        validate_term_months(*months)
+    except ValueError as exc:
+        raise ValueError(
+            f"AI_ACADEMIC_YEAR_START_MONTH={months[0]}, AI_SECOND_SEMESTER_START_MONTH={months[1]}: {exc}"
+        ) from None
+    return months[0], months[1]
+
+
+ACADEMIC_YEAR_START_MONTH, SECOND_SEMESTER_START_MONTH = _term_month_settings()
 # 근거 블록에 청크 원문을 늘 넣는다(M2 개선 설계 A1). 기본은 꺼짐 — 지금처럼 표 검색 정보나 질문 의도 추출 정보가 있으면
 # 발췌만 넣는다. 켜면 발췌 뒤에 원문 전체를 붙여, 발췌가 답 줄을 고르지 못해도 답이 프롬프트에 남는다
 CONTEXT_FULL_TEXT_ENABLED = _env_bool("AI_CONTEXT_FULL_TEXT_ENABLED", False)
@@ -4489,6 +4521,20 @@ def _format_posted_label(meta: dict) -> str:
     return match.group(1) if match else ""
 
 
+def _format_academic_year_label(meta: dict) -> str:
+    """근거 머리말 '학년도' 줄의 값(#273). 날짜 줄이 꺼져 있거나 학년도가 없으면 빈 글.
+    학년도는 업로드 때 문서 대장에서 온 색인 메타데이터 academic_year만 쓴다. 제목이나 게시일에서 짐작하지 않는다."""
+    if not PROMPT_DATE_LINES_ENABLED:
+        return ""
+    value = meta.get("academic_year")
+    if value is None or isinstance(value, bool):
+        return ""
+    try:
+        return str(int(str(value).strip()))
+    except ValueError:
+        return ""
+
+
 def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analysis: QueryAnalysis) -> str:
     """LLM이 검색 근거 단위를 구분할 수 있도록 출처 metadata와 청크 본문을 함께 포맷한다."""
     source_name = str(meta.get("source", "")).strip() or "알 수 없는 문서"
@@ -4504,6 +4550,10 @@ def _format_context_block(index: int, doc: str, meta: dict, chunk_id: str, analy
     chunk_label = _format_chunk_label(meta, chunk_id)
     if chunk_label:
         metadata_lines.append(f"청크: {chunk_label}")
+
+    academic_year_label = _format_academic_year_label(meta)
+    if academic_year_label:
+        metadata_lines.append(f"학년도: {academic_year_label}")
 
     header_path = _format_header_path(meta)
     if header_path:
@@ -4854,7 +4904,7 @@ def _expand_table_fact_results(docs: list[str], metadatas: list[dict], ids: list
 
 
 def _prompt_today(as_of: date | None = None) -> date | None:
-    """프롬프트 '오늘' 줄의 날짜(ADR-0047 결정 4). 날짜 줄이 꺼져 있으면 None. 평가 요청의 as_of가 있으면 그 날짜, 없으면 한국 시간 오늘."""
+    """프롬프트 날짜 줄의 기준 날짜(ADR-0047 결정 4). 날짜 줄이 꺼져 있으면 None. 평가 요청의 as_of가 있으면 그 날짜, 없으면 한국 시간 오늘."""
     if not PROMPT_DATE_LINES_ENABLED:
         return None
     return as_of or datetime.now(SERVICE_TIMEZONE).date()
@@ -4866,12 +4916,15 @@ def _build_rag_prompt(
     question: str,
     today: date | None = None,
 ) -> str:
-    """검색 근거와 사용자 질문을 LLM 입력 프롬프트로 조합한다. today가 있으면 맨 위에 '오늘' 줄을 둔다(날짜 줄 켜짐일 때만)."""
+    """검색 근거와 사용자 질문을 LLM 입력 프롬프트로 조합한다. today가 있으면 맨 위에 날짜 줄 세 줄을 둔다(날짜 줄 켜짐일 때만)."""
     prompt_policy = system_prompt.strip() if system_prompt and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
-    today_line = f"오늘: {today.isoformat()}\n" if today else ""
-    # 빈 줄 둘과 [답변 직전 확인]의 '우선 표 근거'·'우선 질의 근거' 두 줄은 규칙 경로(#169에서 삭제)의 흔적이다.
-    # 지우면 프롬프트가 바뀌어 답이 달라질 수 있으므로, 프롬프트를 바꾸는 작업(M2 5단계·모델 선정 ①)에서 측정과 함께 정리한다.
-    return f"""{today_line}{prompt_policy}
+    date_block = ""
+    if today:
+        lines = academic_date_lines(today, ACADEMIC_YEAR_START_MONTH, SECOND_SEMESTER_START_MONTH)
+        date_block = "\n".join(lines) + "\n"
+    # MANDATORY_RAG_PROMPT 뒤의 빈 줄 둘은 규칙 경로(#169에서 삭제)의 흔적이다. [답변 직전 확인]에서 그 경로가 만들던
+    # 절([우선 표 근거], [우선 질의 근거])을 가리키던 두 줄은 #273에서 뺐다. 빈 줄 둘은 바꾸지 않고 그대로 둔다.
+    return f"""{date_block}{prompt_policy}
 
 {MANDATORY_RAG_PROMPT}
 
@@ -4884,8 +4937,6 @@ def _build_rag_prompt(
 
 [답변 직전 확인]
 - 답변은 [검색 근거]에 직접 적힌 내용만 사용한다.
-- [우선 표 근거]가 있으면 표의 행/열/값 판단에 가장 먼저 사용한다.
-- [우선 질의 근거]가 있으면 질문 의도에 직접 대응하는 절차와 안내 문구로 우선 사용한다.
 - [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다.
 - [검색 근거]의 '질문 의도 추출 정보'가 있으면 답변에 우선 사용한다.
 - [검색 근거]의 '질문 관련 발췌'가 있으면 그 발췌에 직접 적힌 항목만 우선 사용한다.
@@ -6650,6 +6701,8 @@ def _model_settings() -> dict:
         "num_predict": OLLAMA_NUM_PREDICT,
         "query_retrieval_chunks_enabled": QUERY_RETRIEVAL_CHUNKS_ENABLED,
         "prompt_date_lines": PROMPT_DATE_LINES_ENABLED,
+        "academic_year_start_month": ACADEMIC_YEAR_START_MONTH,
+        "second_semester_start_month": SECOND_SEMESTER_START_MONTH,
         "context_full_text": CONTEXT_FULL_TEXT_ENABLED,
     }
 
