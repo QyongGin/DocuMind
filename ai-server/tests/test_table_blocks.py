@@ -390,6 +390,18 @@ def test_reduced_piece_still_too_big_drops_later_blocks(store):
     assert "[출처 2]" not in result.context and "|가학과0|" not in result.context
 
 
+def test_tables_left_after_dropping_blocks_go_back_to_whole(store):
+    # 뒤 순위 블록(표 전체가 든 표 원문 블록)을 빼고 나면 남은 표 2는 상한 안에 들어 통째로 되돌린다
+    store.add_odl(0, _whole_filled_table(_big_table_chunks(25, 40, "가")), [1], 1)
+    for index, text in enumerate(_big_table_chunks(25, 8, "나")):
+        store.add(200 + index, text, [2], 50 + index)
+    result = store.build(["31_203", _odl_chunk_id(0)])
+    assert result.info["limit_dropped_chunk_ids"] == [_odl_chunk_id(0)]
+    assert result.info["blocks"][0]["tables"] == [{"table_number": 2, "shape": "raw", "mode": "full"}]
+    assert "|나학과0|" in result.context and "|나학과199|" in result.context
+    assert result.info["prompt_tokens"] <= main.PROMPT_TOKEN_LIMIT and not result.info["over_limit"]
+
+
 def test_first_block_alone_too_big_is_cut_from_the_end(store):
     # 블록이 하나만 남았는데도 상한을 넘으면 그 블록의 끝 줄부터 자른다. 머리말과 표 머리글, 앞 행은 남는다
     pieces = _big_table_chunks(25, 40, "가")
