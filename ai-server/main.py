@@ -4731,7 +4731,9 @@ def _build_table_block_prompt(
     상위 top_k개 후보를 블록으로 만든다. 같은 표의 뒤 순위 블록이 빠지면 블록이 줄어드는데, 빈자리 채움이 켜져 있으면
     블록이 top_k개가 될 때까지 다음 순위 후보를 더 받는다. 프롬프트는 NFC로 정규화한 글을 A.X 토크나이저로 세고,
     상한(PROMPT_TOKEN_LIMIT)을 넘을 때만 표를 줄인다: 높은 순위 표부터 통째로 넣고, 안 들어가는 표는 검색된 조각과 머리글,
-    주석만 「표 일부:」로 넣는다.
+    주석만 「표 일부:」로 넣는다. 그래도 넘으면 모든 표를 검색된 조각만으로 줄이고, 그래도 넘으면 뒤 순위 블록부터 빼며,
+    블록이 하나 남았는데도 넘으면 그 블록의 끝 줄부터 자른다. 결과 프롬프트는 상한 안이다(질문과 지시문만으로 넘는 경우 제외).
+    상한 때문에 뺀 블록의 청크는 block_of가 None이라 응답 출처에서도 빠진다.
     """
     started = time.perf_counter()
     assembler = TableBlockAssembler(_load_table_sources)
@@ -4754,43 +4756,88 @@ def _build_table_block_prompt(
             plain_inputs[id(block)] = (doc, meta, str(chunk_id))
 
     placed_keys = [key for block in assembler.blocks for key in block.tables]
-    partial_lines = {
-        key: assembler.tables[key].partial(assembler.retrieved_runs.get(key, []), assembler.retrieved_odl.get(key, set()))
-        for key in placed_keys
-    }
+    # 표마다 줄이는 단계(큰 것부터, 같은 글은 한 번): 통째(full) → 「표 일부」(partial) → 검색된 조각만(retrieved)
+    levels: dict = {}
+    for key in placed_keys:
+        table = assembler.tables[key]
+        runs = assembler.retrieved_runs.get(key, [])
+        odl_ids = assembler.retrieved_odl.get(key, set())
+        distinct: list[tuple[str, list[str]]] = []
+        for mode, lines in (("full", table.full), ("partial", table.partial(runs, odl_ids)),
+                            ("retrieved", table.retrieved_only(runs, odl_ids))):
+            if all(lines != kept for _, kept in distinct):
+                distinct.append((mode, lines))
+        levels[key] = distinct
+    reduced_lines = {key: dict(levels[key]) for key in placed_keys}
 
-    def render(modes: dict) -> tuple[str, str]:
+    def render(modes: dict, count: int, keep_lines: int | None = None) -> tuple[str, str]:
         blocks_text = []
-        for number, block in enumerate(assembler.blocks, start=1):
+        for number, block in enumerate(assembler.blocks[:count], start=1):
             if block.plain:
                 doc, meta, chunk_id = plain_inputs[id(block)]
                 blocks_text.append(_format_context_block(number, doc, meta, chunk_id, analysis))
                 continue
             meta, chunk_id = metas_by_block[id(block)]
             header = _format_block_metadata(meta, chunk_id, include_chunk=False)
-            body = render_table_block_body(block, modes, partial_lines)
+            body = render_table_block_body(block, modes, reduced_lines)
             blocks_text.append(f"[출처 {number}]\n{header}\n{body}" if body else f"[출처 {number}]\n{header}")
+        if keep_lines is not None and blocks_text:
+            blocks_text[-1] = "\n".join(blocks_text[-1].split("\n")[:keep_lines])
         context = nfc_prompt("\n\n".join(blocks_text))
         return context, nfc_prompt(_build_rag_prompt(system_prompt, context, question, today=today))
 
+    def measure(modes: dict, count: int, keep_lines: int | None = None) -> tuple[str, str, int]:
+        context, prompt = render(modes, count, keep_lines)
+        return context, prompt, PROMPT_TOKEN_COUNTER.count(prompt)
+
+    def upgrade(modes: dict, count: int, keys: list) -> None:
+        # 높은 순위 표부터, 상한 안에 드는 가장 큰 단계로 되돌린다
+        for key in keys:
+            for mode, _ in levels[key]:
+                if mode == modes[key]:
+                    break
+                trial = {**modes, key: mode}
+                if measure(trial, count)[2] <= PROMPT_TOKEN_LIMIT:
+                    modes[key] = mode
+                    break
+
+    count = len(assembler.blocks)
+    keep_lines: int | None = None
     modes = {key: "full" for key in placed_keys}
-    context, prompt = render(modes)
-    tokens = PROMPT_TOKEN_COUNTER.count(prompt)
+    context, prompt, tokens = measure(modes, count)
     if tokens > PROMPT_TOKEN_LIMIT:
-        reducible = [key for key in placed_keys if partial_lines[key] != assembler.tables[key].full]
-        modes.update({key: "partial" for key in reducible})
-        for key in reducible:
-            modes[key] = "full"
-            context, prompt = render(modes)
-            tokens = PROMPT_TOKEN_COUNTER.count(prompt)
-            if tokens > PROMPT_TOKEN_LIMIT:
-                modes[key] = "partial"
-        context, prompt = render(modes)
-        tokens = PROMPT_TOKEN_COUNTER.count(prompt)
+        # 1단계: 줄일 수 있는 표를 모두 「표 일부」로 줄이고 높은 순위 표부터 통째로 되돌린다
+        modes = {key: "partial" if "partial" in reduced_lines[key] else "full" for key in placed_keys}
+        upgrade(modes, count, placed_keys)
+        context, prompt, tokens = measure(modes, count)
+    if tokens > PROMPT_TOKEN_LIMIT:
+        # 2단계: 모든 표를 가장 작게(검색된 조각과 머리글) 줄인다. 그래도 넘으면 뒤 순위 블록부터 빼고, 블록이 하나 남았는데도
+        # 넘으면 그 블록의 끝 줄부터 자른다. 블록을 다 줄인 뒤 남은 표는 높은 순위부터 들어가는 가장 큰 단계로 되돌린다
+        modes = {key: levels[key][-1][0] for key in placed_keys}
+        context, prompt, tokens = measure(modes, count)
+        while tokens > PROMPT_TOKEN_LIMIT and count > 1:
+            count -= 1
+            context, prompt, tokens = measure(modes, count)
+        if tokens > PROMPT_TOKEN_LIMIT and count == 1:
+            low, high = 1, len(render(modes, count)[0].split("\n"))
+            while low < high:
+                middle = (low + high + 1) // 2
+                if measure(modes, count, middle)[2] <= PROMPT_TOKEN_LIMIT:
+                    low = middle
+                else:
+                    high = middle - 1
+            keep_lines = low
+        else:
+            upgrade(modes, count, [key for block in assembler.blocks[:count] for key in block.tables])
+        context, prompt, tokens = measure(modes, count, keep_lines)
+    limit_dropped = [block.evidence.chunk_id for block in assembler.blocks[count:]]
+    for chunk_id, number in block_of.items():
+        if number is not None and number > count:
+            block_of[chunk_id] = None
+    active_keys = [key for block in assembler.blocks[:count] for key in block.tables]
     over_limit = tokens > PROMPT_TOKEN_LIMIT
     if over_limit:
-        logger.warning("[table_block] prompt_over_limit tokens=%s limit=%s blocks=%s", tokens, PROMPT_TOKEN_LIMIT,
-                       len(assembler.blocks))
+        logger.warning("[table_block] prompt_over_limit tokens=%s limit=%s blocks=%s", tokens, PROMPT_TOKEN_LIMIT, count)
     info = {
         "blocks": [
             {
@@ -4801,14 +4848,16 @@ def _build_table_block_prompt(
                 "tables": [{"table_number": key[1], "shape": assembler.tables[key].shape, "mode": modes[key]}
                            for key in block.tables],
             }
-            for number, block in enumerate(assembler.blocks, start=1)
+            for number, block in enumerate(assembler.blocks[:count], start=1)
         ],
         "dropped_chunk_ids": [evidence.chunk_id for evidence in assembler.dropped],
+        "limit_dropped_chunk_ids": limit_dropped,
+        "truncated_lines": keep_lines,
         "considered": considered,
         "fill_enabled": TABLE_BLOCK_FILL_ENABLED,
         "prompt_tokens": tokens,
         "prompt_token_limit": PROMPT_TOKEN_LIMIT,
-        "partial_tables": [f"{key[0]}:{key[1]}" for key in placed_keys if modes[key] == "partial"],
+        "partial_tables": [f"{key[0]}:{key[1]}" for key in active_keys if modes[key] != "full"],
         "over_limit": over_limit,
         "elapsed": time.perf_counter() - started,
     }

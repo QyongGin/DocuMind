@@ -292,6 +292,25 @@ class AssembledTable:
         # 채운 표에서 고를 쪽이 없으면 검색된 원문 조각을 원문 모양 그대로 둔다(채운 표의 머리글은 모양이 달라 붙이지 않는다)
         return self._with_header(lines) if self.shape == "raw" else lines
 
+    def retrieved_only(self, retrieved_runs: Sequence[tuple[int, Sequence[str]]], retrieved_odl_ids: set[str]) -> list[str]:
+        """가장 작게 줄인 표: 검색된 조각 그 자체와 머리글. 「표 일부」(partial)로도 프롬프트가 상한을 넘을 때 쓴다.
+
+        채운 표 모양에서 partial은 검색된 조각과 글이 겹치는 표 원문 블록을 통째로 고르는데, 표 원문 블록 하나가 표 전체일 수
+        있다(여러 쪽에 걸친 표). 여기서는 검색된 표 원문 블록만, 없으면 검색된 원문 청크의 표 줄을 원문 모양 그대로 쓴다.
+        검색된 조각이 없으면 머리글만 남는다.
+        """
+        if self.shape == "odl":
+            chosen = [piece for piece in self.odl_pieces if piece.chunk_id in retrieved_odl_ids]
+            if chosen:
+                lines, _ = join_odl_pieces(piece.text.split("\n") for piece in chosen)
+                return self._with_header(lines)
+            if retrieved_runs:
+                return join_raw_pieces(lines for _, lines in sorted(retrieved_runs, key=lambda item: item[0]))
+            return list(self.header)
+        if not retrieved_runs:
+            return list(self.header)
+        return self._with_header(join_raw_pieces(lines for _, lines in sorted(retrieved_runs, key=lambda item: item[0])))
+
     def _with_header(self, lines: list[str]) -> list[str]:
         if not self.header or not lines:
             return lines
@@ -486,15 +505,17 @@ def _chunk_number(chunk_id: str) -> int:
     return int(tail) if tail.isdigit() else 0
 
 
-def render_body(block: PlannedBlock, modes: Mapping[TableKey, str], partial_lines: Mapping[TableKey, list[str]]) -> str:
-    """블록 본문을 이름표와 함께 쓴다. modes[key]가 'partial'이면 그 표를 줄인 표(「표 일부:」)로 쓴다."""
+def render_body(block: PlannedBlock, modes: Mapping[TableKey, str],
+                reduced_lines: Mapping[TableKey, Mapping[str, list[str]]]) -> str:
+    """블록 본문을 이름표와 함께 쓴다. modes[key]가 'full'이 아니면 그 표를 reduced_lines[key][mode](「표 일부:」)로 쓴다."""
     out: list[str] = []
     document_id = block.evidence.document_id
     for segment in block.segments:
         if segment.kind == TABLE:
             key = (document_id, segment.table)
-            if modes.get(key) == "partial":
-                out += [TABLE_LABEL_PARTIAL, *partial_lines[key]]
+            mode = modes.get(key, "full")
+            if mode != "full":
+                out += [TABLE_LABEL_PARTIAL, *reduced_lines[key][mode]]
             else:
                 out += [TABLE_LABEL_FULL, *segment.lines]
         else:

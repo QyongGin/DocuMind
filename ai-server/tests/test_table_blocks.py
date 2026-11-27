@@ -339,6 +339,90 @@ def test_higher_rank_table_whole_first(store):
     assert small.info["partial_tables"] == [] and "|가학과299|" in small.context
 
 
+def _whole_filled_table(pieces: list[str]) -> str:
+    """원문 청크 조각을 이어 표 원문 블록 하나(여러 쪽에 걸친 표 전체)로 만든다."""
+    head = pieces[0].split("\n")[:2]
+    return "\n".join(head + [line for text in pieces for line in text.split("\n")[2:]])
+
+
+def _odl_chunk_id(source_index: int) -> str:
+    return f"{DOC}_{main.OPENDATALOADER_JSON_PARENT_CHUNK_INDEX_OFFSET + source_index}"
+
+
+def test_filled_table_whole_in_one_piece_is_reduced_to_retrieved_rows(store):
+    # 표 1의 표 원문 블록 하나가 표 전체(약 2만 토큰)라 「표 일부」가 표 전체와 같아진다. 검색된 조각(청크 12)만 남긴다
+    pieces = _big_table_chunks(25, 40, "가")
+    for index, text in enumerate(pieces):
+        store.add(index, text, [1], index + 1)
+    store.add_odl(0, _whole_filled_table(pieces), [1], 1)
+    result = store.build(["31_12"])
+    assert result.info["blocks"][0]["tables"] == [{"table_number": 1, "shape": "odl", "mode": "retrieved"}]
+    assert result.info["prompt_tokens"] <= main.PROMPT_TOKEN_LIMIT and not result.info["over_limit"]
+    assert "|가학과300|" in result.context and "|가학과324|" in result.context
+    assert "|가학과299|" not in result.context and "|가학과325|" not in result.context
+    assert result.info["limit_dropped_chunk_ids"] == [] and result.info["truncated_lines"] is None
+
+
+def test_later_rank_table_is_reduced_and_earlier_blocks_kept(store):
+    # 표가 뒤 순위(3번째)에 있어도 그 표만 줄이고 앞 블록은 그대로 둔다
+    pieces = _big_table_chunks(25, 40, "가")
+    for index, text in enumerate(pieces):
+        store.add(index, text, [1], index + 1)
+    store.add_odl(0, _whole_filled_table(pieces), [1], 1)
+    store.add(200, _big_table_chunks(10, 1, "나")[0], [2], 50)
+    result = store.build(["40_0", "31_200", "31_12"])
+    assert [block["chunk_id"] for block in result.info["blocks"]] == ["40_0", "31_200", "31_12"]
+    assert [table["mode"] for block in result.info["blocks"] for table in block["tables"]] == ["full", "retrieved"]
+    assert result.info["prompt_tokens"] <= main.PROMPT_TOKEN_LIMIT and not result.info["over_limit"]
+    assert OTHER_TEXT in result.context and "|나학과9|" in result.context and "|가학과324|" in result.context
+
+
+def test_reduced_piece_still_too_big_drops_later_blocks(store):
+    # 검색된 조각이 표 원문 블록 자체(표 전체)라 가장 작게 줄여도 상한을 넘는다. 뒤 순위 블록부터 뺀다
+    pieces = _big_table_chunks(25, 40, "가")
+    store.add_odl(0, _whole_filled_table(pieces), [1], 1)
+    store.add(200, _big_table_chunks(10, 1, "나")[0], [2], 50)
+    result = store.build(["40_0", _odl_chunk_id(0), "31_200"])
+    assert [block["chunk_id"] for block in result.info["blocks"]] == ["40_0"]
+    assert result.info["limit_dropped_chunk_ids"] == [_odl_chunk_id(0), "31_200"]
+    assert result.block_of == {"40_0": 1, _odl_chunk_id(0): None, "31_200": None}
+    assert result.info["prompt_tokens"] <= main.PROMPT_TOKEN_LIMIT and not result.info["over_limit"]
+    assert "[출처 2]" not in result.context and "|가학과0|" not in result.context
+
+
+def test_first_block_alone_too_big_is_cut_from_the_end(store):
+    # 블록이 하나만 남았는데도 상한을 넘으면 그 블록의 끝 줄부터 자른다. 머리말과 표 머리글, 앞 행은 남는다
+    pieces = _big_table_chunks(25, 40, "가")
+    store.add_odl(0, _whole_filled_table(pieces), [1], 1)
+    result = store.build([_odl_chunk_id(0), "40_0"])
+    assert result.info["limit_dropped_chunk_ids"] == ["40_0"] and result.info["truncated_lines"] is not None
+    assert result.info["prompt_tokens"] <= main.PROMPT_TOKEN_LIMIT and not result.info["over_limit"]
+    assert result.context.startswith("[출처 1]\n문서: " + SOURCE)
+    # 검색된 조각이 곧 표 전체라 줄일 단계가 없다(「표:」 그대로, 끝 줄만 잘림)
+    assert result.info["blocks"][0]["tables"] == [{"table_number": 1, "shape": "odl", "mode": "full"}]
+    assert "표:\n|가 학과|입학 정원|수시 합격자|정시 합격자|\n|---|---|---|---|\n|가학과0|" in result.context
+    assert "|가학과999|" not in result.context and OTHER_TEXT not in result.context
+    assert result.prompt.endswith(nfc(main._build_rag_prompt(None, result.context, QUESTION).split(result.context, 1)[1]))
+
+
+def test_small_tables_whose_sum_is_over_limit_drop_later_blocks(store):
+    # 줄일 수 없는 작은 표(청크 하나짜리, 각 약 1,700토큰) 8개의 합이 상한을 넘는다. 뒤 순위 블록부터 빼 상한 안에 둔다
+    prefixes = "가나다라마바사아"
+    ids = []
+    for number, prefix in enumerate(prefixes, start=1):
+        store.add(300 + number, _big_table_chunks(85, 1, prefix)[0], [number], number)
+        ids.append(f"31_{300 + number}")
+    result = store.build(ids)
+    kept = [block["chunk_id"] for block in result.info["blocks"]]
+    assert 0 < len(kept) < len(ids) and kept == ids[:len(kept)]
+    assert result.info["limit_dropped_chunk_ids"] == ids[len(kept):]
+    assert all(result.block_of[chunk_id] is None for chunk_id in ids[len(kept):])
+    assert [result.block_of[chunk_id] for chunk_id in kept] == list(range(1, len(kept) + 1))
+    assert result.info["prompt_tokens"] <= main.PROMPT_TOKEN_LIMIT and not result.info["over_limit"]
+    assert result.info["truncated_lines"] is None
+    assert f"[출처 {len(kept)}]" in result.context and f"[출처 {len(kept) + 1}]" not in result.context
+
+
 # ---------------------------------------------------------------- 표 사실 청크 검색 설정
 
 
