@@ -360,3 +360,33 @@ def test_rules_unchanged_when_table_block_off(monkeypatch):
     prompt = main._build_rag_prompt(None, "근거", "질문")
     assert main.TABLE_FACT_RULE not in prompt and main.TABLE_FACT_CHECK not in prompt
     assert table_blocks.TABLE_LABEL_FULL == "표:"
+
+
+def test_heading_closes_note_range(store):
+    # 표 뒤 주석 범위는 다음 제목 줄 전까지다. 제목 줄 뒤의 ※ 줄은 이 표의 주석이 아니다
+    store.add(5, "|과목|학점|\n|---|---|\n|수학|3|\n|물리|2|\n※ 학점은 학기당 기준\n## 3. 장학\n※ 장학금은 별도 공지", [4], 4)
+    result = store.build([f"{DOC}_5"])
+    assert "표 아래 주석:\n※ 학점은 학기당 기준\n내용:\n## 3. 장학\n※ 장학금은 별도 공지" in result.context
+
+
+def test_later_block_with_only_lines_already_present_is_dropped(store):
+    # 뒤 순위 블록에서 표 줄을 빼고 남은 줄(본문)이 모두 앞 블록에 이미 든 줄이면 블록을 뺀다(공백만 달라도 같은 줄)
+    store.add(3, "모집 인원은 아래와 같다.\n|학과|인원|\n|---|---|\n|가학과|10|", [1], 2)
+    store.add(4, "모집  인원은 아래와  같다.\n|학과|인원|\n|---|---|\n|나학과|20|", [1], 3)
+    result = store.build([f"{DOC}_3", f"{DOC}_4"])
+    assert result.info["dropped_chunk_ids"] == [f"{DOC}_4"]
+    assert "|나학과|20|" in result.context
+
+
+def test_extra_piece_in_two_table_chunk_follows_known_rows(store):
+    # 청크 7에 표 2 조각, 표 2의 이어지는 조각(글 한 줄 뒤), 표 3 조각이 있다. 번호는 [2, 3] 둘뿐이라 순서만으로는
+    # 가운데 조각이 표 3으로 붙는다. 다른 청크(8, 9)에서 본 행으로 첫째와 셋째를 짝 지으면 가운데 조각은 앞 조각의 표 2다
+    chunk = "\n".join(["|전형|인원|", "|---|---|", "|농어촌|12|", "다음 행은 정원외다.", "|전형|인원|", "|---|---|",
+                       "|재직자|20|", "", "|학과|면접|", "|---|---|", "|기계공학과|있음|"])
+    store.add(7, chunk, [2, 3], 5)
+    store.add(8, "|전형|인원|\n|---|---|\n|농어촌|12|", [2], 5)
+    store.add(9, "|학과|면접|\n|---|---|\n|기계공학과|있음|\n|화학과|없음|", [3], 6)
+    result = store.build([f"{DOC}_7"])
+    tables = [part.split("\n내용:")[0].split("\n표 아래")[0] for part in result.context.split("표:\n")[1:]]
+    assert "|재직자|20|" in tables[0] and "|재직자|20|" not in tables[1]
+    assert "|화학과|없음|" in tables[1]
