@@ -93,6 +93,11 @@ def store(monkeypatch):
             collection.add(ids=[f"{DOC}_odl_{source_index}"], documents=[text], embeddings=[[0.0]], metadatas=[meta])
             chunks[f"{DOC}_{parent_index}"] = (text, {**meta, "chunk_role": "raw", "chunk_index": parent_index})
 
+        def candidates(self, chunk_ids):
+            """검색기가 돌려준 것처럼 (글, 메타데이터, id) 목록."""
+            lookup = {**chunks, "40_0": (OTHER_TEXT, OTHER_META)}
+            return ([lookup[i][0] for i in chunk_ids], [dict(lookup[i][1]) for i in chunk_ids], list(chunk_ids))
+
         def build(self, chunk_ids, top_k=8, question=QUESTION, today=None):
             lookup = {**chunks, "40_0": (OTHER_TEXT, OTHER_META)}
             docs = [lookup[chunk_id][0] for chunk_id in chunk_ids]
@@ -390,3 +395,59 @@ def test_extra_piece_in_two_table_chunk_follows_known_rows(store):
     tables = [part.split("\n내용:")[0].split("\n표 아래")[0] for part in result.context.split("표:\n")[1:]]
     assert "|재직자|20|" in tables[0] and "|재직자|20|" not in tables[1]
     assert "|화학과|없음|" in tables[1]
+
+
+# ---------------------------------------------------------------- 응답 출처와 근거 블록
+
+
+@pytest.fixture
+def query_path(table_one, monkeypatch):
+    """임베딩과 검색기만 가짜로 바꾸고 _prepare_query 실제 경로를 탄다. 벡터 검색이 청크 4, 3, 안내 페이지 순으로 돌려준다."""
+    docs, metas, ids = table_one.candidates([f"{DOC}_4", f"{DOC}_3", "40_0"])
+    monkeypatch.setattr(main, "_embed_query", lambda question: ([[0.1, 0.2]], {}))
+    monkeypatch.setattr(main, "_query_vector_results", lambda vector, limit, include_vectors=False: {
+        "documents": [docs], "metadatas": [metas], "ids": [ids], "distances": [[0.1, 0.2, 0.3]]})
+    monkeypatch.setattr(main, "_lookup_bm25_raw_chunk_candidates", lambda analysis, limit=5: [])
+    monkeypatch.setattr(main, "_lookup_lexical_table_fact_candidates", lambda question, limit=5: [])
+    monkeypatch.setattr(main, "RERANKER_URL", "")
+    return table_one
+
+
+def _block_heads(prompt: str) -> list[tuple[str, str]]:
+    """프롬프트의 [출처 N] 블록마다 (문서 이름, 위치 줄)."""
+    context = prompt.split("[검색 근거]\n", 1)[1].split("\n\n[사용자 질문]", 1)[0]
+    heads = []
+    for block in context.split("\n\n[출처 "):
+        lines = block.split("\n")
+        source = next(line for line in lines if line.startswith("문서: "))[4:]
+        page = next((line for line in lines if line.startswith("위치: ")), "")
+        heads.append((source, page))
+    return heads
+
+
+def _source_heads(sources: list[dict]) -> list[tuple[str, str]]:
+    return [(source["source"], f"위치: PDF {source['page_start']}페이지" if source.get("page_start") else "")
+            for source in sources]
+
+
+@pytest.mark.parametrize("fill", [False, True])
+def test_sources_follow_prompt_blocks_one_to_one(query_path, monkeypatch, fill):
+    # 청크 4가 표 블록, 뒤 순위 청크 3은 빠진다. 응답 출처의 N번째가 [출처 N]과 같은 청크여야
+    # 백엔드가 답의 [출처 N]으로 참고한 문서를 바르게 찾는다(빠진 청크는 출처에 없음)
+    monkeypatch.setattr(main, "TABLE_BLOCK_FILL_ENABLED", fill)
+    stages: dict = {}
+    prompt, sources, metrics = main._prepare_query(QUESTION, 2, None, stages)
+    assert _block_heads(prompt) == _source_heads(sources)
+    expected = [(DOC, 4), ("40", 0)] if fill else [(DOC, 4)]
+    assert [(source["document_id"], source["chunk_index"]) for source in sources] == expected
+    blocks = stages["table_block"]["blocks"]
+    assert [block["chunk_id"] for block in blocks] == [f"{source['document_id']}_{source['chunk_index']}" for source in sources]
+    assert [candidate["block"] for candidate in metrics["candidates"]] == ([1, None, 2] if fill else [1, None])
+
+
+def test_sources_unchanged_when_table_block_off(query_path, monkeypatch):
+    # 표 블록이 꺼지면 출처는 지금처럼 근거 후보 상위 top_k개 전부다
+    monkeypatch.setattr(main, "TABLE_BLOCK_ENABLED", False)
+    prompt, sources, metrics = main._prepare_query(QUESTION, 2, None)
+    assert [(source["document_id"], source["chunk_index"]) for source in sources] == [(DOC, 4), (DOC, 3)]
+    assert prompt.count("[출처 ") == 2 and all("block" not in candidate for candidate in metrics["candidates"])

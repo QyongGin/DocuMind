@@ -6725,7 +6725,12 @@ def _prepare_query(
         for meta in metadatas
     ]
     source_block_cache = _load_source_block_texts(source_lookup_ids)
-    for doc, meta, chunk_id in zip(docs, metadatas, ids):
+    source_items = zip(docs, metadatas, ids)
+    if table_block:
+        # 표 블록(#274): 출처는 프롬프트의 근거 블록과 1:1, 같은 순서다. N번째 출처가 [출처 N] 블록을 만든 청크(그 블록의 가장
+        # 높은 순위 청크)이고, 같은 표로 합쳐져 빠진 청크는 넣지 않는다. 백엔드는 답의 [출처 N]을 N번째 출처로 찾는다(ADR-0050)
+        source_items = [item for item in source_items if table_block.block_of.get(str(item[2])) is not None]
+    for doc, meta, chunk_id in source_items:
         meta = meta or {}
         source: dict = {
             "document_id": meta.get("document_id", ""),
