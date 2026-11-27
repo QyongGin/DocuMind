@@ -4750,7 +4750,8 @@ def _build_table_block_prompt(
     상한(PROMPT_TOKEN_LIMIT)을 넘을 때만 표를 줄인다: 높은 순위 표부터 통째로 넣고, 안 들어가는 표는 검색된 조각과 머리글,
     주석만 「표 일부:」로 넣는다. 그래도 넘으면 모든 표를 검색된 조각만으로 줄이고, 그래도 넘으면 뒤 순위 블록부터 빼며,
     블록이 하나 남았는데도 넘으면 그 블록의 끝 줄부터 자른다. 결과 프롬프트는 상한 안이다(질문과 지시문만으로 넘는 경우 제외).
-    상한 때문에 뺀 블록의 청크는 block_of가 None이라 응답 출처에서도 빠진다.
+    상한 때문에 뺀 블록의 청크는 block_of가 None이라 응답 출처에서도 빠진다. 그 블록에 합쳐져 있던 뒤 순위 청크는
+    limit_dropped_merged_chunk_ids에 남는다.
     """
     started = time.perf_counter()
     assembler = TableBlockAssembler(_load_table_sources)
@@ -4848,6 +4849,14 @@ def _build_table_block_prompt(
             upgrade(modes, count, [key for block in assembler.blocks[:count] for key in block.tables])
         context, prompt, tokens = measure(modes, count, keep_lines)
     limit_dropped = [block.evidence.chunk_id for block in assembler.blocks[count:]]
+    # 앞 블록에 합쳐져 빠진 청크 중, 합쳐진 블록이 모두 상한 때문에 빠진 것(#275). 기록만 남기고 프롬프트는 바꾸지 않는다
+    kept_blocks = {id(block) for block in assembler.blocks[:count]}
+    limit_dropped_merged = []
+    for evidence in assembler.dropped:
+        hosts = {id(assembler.placed[key]) for key in ((evidence.document_id, number) for number in evidence.numbers)
+                 if key in assembler.placed}
+        if hosts and not hosts & kept_blocks:
+            limit_dropped_merged.append(evidence.chunk_id)
     for chunk_id, number in block_of.items():
         if number is not None and number > count:
             block_of[chunk_id] = None
@@ -4869,6 +4878,7 @@ def _build_table_block_prompt(
         ],
         "dropped_chunk_ids": [evidence.chunk_id for evidence in assembler.dropped],
         "limit_dropped_chunk_ids": limit_dropped,
+        "limit_dropped_merged_chunk_ids": limit_dropped_merged,
         "truncated_lines": keep_lines,
         "considered": considered,
         "fill_enabled": TABLE_BLOCK_FILL_ENABLED,
