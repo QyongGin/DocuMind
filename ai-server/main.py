@@ -2888,6 +2888,13 @@ def document_progress(document_id: int):
     return _get_document_progress(document_id)
 
 
+class PinnedChunk(BaseModel):
+    """평가·학습 데이터 전용(#275): 근거에 꼭 넣을 원문 청크와 그 자리(1부터, [출처 N]의 N이 되기 전 순위)."""
+
+    chunk_id: str = Field(min_length=1)
+    rank: int = Field(ge=1, le=20)
+
+
 # 질의응답 요청 스키마. Pydantic BaseModel로 JSON body를 자동 파싱·검증
 class QueryRequest(BaseModel):
     question: str
@@ -2902,6 +2909,10 @@ class QueryRequest(BaseModel):
     exclude_ledger_ids: list[str] = Field(default_factory=list)
     exclude_chunk_ids: list[str] = Field(default_factory=list)
     as_of: date | None = None
+    # 평가·학습 데이터 전용(#275): 지정한 원문 청크를 검색 결과의 정한 자리에 넣고 나머지는 검색 순서대로 조립한다.
+    # 정답 청크를 근거에 꼭 넣되 자리를 바꿔 가며 학습 예시를 만든다(1차 학습은 정답이 늘 첫째여서 둘째 이후면 거절했다).
+    # 운영 경로(Spring Boot)는 보내지 않으므로 응답이 바뀌지 않는다. /query에만 있다.
+    pinned_chunks: list[PinnedChunk] = Field(default_factory=list)
     # 처리 기록(ADR-0052): 답 끝에 프롬프트·단계별 걸린 초·근거 후보별 검색 점수·모델 설정을 trace로 함께 돌려준다.
     # 백엔드가 답마다 저장해 관리자 개발자 모드에서 본다. /query와 /query/stream 모두 있다. 평가 실행기는 보내지 않는다.
     include_trace: bool = False
@@ -2922,9 +2933,15 @@ DEFAULT_SYSTEM_PROMPT = (
 
 
 # 표 사실 문장('표 검색 정보')을 가리키는 지시문 두 줄. 표 블록이 켜지면 표 사실 문장과 함께 뺀다(#274, 명세 4절).
-# 규칙 번호는 다시 매기지 않는다(학습 데이터 도구가 거절 규칙 9·11을 번호째로 찾는다)
+# 규칙 번호는 다시 매기지 않았다(3 다음이 5). 다시 매기면 프롬프트 글이 바뀌므로 입력 틀 판 번호를 올린다
 TABLE_FACT_RULE = "4. 검색 근거에 '표 검색 정보'가 있으면 원본 표보다 먼저 사용해 행, 열, 값 관계를 판단한다."
 TABLE_FACT_CHECK = "- [검색 근거]의 '표 검색 정보'가 있으면 표의 행/열/값 판단에 우선 사용한다."
+
+
+# 입력 틀 판 번호(#275): 프롬프트의 고정 글(날짜 줄, 시스템 문장, 규칙, 근거 블록 머리말과 이름표, 답변 직전 확인)이나
+# 조립 규칙을 바꾸면 올린다. 서버 응답의 실행 설정에 실려 학습 데이터 기록에 남는다 — 틀이 바뀌면 그 틀로 학습한 모델을
+# 다시 맞춰야 한다. 프롬프트 전문 고정 테스트(tests/test_prompt_golden.py)가 골든 글과 판 번호의 짝을 본다
+PROMPT_TEMPLATE_VERSION = 1
 
 
 MANDATORY_RAG_PROMPT = (
@@ -2938,8 +2955,8 @@ MANDATORY_RAG_PROMPT = (
     "7. 질문에 없는 다른 표나 다른 섹션의 통계값을 섞지 않는다.\n"
     "8. '약', '일반적으로', '대부분의 경우'처럼 근거를 흐리는 표현을 쓰지 않는다.\n"
     # 거절 문장은 모델이 학습으로 바로 쓰고 화면에도 그대로 보인다(ADR-0050 2026-11-02 변경). 규칙은 옛 모양 그대로 두고
-    # 따옴표 안 문장만 바꿨다. 학습 데이터 도구가 학습 입력의 지난 규칙을 이 두 줄로 바꿔 내보내므로
-    # (tools/corpus trainset prompts.REFUSAL_RULES) 고칠 때 함께 고친다
+    # 따옴표 안 문장만 바꿨다. 학습 데이터 도구는 따옴표 안 문장으로 거절 규칙을 알아보고 목표 답의 거절 문장과 맞는지 본다
+    # (tools/corpus trainset prompts.REFUSAL) — 문장을 바꾸면 그쪽도 함께 바꾼다
     "9. 근거가 부족하면 부족한 항목을 지어내지 말고 '학교 홈페이지 안내에서 찾지 못했습니다.'라고 답한다.\n"
     "10. 문서에 없는 일반 조언이나 외부 지식을 덧붙이지 않는다.\n"
     "11. '학교 홈페이지 안내에서 찾지 못했습니다.'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."
@@ -6616,6 +6633,85 @@ def _answer_candidates(
     return candidates
 
 
+# 평가용 후보 기록(#275)에 남기는 검색기 칸: 순위와 점수만(미리보기 글은 남기지 않는다)
+RETRIEVAL_RANK_KEYS = (
+    "retrieval_methods", "vector_rank", "vector_distance", "vector_hit_chunk_id", "bm25_rank", "bm25_score",
+    "table_fact_rank", "table_fact_score", "table_fact_hit_chunk_id",
+)
+
+
+def _place_pinned_chunks(
+    question: str,
+    analysis: QueryAnalysis,
+    ranked: tuple[list[str], list[dict], list[str]],
+    pins: list[PinnedChunk],
+    exclusion: CandidateExclusion | None = None,
+) -> tuple[tuple[list[str], list[dict], list[str]], list[dict]]:
+    """지정한 원문 청크를 검색 순서의 정한 자리에 넣는다(평가·학습 데이터 전용, #275).
+
+    검색 후보에 있던 청크는 그 자리에서 꺼내 옮기고, 없던 청크는 색인에서 꺼내 검색된 청크와 같은 런타임 처리(질문에 맞는
+    표 사실 붙이기)를 거친다. 나머지 후보는 검색 순서 그대로 밀린다. 자리가 낮은 것부터 넣어 각 청크가 정한 자리에 선다.
+    두 번째 값은 기록용: 청크마다 정한 자리, 검색 후보였을 때의 순위(아니면 None), 어디서 가져왔는지.
+    """
+    docs, metadatas, ids = (list(values) for values in ranked)
+    placed = []
+    for pin in sorted(pins, key=lambda pin: pin.rank):
+        chunk_id = pin.chunk_id.strip()
+        position = next((index for index, candidate in enumerate(ids) if str(candidate) == chunk_id), None)
+        if position is not None:
+            doc, meta = docs.pop(position), metadatas.pop(position)
+            ids.pop(position)
+            origin = "candidates"
+        else:
+            doc, meta = _load_parent_chunk(chunk_id)
+            if not doc:
+                raise HTTPException(status_code=400, detail=f"지정한 청크가 색인에 없다: {chunk_id}")
+            meta = _attach_runtime_table_facts(question, [doc], [dict(meta or {})], analysis)[0]
+            origin = "index"
+        if exclusion and exclusion.excludes(meta, chunk_id):
+            raise HTTPException(status_code=400, detail=f"지정한 청크가 제외 목록에 걸린다: {chunk_id}")
+        index = min(pin.rank, len(ids) + 1) - 1
+        docs.insert(index, doc)
+        metadatas.insert(index, meta)
+        ids.insert(index, chunk_id)
+        placed.append({"chunk_id": chunk_id, "rank": pin.rank,
+                       "candidate_rank": position + 1 if position is not None else None, "from": origin})
+    return (docs, metadatas, ids), placed
+
+
+def _retrieval_ranks(
+    retrieval_by_id: dict[str, dict],
+    fused_ids: list[str],
+    reranked_ids: list[str] | None,
+    final_ids: list[str],
+    block_of: dict[str, int | None],
+) -> list[dict]:
+    """평가용 후보 기록(#275): 검색기 셋이 찾았거나 근거 순서에 든 청크마다 단계별 순위.
+
+    검색기별 순위와 점수(_record_retrieval_traces), 순위 융합 뒤 순위, 재순위 뒤 순위(재순위를 쓰지 않았으면 None),
+    지정 청크를 넣은 뒤의 순위, 프롬프트의 몇 번째 근거 블록이 됐는지(안 들었으면 None). 정답 청크가 근거에 못 든
+    예시가 어느 단계에서 밀렸는지 세는 데 쓴다. 청크 id는 원문 청크 id다(표 사실과 검색용 청크는 부모 청크로 모인다).
+    """
+    fused_rank = {str(chunk_id): rank for rank, chunk_id in enumerate(fused_ids, start=1)}
+    reranked_rank = ({str(chunk_id): rank for rank, chunk_id in enumerate(reranked_ids, start=1)}
+                     if reranked_ids is not None else {})
+    final_rank = {str(chunk_id): rank for rank, chunk_id in enumerate(final_ids, start=1)}
+    keys = list(dict.fromkeys([str(chunk_id) for chunk_id in fused_ids] + list(retrieval_by_id)
+                              + [str(chunk_id) for chunk_id in final_ids]))
+    records = []
+    for key in keys:
+        retrieval = retrieval_by_id.get(key) or {"retrieval_methods": []}
+        records.append({
+            "chunk_id": key,
+            **{name: retrieval.get(name) for name in RETRIEVAL_RANK_KEYS},
+            "fused_rank": fused_rank.get(key),
+            "rerank_rank": reranked_rank.get(key),
+            "final_rank": final_rank.get(key),
+            "block": block_of.get(key),
+        })
+    return records
+
+
 def _prepare_query(
     question: str,
     top_k: int,
@@ -6623,6 +6719,7 @@ def _prepare_query(
     eval_stages: dict | None = None,
     exclusion: CandidateExclusion | None = None,
     as_of: date | None = None,
+    pins: list[PinnedChunk] | None = None,
 ) -> tuple[str | None, list, dict]:
     """
     질문 임베딩 → ChromaDB 검색 → 순위 융합 → 프롬프트 + 출처 조합.
@@ -6630,6 +6727,7 @@ def _prepare_query(
     eval_stages(평가용 dict)를 주면 단계별 후보·문맥·프롬프트를 그 안에 기록한다. 검색·답은 주지 않을 때와 같다.
     검색 순서는 _order_retrieval_results(순위 융합, ADR-0032) 하나로 정한다. /debug/rag-trace도 같은 함수를 쓴다.
     exclusion·as_of는 평가·학습 데이터 전용이다(ADR-0047·0048). 운영 경로는 주지 않으며, 주지 않으면 검색기 호출이 그대로다.
+    pins(지정 청크, #275)도 평가·학습 데이터 전용이다: 재순위까지 마친 순서에 지정한 청크를 정한 자리로 넣고 조립한다.
     """
     # 제외 목록이 없으면 검색기를 운영과 똑같이 부른다(인자도 더하지 않음)
     exclude_kwargs = {"exclusion": exclusion} if exclusion else {}
@@ -6688,6 +6786,9 @@ def _prepare_query(
                            {"rerank_score": [rerank_info["scores"].get(str(chunk_id)) for chunk_id in ids]})
     if eval_stages is not None:
         eval_stages["rerank"] = {key: value for key, value in rerank_info.items() if key != "scores"}
+    pinned: list[dict] = []
+    if pins:
+        (docs, metadatas, ids), pinned = _place_pinned_chunks(question, analysis, (docs, metadatas, ids), pins, exclusion)
     # 표 블록(#274): 같은 표의 뒤 순위 블록이 빠지고 빈자리 채움이 켜져 있으면 top_k보다 많은 후보를 쓴다.
     # final 단계와 근거 후보 기록은 블록 조립에 넣은 후보 전부이고, 후보마다 몇 번째 블록이 됐는지(빠졌으면 None)를 함께 남긴다
     table_block = (
@@ -6695,6 +6796,14 @@ def _prepare_query(
         if TABLE_BLOCK_ENABLED and docs else None
     )
     used = table_block.considered if table_block else top_k
+    if eval_stages is not None:
+        # 후보별 단계 순위(#275). 표 블록이 아니면 근거 블록 번호는 상위 top_k개의 순위와 같다
+        block_of = table_block.block_of if table_block else {str(chunk_id): rank
+                                                             for rank, chunk_id in enumerate(ids[:used], start=1)}
+        eval_stages["retrieval"] = _retrieval_ranks(retrieval_by_id, ordered.fused[2],
+                                                    ordered.final[2] if rerank_info["used"] else None, ids, block_of)
+        if pinned:
+            eval_stages["pinned"] = [{**entry, "block": block_of.get(entry["chunk_id"])} for entry in pinned]
     docs = docs[:used]
     metadatas = metadatas[:used]
     ids = ids[:used]
@@ -6977,7 +7086,8 @@ def _eval_response(response: dict, eval_stages: dict | None, answer_path: str, g
     """평가용 옵션을 켠 요청이면 응답에 eval_trace를 붙인다. 끈 요청(운영)은 응답을 그대로 돌려준다."""
     if eval_stages is None:
         return response
-    trace = {key: value for key, value in eval_stages.items() if key not in ("context", "prompt", "rerank", "exclusion")}
+    trace = {key: value for key, value in eval_stages.items()
+             if key not in ("context", "prompt", "rerank", "exclusion", "retrieval", "pinned")}
     return {
         **response,
         "eval_trace": {
@@ -6988,6 +7098,9 @@ def _eval_response(response: dict, eval_stages: dict | None, answer_path: str, g
             "generation": generation,
             "rerank": eval_stages.get("rerank"),
             "exclusion": eval_stages.get("exclusion"),
+            # 후보별 단계 순위와 지정 청크의 자리(#275)
+            "retrieval": eval_stages.get("retrieval", []),
+            "pinned": eval_stages.get("pinned"),
             "runtime": _eval_runtime_settings(),
         },
     }
@@ -7013,12 +7126,14 @@ def _reranker_model_info() -> dict | None:
 def _model_settings() -> dict:
     """답을 만든 모델·생성·검색 설정. 처리 기록(ADR-0052)과 평가 실행 기록이 함께 쓴다. 다른 서버를 부르지 않는다."""
     return {
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
         "llm_model": OLLAMA_LLM_MODEL,
         "llm_temperature": OLLAMA_TEMPERATURE,
         "embedding_model": OLLAMA_EMBEDDING_MODEL,
         "num_ctx": OLLAMA_NUM_CTX,
         "embedding_num_ctx": OLLAMA_EMBEDDING_NUM_CTX,
         "num_predict": OLLAMA_NUM_PREDICT,
+        "default_top_k": DEFAULT_TOP_K,
         "query_retrieval_chunks_enabled": QUERY_RETRIEVAL_CHUNKS_ENABLED,
         "prompt_date_lines": PROMPT_DATE_LINES_ENABLED,
         "academic_year_start_month": ACADEMIC_YEAR_START_MONTH,
@@ -7079,6 +7194,20 @@ async def _generate_answer(prompt: str, with_generation_info: bool) -> tuple[str
     return generation.text, {key: info.get(key) for key in ("done_reason", "eval_count", "prompt_eval_count")}
 
 
+def _check_pinned_chunks(request: QueryRequest) -> None:
+    """지정 청크(#275) 요청 검사: 자리는 근거 수(top_k) 안이고, 청크와 자리가 겹치지 않으며, 평가용 기록을 함께 받아야 한다
+    (어느 블록이 됐는지 기록 없이 쓰면 학습 예시의 정답 순위를 알 수 없다)."""
+    pins = request.pinned_chunks
+    if not pins:
+        return
+    if not request.include_eval_trace:
+        raise HTTPException(status_code=400, detail="pinned_chunks는 include_eval_trace와 함께 보낸다")
+    if any(pin.rank > request.top_k for pin in pins):
+        raise HTTPException(status_code=400, detail=f"지정 청크의 자리는 1~{request.top_k}(top_k)여야 한다")
+    if len({pin.rank for pin in pins}) != len(pins) or len({pin.chunk_id.strip() for pin in pins}) != len(pins):
+        raise HTTPException(status_code=400, detail="지정 청크의 청크 id와 자리는 겹치지 않아야 한다")
+
+
 @app.post("/query")
 async def query_document(request: QueryRequest):
     """
@@ -7093,8 +7222,10 @@ async def query_document(request: QueryRequest):
     # async 핸들러에서 직접 호출하면 이벤트 루프가 묶여 다른 요청이 대기하므로
     # asyncio.to_thread()로 별도 스레드에서 실행한다.
     exclusion = CandidateExclusion.of(request.exclude_ledger_ids, request.exclude_chunk_ids)
+    _check_pinned_chunks(request)
     # 평가 전용 칸이 비면 운영과 똑같이 부른다(인자도 더하지 않음)
-    eval_only = {key: value for key, value in (("exclusion", exclusion), ("as_of", request.as_of)) if value}
+    eval_only = {key: value for key, value in (("exclusion", exclusion), ("as_of", request.as_of),
+                                               ("pins", request.pinned_chunks)) if value}
     prompt, sources, query_metrics = await asyncio.to_thread(
         _prepare_query,
         request.question,
