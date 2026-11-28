@@ -1,5 +1,6 @@
 """규칙 기반 채점(결정 ②): 표기 맞추기, 숫자 경계, 맞음·일부·모름·틀림·애매·빈 답, 답 없는 문항, 지어낸 숫자."""
 
+import pytest
 from evalset_data import item, unanswerable_item
 
 from corpus.evalset.scoring import contains, normalize, score
@@ -133,3 +134,66 @@ def test_refusal_phrasings_seen_in_baseline():
     key = unanswerable_item("ev-0009")
     assert score(key, "제공된 문서에서는 2028학년도 정원을 명시하고 있지 않습니다.")["label"] == "맞음"
     assert score(key, "정원에 대해 정확히 답변 드리기 어렵습니다. 입학팀에 문의하세요.")["label"] == "맞음"
+
+
+# 표 읽기를 학습한 모델의 여러 행 답(ADR-0051 변경 메모): 확인 줄 다음 `결론:` 줄, 답 끝에 출처 번호
+LARGEST = "가나대에서 정원이 가장 많은 학과는 어디예요?"
+CHECKED_ROWS = "확인한 행:\n- 가나학과: 40명\n- 다라학과: 35명\n- 마바학과: 28명\n"
+
+
+def largest_item(**extra) -> dict:
+    fields = {"question": LARGEST, "facts": [{"name": "학과", "values": ["가나학과"]}],
+              "forbidden": [{"value": "35명", "why": "옆 행 값"}]}
+    return item("ev-0101", **{**fields, **extra})
+
+
+def test_right_conclusion_is_not_wrong_for_forbidden_value_in_checked_rows():
+    """결론이 맞으면 확인 줄에만 있는 금지 값(옆 행 35명)으로 틀림이 되지 않는다."""
+    result = score(largest_item(), CHECKED_ROWS + "결론: 정원이 가장 많은 학과는 가나학과입니다.\n\n[출처 2]")
+    assert (result["label"], result["forbidden_hits"], result["conclusion_only"]) == ("맞음", [], True)
+
+
+def test_wrong_conclusion_is_not_right_for_answer_value_in_checked_rows():
+    """결론이 틀리면 확인 줄에 정답 값(가나학과)이 있어도 맞음이 되지 않는다."""
+    key = largest_item(forbidden=[])
+    result = score(key, CHECKED_ROWS + "결론: 정원이 가장 많은 학과는 마바학과입니다.\n\n[출처 2]")
+    assert (result["label"], result["matched"], result["conclusion_only"]) == ("애매", [], True)
+
+
+@pytest.mark.parametrize("working", [
+    CHECKED_ROWS,
+    "근거 글: 2027학년도 학과별 모집 정원 표, 다라학과 35명\n",
+    "고른 표: 학과별 모집 정원(다라학과 35명) [출처 2]\n",
+])
+def test_each_working_header_scores_the_conclusion(working):
+    result = score(largest_item(), working + "결론: 가나학과입니다.\n\n[출처 2]")
+    assert (result["label"], result["conclusion_only"]) == ("맞음", True)
+
+
+def test_refusal_numbers_and_guidance_use_the_conclusion():
+    """거절 판정, 지어낸 숫자, 안내 점수도 결론 부분으로 본다."""
+    refused = score(unanswerable_item("ev-0102"), CHECKED_ROWS + "결론: 학교 홈페이지 안내에서 찾지 못했습니다.")
+    assert (refused["label"], refused["abstained"], refused["conclusion_only"]) == ("맞음", True, True)
+    rows_only_in_answer = score(largest_item(forbidden=[]), CHECKED_ROWS + "결론: 가나학과입니다.", context="가나학과")
+    assert (rows_only_in_answer["label"], rows_only_in_answer["invented"]) == ("맞음", [])
+    guided = largest_item(forbidden=[], facts=[{"name": "학과", "values": ["가나학과"]},
+                                               {"name": "문의", "values": ["입학팀"], "kind": "안내"}])
+    assert score(guided, "근거 글: 입학팀 모집 정원 안내\n결론: 가나학과입니다.")["guidance"]["label"] == "부족"
+    assert score(guided, "근거 글: 모집 정원 안내\n결론: 가나학과입니다. 입학팀에 물어보세요.")["guidance"]["label"] == "충족"
+
+
+@pytest.mark.parametrize("answer, label", [
+    (CHECKED_ROWS + "정원이 가장 많은 학과는 가나학과입니다.", "틀림"),  # 확인 줄로 시작했는데 `결론:` 줄이 없음
+    (CHECKED_ROWS + "결론:\n\n", "틀림"),  # 결론이 비었음
+    ("다라학과는 35명입니다.\n결론: 가나학과입니다.", "틀림"),  # 확인 줄로 시작하지 않음
+    ("정원이 가장 많은 학과는 가나학과이고 결론: 확인한 행: 없음", "맞음"),  # 본문 중간의 줄머리
+])
+def test_answers_outside_the_contract_are_scored_whole(answer, label):
+    """약속에 맞지 않는 답은 지금처럼 답 전체로 매긴다."""
+    result = score(largest_item(), answer)
+    assert (result["label"], result["conclusion_only"]) == (label, False)
+
+
+def test_plain_answers_are_not_marked_conclusion_only():
+    assert score(item("ev-0001"), "전형료는 30,000원입니다.")["conclusion_only"] is False
+    assert score(item("ev-0001"), "")["conclusion_only"] is False

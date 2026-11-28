@@ -5,6 +5,9 @@
 
 점수는 둘이다(ADR-0023). 정확은 핵심 사실로 매기는 위 판정이고, 안내는 질문이 묻지 않았지만 문서에 있는
 다음 할 일(안내 사실)을 답이 알려 줬는지 충족·일부·부족(안내 사실이 없으면 해당 없음)으로 따로 센다.
+
+확인 줄(`확인한 행:` 등)로 시작하고 `결론:` 줄이 있는 답은 사용자 화면처럼 `결론:` 뒤의 글로 채점한다(ADR-0051 변경 메모).
+확인 줄에는 고르지 않은 행의 값도 적히므로, 답 전체로 찾으면 맞는 결론이 금지 값으로 틀림이 되고 틀린 결론이 정답 값으로 맞음이 된다.
 """
 
 import re
@@ -28,6 +31,11 @@ _SHORT_DATE = re.compile(r"(?<![\d.])(\d{1,2})\s*\.\s*(\d{1,2})\s*\.(?!\d)")
 _MONEY = re.compile(r"(\d+)\s*만\s*(?:(\d+)\s*천\s*)?(?=원)|(\d+)\s*천\s*(?=원)")
 _THOUSANDS = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")
 _NUMBER_WITH_UNIT = re.compile(rf"\d+(?:\.\d+)?(?:{UNITS})")
+
+# 표 읽기를 학습한 모델이 결론 앞에 쓰는 확인 줄의 줄머리와 결론 줄머리. 백엔드 화면 변환(결론 앞을 떼는 곳)과 같은 약속이라,
+# 바꾸면 학습 데이터 도구와 백엔드 설정을 함께 고친다
+WORKING_HEADERS = ("확인한 행:", "근거 글:", "고른 표:")
+CONCLUSION_HEADER = "결론:"
 
 
 def _money(match: re.Match) -> str:
@@ -77,14 +85,30 @@ def numbers_with_units(normalized_text: str) -> set[str]:
     return set(_NUMBER_WITH_UNIT.findall(normalized_text))
 
 
+def conclusion_part(answer: str | None) -> str | None:
+    """확인 줄로 시작하고 `결론:` 줄이 있는 답의 결론 부분(`결론:` 뒤부터 끝까지, 답 끝의 출처 번호 포함).
+    약속에 맞지 않는 답(확인 줄로 시작하지 않음, `결론:` 줄이 없음, 결론이 빔)은 None — 답 전체로 채점한다."""
+    text = (answer or "").strip()
+    if not text.startswith(WORKING_HEADERS):
+        return None
+    lines = text.split("\n")
+    for index, line in enumerate(lines):
+        if line.startswith(CONCLUSION_HEADER):
+            conclusion = "\n".join([line[len(CONCLUSION_HEADER):], *lines[index + 1:]]).strip()
+            return conclusion or None
+    return None
+
+
 def score(item: dict, answer: str | None, context: str | None = None) -> dict:
     """답 하나를 판정한다. context(모델이 받은 근거 글)를 주면 근거에 없는 숫자를 '지어낸 숫자'로 본다.
 
     `label`·`matched`·`missing`은 핵심 사실로 매긴 정확 점수, `guidance`는 안내 사실로 매긴 안내 점수다.
+    `conclusion_only`는 확인 줄을 떼고 `결론:` 뒤의 글로 채점했는지다(conclusion_part).
     """
-    text = (answer or "").strip()
+    conclusion = conclusion_part(answer)
+    text = conclusion if conclusion is not None else (answer or "").strip()
     result = {"label": "빈 답", "matched": [], "missing": [], "forbidden_hits": [], "invented": [], "abstained": False,
-              "appended_refusal": False, "guidance": guidance(item, "")}
+              "appended_refusal": False, "guidance": guidance(item, ""), "conclusion_only": conclusion is not None}
     if not text:
         return result
     normalized = normalize(text)
