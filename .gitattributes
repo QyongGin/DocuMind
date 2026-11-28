@@ -1,0 +1,2 @@
+# A.X 토크나이저는 서버가 시작할 때 해시를 확인한다. 줄바꿈 변환과 줄 단위 비교를 하지 않게 바이너리로 다룬다(#274)
+ai-server/tokenizer/*/tokenizer.json binary
