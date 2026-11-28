@@ -115,11 +115,27 @@ class ChatMessageTraceTest {
                 .andExpect(jsonPath("$.data.answer", is("휴학 신청은 8월 29일까지입니다.")))
                 .andExpect(jsonPath("$.data.citedSources", contains(1)))
                 .andExpect(jsonPath("$.data.guidanceAttached", is(false)))
+                .andExpect(jsonPath("$.data.workingLinesRemoved", is(false)))
                 // 근거 후보는 대화 기록의 source_docs에서 읽는다. H2는 이 JSON 칸을 문자열로 저장해 내용은 MySQL에서만 읽힌다
                 .andExpect(jsonPath("$.data.sources").isArray())
                 .andExpect(jsonPath("$.data.trace.prompt", startsWith("[검색 근거]")))
                 .andExpect(jsonPath("$.data.trace.seconds.total", is(1.5)))
                 .andExpect(jsonPath("$.data.trace.candidates[0].rerank_score", is(0.9)));
+    }
+
+    @Test
+    @DisplayName("개발자 정보 - 확인 줄로 시작한 답은 원문에 확인 줄이 남고, 화면 답은 결론이며 확인 줄을 뗐다고 보인다")
+    void devInfo_workingLinesAnswer() throws Exception {
+        String raw = "확인한 행:\n- 가나학과: 40명\n- 다라학과: 35명\n결론: 정원이 30명을 넘는 학과는 가나학과와 다라학과입니다.\n\n[출처 1]";
+        ChatMessage message = saveMessage("가나대학에서 정원이 30명을 넘는 학과는?", raw);
+
+        mockMvc.perform(get("/api/admin/chat-messages/{id}/dev-info", message.getId())
+                        .header("Authorization", bearer(admin.getUsername(), User.Role.ADMIN, admin.getId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rawAnswer", is(raw)))
+                .andExpect(jsonPath("$.data.answer", is("정원이 30명을 넘는 학과는 가나학과와 다라학과입니다.")))
+                .andExpect(jsonPath("$.data.workingLinesRemoved", is(true)))
+                .andExpect(jsonPath("$.data.citedSources", contains(1)));
     }
 
     @Test

@@ -32,7 +32,9 @@ class SseStreamingContext {
     private final ScreenAnswerMaker screenAnswerMaker;
     private final SourceDocumentMetadataEnricher sourceDocumentMetadataEnricher;
     private final StringBuffer answerBuffer = new StringBuffer();
-    // 흐르는 답에서 출처 번호를 거른다(ADR-0051 결정 4). answerBuffer에는 모델 원문을 그대로 쌓는다
+    // 흐르는 답에서 결론 앞의 확인 줄을 떼고(ADR-0050 변경 메모 2026-11-28), 그 글에서 출처 번호를 거른다(ADR-0051 결정 4).
+    // answerBuffer에는 모델 원문을 그대로 쌓는다
+    private final WorkingLineStreamFilter workingLineFilter = new WorkingLineStreamFilter();
     private final CitationStreamFilter citationFilter = new CitationStreamFilter();
     private final Object persistenceLock = new Object();
     private boolean normallyCompleted;
@@ -143,7 +145,10 @@ class SseStreamingContext {
     private void handleTokenEvent(JsonNode node) throws IOException {
         String token = node.get("token").asText();
         answerBuffer.append(token);
-        String visible = citationFilter.accept(token);
+        sendVisible(citationFilter.accept(workingLineFilter.accept(token)));
+    }
+
+    private void sendVisible(String visible) throws IOException {
         if (!visible.isEmpty()) {
             emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(Map.of("token", visible))));
         }
@@ -169,6 +174,8 @@ class SseStreamingContext {
             normallyCompleted = true;
         }
         saveTrace(node.get("trace"));
+        // 확인 줄로 시작했는데 결론 줄머리가 오지 않은 답은 붙잡아 둔 원문을 끝에 흘린다. 화면은 곧 done의 답으로 바뀐다
+        sendVisible(citationFilter.accept(workingLineFilter.flush()));
         emitter.send(SseEmitter.event().data(outboundJson));
         emitter.complete();
     }

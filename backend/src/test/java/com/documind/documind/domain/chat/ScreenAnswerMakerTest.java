@@ -14,7 +14,9 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -50,6 +52,7 @@ class ScreenAnswerMakerTest {
                 "https://www.ganada.ac.kr/bbs/11/1", List.of(), "2026-08-10")), screen.references());
         assertNull(screen.guidance());
         assertEquals(List.of(1), screen.citedSources());
+        assertFalse(screen.workingLinesRemoved());
     }
 
     @Test
@@ -79,6 +82,81 @@ class ScreenAnswerMakerTest {
             assertEquals(REFUSAL, screen.text());
             assertEquals(GUIDANCE, screen.guidance());
             assertEquals(List.of(), screen.references());
+        }
+    }
+
+    @Test
+    @DisplayName("확인 줄로 시작하는 답 세 모양: 결론 줄머리 뒤의 글만 보이고, 확인 줄을 뗐다고 남긴다")
+    void workingLinesRemovedForThreeShapes() {
+        given(document(2L, "https://www.ganada.ac.kr/bbs/11/2", null,
+                new DocumentOrigin("www", "학교", "학사(11)", "2026학년도 학과별 모집 정원", null, null)));
+
+        ScreenAnswer rows = maker.make("""
+                확인한 행:
+                - 가나학과: 40명
+                - 다라학과: 35명
+                - 마바학과: 20명 (해당 없음)
+                결론: 정원이 30명을 넘는 학과는 가나학과와 다라학과입니다.
+
+                [출처 2]""", sources(9L, 2L));
+        ScreenAnswer passage = maker.make("""
+                근거 글: 휴학 중인 학생은 신청할 수 없다.
+                결론: 휴학 중에는 신청할 수 없습니다.
+
+                [출처 2]""", sources(9L, 2L));
+        ScreenAnswer table = maker.make("""
+
+                고른 표: 2026학년도 → [학사일정] 2026학년도 수강신청 일정 [출처 2]
+                결론: 2026학년도 수강신청은 2월 10일부터입니다.""", sources(9L, 2L));
+
+        assertEquals("정원이 30명을 넘는 학과는 가나학과와 다라학과입니다.", rows.text());
+        assertEquals("휴학 중에는 신청할 수 없습니다.", passage.text());
+        assertEquals("2026학년도 수강신청은 2월 10일부터입니다.", table.text());
+        for (ScreenAnswer screen : List.of(rows, passage, table)) {
+            assertTrue(screen.workingLinesRemoved());
+            assertEquals("2026학년도 학과별 모집 정원", screen.references().get(0).title());
+        }
+        // '고른 표:' 줄에만 있던 출처 번호도 참고한 문서에 들어간다
+        assertEquals(List.of(2), table.citedSources());
+    }
+
+    @Test
+    @DisplayName("확인 줄로 시작했는데 결론 줄이 없거나 결론이 비었으면 원문(출처 번호만 지운 것)을 그대로 보인다")
+    void workingLinesWithoutConclusionShowRaw() {
+        ScreenAnswer noConclusion = maker.make("확인한 행:\n- 가나학과: 40명\n- 다라학과: 35명\n\n[출처 1]", sources());
+        ScreenAnswer emptyConclusion = maker.make("근거 글: 휴학 중인 학생은 신청할 수 없다.\n결론: [출처 1]", sources());
+
+        assertEquals("확인한 행:\n- 가나학과: 40명\n- 다라학과: 35명", noConclusion.text());
+        assertEquals("근거 글: 휴학 중인 학생은 신청할 수 없다.\n결론:", emptyConclusion.text());
+        assertFalse(noConclusion.workingLinesRemoved());
+        assertFalse(emptyConclusion.workingLinesRemoved());
+    }
+
+    @Test
+    @DisplayName("확인 줄 뒤의 결론이 거절 문장뿐이면 정해 둔 안내를 붙이고 참고한 문서를 보이지 않는다")
+    void workingLinesWithRefusalConclusion() {
+        given(document(1L, "https://www.ganada.ac.kr/bbs/11/1", null, DocumentOrigin.EMPTY));
+
+        ScreenAnswer screen = maker.make("고른 표: 2025학년도 → [학사일정] 2025학년도 수강신청 일정 [출처 1]\n결론: "
+                + REFUSAL, sources(1L));
+
+        assertEquals(REFUSAL, screen.text());
+        assertEquals(GUIDANCE, screen.guidance());
+        assertEquals(List.of(), screen.references());
+        assertTrue(screen.refusedOnly());
+    }
+
+    @Test
+    @DisplayName("확인 줄 머리로 시작하지 않는 답은 '결론:'이 들어 있어도 지금과 같다")
+    void answersWithoutWorkingHeaderUnchanged() {
+        for (String raw : List.of(
+                "결론: 휴학은 8월까지입니다.\n\n[출처 1]",
+                "가나학과 정원은 40명입니다.\n결론: 다라학과보다 많습니다.",
+                "확인 결과 가나학과 정원은 40명입니다.\n결론: 다라학과보다 많습니다.",
+                "검토한 결과 근거 글: 없음\n결론: 확인 필요")) {
+            ScreenAnswer screen = maker.make(raw, sources());
+            assertEquals(raw.replace("\n\n[출처 1]", ""), screen.text());
+            assertFalse(screen.workingLinesRemoved());
         }
     }
 

@@ -312,6 +312,7 @@ public class ChatService {
                 screenAnswer == null ? null : screenAnswer.text(),
                 screenAnswer == null ? List.of() : screenAnswer.citedSources(),
                 screenAnswer != null && screenAnswer.refusedOnly(),
+                screenAnswer != null && screenAnswer.workingLinesRemoved(),
                 sources,
                 trace
         );

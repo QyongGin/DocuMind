@@ -146,6 +146,59 @@ class SseStreamingContextTest {
     }
 
     @Test
+    @DisplayName("확인 줄로 시작하는 답은 결론 전까지 토큰을 보내지 않고, 결론부터 흘리며, 원문 칸에는 확인 줄까지 저장함")
+    void onToken_withWorkingLines_streamsConclusionOnly() throws Exception {
+        SseStreamingContext context = createContext();
+
+        context.onToken("{\"token\":\"확인\"}");
+        context.onToken("{\"token\":\"한 행:\\n- 가나학과: 40명\\n- 다라학과: 35명\\n\"}");
+        context.onToken("{\"token\":\"결론: 정원이 30명을 넘는 학과는\"}");
+        context.onToken("{\"token\":\" 가나학과와 다라학과입니다.\\n\\n[출처 1]\"}");
+        context.onToken("{\"done\":true,\"sources\":[]}");
+
+        ArgumentCaptor<SseEmitter.SseEventBuilder> events = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
+        verify(emitter, times(3)).send(events.capture());
+        String streamed = events.getAllValues().subList(0, 2).stream().map(SseStreamingContextTest::dataOf)
+                .collect(java.util.stream.Collectors.joining());
+        assertTrue(streamed.contains("정원이 30명을 넘는 학과는") && streamed.contains(" 가나학과와 다라학과입니다."), streamed);
+        assertFalse(streamed.contains("확인") || streamed.contains("결론") || streamed.contains("출처"), streamed);
+        String done = dataOf(events.getAllValues().get(2));
+        assertTrue(done.contains("\"answer\":\"정원이 30명을 넘는 학과는 가나학과와 다라학과입니다.\""), done);
+        verify(persistenceService).completeMessage(MESSAGE_ID, SESSION_ID,
+                "정원이 30명을 넘는 학과는 가나학과와 다라학과입니다.",
+                "확인한 행:\n- 가나학과: 40명\n- 다라학과: 35명\n결론: 정원이 30명을 넘는 학과는 가나학과와 다라학과입니다.\n\n[출처 1]",
+                "[]", false);
+    }
+
+    @Test
+    @DisplayName("확인 줄로 시작했는데 결론 없이 끝난 답은 붙잡은 원문을 done 앞에 흘리고, 화면용 답도 원문으로 보냄")
+    void onToken_withWorkingLinesWithoutConclusion_sendsRawAtEnd() throws Exception {
+        SseStreamingContext context = createContext();
+
+        context.onToken("{\"token\":\"확인한 행:\\n- 가나학과: 40명\"}");
+        context.onToken("{\"token\":\" [출처 1]\"}");
+        context.onToken("{\"done\":true,\"sources\":[]}");
+
+        ArgumentCaptor<SseEmitter.SseEventBuilder> events = ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
+        verify(emitter, times(2)).send(events.capture());
+        String flushed = dataOf(events.getAllValues().get(0));
+        assertTrue(flushed.contains("확인한 행:") && !flushed.contains("출처"), flushed);
+        String done = dataOf(events.getAllValues().get(1));
+        assertTrue(done.contains("\"answer\":\"확인한 행:\\n- 가나학과: 40명\""), done);
+    }
+
+    @Test
+    @DisplayName("확인 줄을 쓰는 도중 연결이 끊기면 그때까지의 원문을 부분 답으로 저장함")
+    void onClientDisconnect_duringWorkingLines_savesRawPartialAnswer() {
+        SseStreamingContext context = createContext();
+
+        context.onToken("{\"token\":\"확인한 행:\\n- 가나학과: 40명\"}");
+        context.onClientDisconnect();
+
+        verify(persistenceService).savePartialAnswer(MESSAGE_ID, "확인한 행:\n- 가나학과: 40명");
+    }
+
+    @Test
     @DisplayName("done 이벤트의 처리 기록은 답을 저장한 뒤 따로 저장하고, 브라우저로 보내는 done 이벤트에는 넣지 않음")
     void onToken_withTrace_savesTraceAfterAnswerAndKeepsItFromBrowser() throws Exception {
         SseStreamingContext context = createContext();
