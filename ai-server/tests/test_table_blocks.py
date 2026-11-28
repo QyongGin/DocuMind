@@ -307,7 +307,7 @@ def _big_table_chunks(rows_per_chunk: int, chunks: int, prefix: str) -> list[str
 
 
 def test_table_over_limit_keeps_retrieved_piece_header_and_notes(store):
-    # 표 1은 조각 40개(약 2만 토큰)라 프롬프트 상한(11,771)을 넘는다. 검색된 조각(청크 12)과 머리글, 주석만 넣는다
+    # 표 1은 조각 40개(약 1만 5천 토큰)라 프롬프트 상한(11,771)을 넘는다. 검색된 조각(청크 12)과 머리글, 주석만 넣는다
     pieces = _big_table_chunks(25, 40, "가")
     for index, text in enumerate(pieces):
         if index == len(pieces) - 1:
@@ -323,20 +323,20 @@ def test_table_over_limit_keeps_retrieved_piece_header_and_notes(store):
 
 
 def test_higher_rank_table_whole_first(store):
-    # 표 1(약 6천 토큰)과 표 2(약 6천 토큰)는 함께 넣으면 상한을 넘는다. 높은 순위 표 1은 통째로, 표 2는 줄인다
-    for index, text in enumerate(_big_table_chunks(25, 12, "가")):
+    # 표 1(약 6,700토큰)과 표 2(약 6,700토큰)는 함께 넣으면 상한을 넘는다. 높은 순위 표 1은 통째로, 표 2는 줄인다
+    for index, text in enumerate(_big_table_chunks(25, 18, "가")):
         store.add(index, text, [1], 1)
-    for index, text in enumerate(_big_table_chunks(25, 12, "나")):
+    for index, text in enumerate(_big_table_chunks(25, 18, "나")):
         store.add(100 + index, text, [2], 2)
     result = store.build(["31_3", "31_105"])
     assert result.info["partial_tables"] == ["31:2"]
     assert result.info["blocks"][0]["tables"][0]["mode"] == "full"
     assert result.info["prompt_tokens"] <= main.PROMPT_TOKEN_LIMIT
-    assert "|가학과0|" in result.context and "|가학과299|" in result.context
+    assert "|가학과0|" in result.context and "|가학과449|" in result.context
     assert "|나학과125|" in result.context and "|나학과0|" not in result.context
     # 상한 안이면 줄이지 않는다
     small = store.build(["31_3"])
-    assert small.info["partial_tables"] == [] and "|가학과299|" in small.context
+    assert small.info["partial_tables"] == [] and "|가학과449|" in small.context
 
 
 def _whole_filled_table(pieces: list[str]) -> str:
@@ -350,7 +350,7 @@ def _odl_chunk_id(source_index: int) -> str:
 
 
 def test_filled_table_whole_in_one_piece_is_reduced_to_retrieved_rows(store):
-    # 표 1의 표 원문 블록 하나가 표 전체(약 2만 토큰)라 「표 일부」가 표 전체와 같아진다. 검색된 조각(청크 12)만 남긴다
+    # 표 1의 표 원문 블록 하나가 표 전체(약 1만 5천 토큰)라 「표 일부」가 표 전체와 같아진다. 검색된 조각(청크 12)만 남긴다
     pieces = _big_table_chunks(25, 40, "가")
     for index, text in enumerate(pieces):
         store.add(index, text, [1], index + 1)
@@ -418,11 +418,11 @@ def test_first_block_alone_too_big_is_cut_from_the_end(store):
 
 
 def test_small_tables_whose_sum_is_over_limit_drop_later_blocks(store):
-    # 줄일 수 없는 작은 표(청크 하나짜리, 각 약 1,700토큰) 8개의 합이 상한을 넘는다. 뒤 순위 블록부터 빼 상한 안에 둔다
+    # 줄일 수 없는 작은 표(청크 하나짜리, 각 약 1,800토큰) 8개의 합이 상한을 넘는다. 뒤 순위 블록부터 빼 상한 안에 둔다
     prefixes = "가나다라마바사아"
     ids = []
     for number, prefix in enumerate(prefixes, start=1):
-        store.add(300 + number, _big_table_chunks(85, 1, prefix)[0], [number], number)
+        store.add(300 + number, _big_table_chunks(125, 1, prefix)[0], [number], number)
         ids.append(f"31_{300 + number}")
     result = store.build(ids)
     kept = [block["chunk_id"] for block in result.info["blocks"]]

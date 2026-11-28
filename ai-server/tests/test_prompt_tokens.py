@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -91,10 +92,22 @@ def test_server_does_not_start_with_wrong_hash(tmp_path):
     assert "해시가 모델 설정과 다르다" in result.stderr
 
 
-def test_nfc_changes_compatibility_ideograph_and_count_uses_it():
-    # 호환 한자 樂(U+F95C)은 NFC에서 U+6A02가 된다. 토크나이저는 NFC를 하므로 정규화 전후 토큰 수가 같다
-    compat = "樂"
-    assert nfc(compat) == "樂"
-    counter = main.PROMPT_TOKEN_COUNTER
-    assert counter.count(nfc(compat)) == counter.count(compat)
+def test_nfc_makes_same_looking_hangul_the_same_tokens():
+    # 공식 토크나이저와 llama.cpp는 정규화하지 않는다. 낱자 조합(NFD) 「가나대학」은 완성형과 다른 토큰이 되고,
+    # 서버가 NFC로 바꾼 뒤에야 같은 토큰이 된다
+    composed = "가나대학"
+    decomposed = unicodedata.normalize("NFD", composed)
+    tokenizer = main.PROMPT_TOKEN_COUNTER.tokenizer
+    assert decomposed != composed
+    assert tokenizer.encode(decomposed, add_special_tokens=False).ids != tokenizer.encode(composed, add_special_tokens=False).ids
+    assert tokenizer.encode(nfc(decomposed), add_special_tokens=False).ids == tokenizer.encode(composed, add_special_tokens=False).ids
     assert prompt_tokens.CHAT_TEMPLATE_PROBE == "안녕하세요"
+
+
+def test_digits_are_counted_with_official_rule():
+    # 공식 규칙(GPT-2 정규식)은 이어진 숫자를 세 자리까지 묶는다. 숫자를 한 글자씩 자르는 파일이면 20토큰이 된다
+    text = "가나대학 2027학년도 수시1차 모집 인원은 1,250명이다"
+    counter = main.PROMPT_TOKEN_COUNTER
+    tokens = counter.tokenizer.encode(text, add_special_tokens=False).tokens
+    assert "202" in tokens and "250" in tokens
+    assert counter.count(text) == 16

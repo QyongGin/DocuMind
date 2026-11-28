@@ -373,27 +373,12 @@
       "special": false
     }
   ],
-  "normalizer": {
-    "type": "NFC"
-  },
+  "normalizer": null,
   "pre_tokenizer": {
-    "type": "Sequence",
-    "pretokenizers": [
-      {
-        "type": "Split",
-        "pattern": {
-          "Regex": "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
-        },
-        "behavior": "Isolated",
-        "invert": false
-      },
-      {
-        "type": "ByteLevel",
-        "add_prefix_space": false,
-        "trim_offsets": true,
-        "use_regex": false
-      }
-    ]
+    "type": "ByteLevel",
+    "add_prefix_space": false,
+    "trim_offsets": true,
+    "use_regex": true
   },
   "post_processor": {
     "type": "ByteLevel",
