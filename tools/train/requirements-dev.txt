@@ -1,2 +1,6 @@
-# CI와 맥북에서 데이터 변환만 시험한다(학습 라이브러리 없이)
+# CI와 맥북에서 데이터 변환과 토크나이저 확인만 시험한다(PyTorch와 GPU 학습 라이브러리 없이).
+# transformers와 tokenizers는 학습 서버(requirements.txt)와 같은 판이어야 판이 바뀔 때 토크나이저 규칙 시험이 잡는다
 pytest
+transformers==5.22.1
+tokenizers==0.23.3
+jinja2
