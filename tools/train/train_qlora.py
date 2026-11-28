@@ -2,7 +2,8 @@
 
 학습 예시를 대화형 프롬프트·답 형식으로 바꿔 답 부분만 학습한다. 원본은 4비트(NF4)로 올리고 LoRA 어댑터만 학습하며,
 반복(epoch)마다 검증 몫 손실을 재 가장 낮은 반복의 어댑터를 남긴다. 결과 폴더에 어댑터, 학습 기록, 실행 기록
-(run_manifest.json: 설정, 데이터 SHA256, 라이브러리 판, 걸린 시간, 최대 GPU 메모리)을 둔다.
+(run_manifest.json: 설정, 데이터 SHA256, 토크나이저 클래스와 tokenizer.json SHA256, 라이브러리 판, 걸린 시간,
+최대 GPU 메모리)을 둔다. 토크나이저는 원본의 공식 tokenizer.json 규칙 그대로 부른다(official_tokenizer.py, 이슈 #280).
 
 사용 예(학습 서버, 저장소의 tools/train에서):
   python train_qlora.py --model ~/models/ax40light --data ~/data/round-ga.jsonl --out ~/runs/r1
@@ -17,15 +18,10 @@ import math
 import subprocess
 import sys
 import time
-from collections.abc import Mapping
 from pathlib import Path
 
 from data import load_examples, split_examples, to_prompt_completion
-
-# 서빙(Ollama)의 끝 토큰과 같아야 학습한 답이 같은 자리에서 끝난다(deploy/models/ax40light/Modelfile.tmpl의 stop)
-EOS_TOKEN = "<|im_end|>"
-# 시스템 글 없이 "안녕하세요"를 공식 채팅 틀로 감싼 입력 토큰 수. Ollama 등록 때 확인하는 값과 같다(recipe.env)
-EXPECTED_HELLO_TOKENS = 6
+from official_tokenizer import EOS_TOKEN, input_ids_of, load_tokenizer
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,22 +46,12 @@ def sha256_of(path: str) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def input_ids_of(encoded) -> list[int]:
-    """apply_chat_template(tokenize=True) 결과에서 토큰 번호만 꺼낸다.
-
-    Transformers 5는 dict가 아닌 BatchEncoding(Mapping)을 돌려준다. dict로 가르면 키 개수를 토큰 수로 센다.
-    """
-    return list(encoded["input_ids"] if isinstance(encoded, Mapping) else encoded)
-
-
-def check_chat_template(tokenizer) -> None:
-    """학습에 쓰는 채팅 틀이 서빙(Ollama) 틀과 같은 입력을 만드는지, 끝 토큰이 한 토큰인지 확인한다."""
-    hello_ids = input_ids_of(tokenizer.apply_chat_template([{"role": "user", "content": "안녕하세요"}],
-                                                           add_generation_prompt=True, tokenize=True))
-    if len(hello_ids) != EXPECTED_HELLO_TOKENS:
-        raise SystemExit(f"채팅 틀 확인 실패: '안녕하세요'가 {len(hello_ids)}토큰(서빙 틀은 {EXPECTED_HELLO_TOKENS}토큰)")
-    if len(tokenizer.encode(EOS_TOKEN, add_special_tokens=False)) != 1:
-        raise SystemExit(f"끝 토큰 {EOS_TOKEN}이 한 토큰이 아니다")
+def tokenizer_record(model_dir: str, class_name: str, adapter: Path | None = None) -> dict:
+    """실행 기록에 남길 토크나이저: 부른 클래스, 공식 tokenizer.json SHA256, 어댑터 폴더에 저장된 tokenizer.json SHA256."""
+    record = {"class": class_name, "official_sha256": sha256_of(str(Path(model_dir).expanduser() / "tokenizer.json"))}
+    if adapter is not None and (adapter / "tokenizer.json").exists():
+        record["saved_sha256"] = sha256_of(str(adapter / "tokenizer.json"))
+    return record
 
 
 def example_lengths(tokenizer, examples: list[dict]) -> list[int]:
@@ -81,7 +67,7 @@ def main() -> None:
     import torch
     from datasets import Dataset
     from peft import LoraConfig
-    from transformers import AutoTokenizer, BitsAndBytesConfig
+    from transformers import BitsAndBytesConfig
     from trl import SFTConfig, SFTTrainer
 
     started = time.time()
@@ -92,8 +78,7 @@ def main() -> None:
     if args.limit:
         train = train[:args.limit]
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    check_chat_template(tokenizer)
+    tokenizer = load_tokenizer(args.model)
     lengths = example_lengths(tokenizer, train + valid)
     too_long = [example["id"] for example, length in zip(train + valid, lengths) if length > args.max_length]
     if too_long:
@@ -153,6 +138,7 @@ def main() -> None:
         "train_ids": [example["id"] for example in train],
         "valid_ids": [example["id"] for example in valid],
         "token_lengths": {"max": max(lengths), "median": sorted(lengths)[len(lengths) // 2]},
+        "tokenizer": tokenizer_record(args.model, type(tokenizer).__name__, out / "adapter"),
         "best_checkpoint": trainer.state.best_model_checkpoint,
         "log_history": trainer.state.log_history,
         "seconds": {"train": round(train_seconds), "total": round(time.time() - started)},

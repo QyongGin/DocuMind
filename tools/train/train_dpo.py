@@ -21,7 +21,8 @@ import time
 from pathlib import Path
 
 from data import load_pairs, split_examples, to_preference
-from train_qlora import check_chat_template, input_ids_of, sha256_of
+from official_tokenizer import input_ids_of, load_tokenizer
+from train_qlora import sha256_of, tokenizer_record
 
 # 설계 §4: DPO에 선호 답 가능도를 더한다. 비선호 답만 눌러 다른 틀린 답이 느는 것을 막는다
 LOSS_TYPES = ["sigmoid", "sft"]
@@ -73,7 +74,7 @@ def main() -> None:
     import torch
     from datasets import Dataset
     from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
     from trl import DPOConfig, DPOTrainer
 
     started = time.time()
@@ -88,8 +89,7 @@ def main() -> None:
     if args.limit:
         train = train[:args.limit]
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    check_chat_template(tokenizer)
+    tokenizer = load_tokenizer(args.model)
     lengths = pair_lengths(tokenizer, train + valid)
     too_long = [pair["id"] for pair, length in zip(train + valid, lengths) if length > args.max_length]
     if too_long:
@@ -153,6 +153,7 @@ def main() -> None:
         "train_ids": [pair["id"] for pair in train],
         "valid_ids": [pair["id"] for pair in valid],
         "token_lengths": {"max": max(lengths), "median": sorted(lengths)[len(lengths) // 2]},
+        "tokenizer": tokenizer_record(args.model, type(tokenizer).__name__),
         "best_checkpoint": trainer.state.best_model_checkpoint,
         "best_eval": best_eval(trainer.state.log_history),
         "log_history": trainer.state.log_history,
