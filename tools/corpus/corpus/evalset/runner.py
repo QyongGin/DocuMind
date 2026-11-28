@@ -22,7 +22,9 @@ from . import schema
 
 MANIFEST = "manifest.json"
 ANSWERS = "answers.jsonl"
-DEFAULT_TOP_K = 8  # 백엔드·프론트·AI 서버 운영 기본값(.env.example, M2 2단계 2026-10-15)
+# 근거 수는 주지 않으면 AI 서버 기본값(AI_DEFAULT_TOP_K)을 쓴다. 도구 쪽에 숫자를 따로 두지 않고, 쓴 값은 실행 기록의
+# runtime.default_top_k에 남는다(#275)
+DEFAULT_TOP_K = None
 # as_of가 없는 옛 실행 기록은 None으로 읽혀, 날짜를 고정하지 않은 실행과 같은 조건이다
 FIXED = ("evalset_sha256", "index", "top_k", "system_prompt_sha256", "retrieval_mode", "as_of")
 # AI 서버의 검색 순서는 순위 융합 하나다(ADR-0032, 규칙 경로는 #169에서 지움). 실행 기록에는 계속 남겨,
@@ -90,7 +92,7 @@ def new_manifest(evalset_path: Path, items: list[dict], index: str, top_k: int, 
     }
 
 
-def run(evalset_path: str | Path, run_dir: str | Path, ai_url: str, index: str, top_k: int = DEFAULT_TOP_K,
+def run(evalset_path: str | Path, run_dir: str | Path, ai_url: str, index: str, top_k: int | None = DEFAULT_TOP_K,
         system_prompt: str | None = None, version: str | None = None, ids: list[str] | None = None,
         limit: int | None = None, session=None, timeout: float = 600.0, repo: str | Path | None = None,
         now=lambda: datetime.now().isoformat(timespec="seconds"), clock=time.perf_counter, log=print,
@@ -123,8 +125,9 @@ def run(evalset_path: str | Path, run_dir: str | Path, ai_url: str, index: str, 
             started = clock()
             record = {"id": item["id"], "rev": item.get("rev", 1), "question": item["question"]}
             try:
-                request = {"question": item["question"], "top_k": top_k, "system_prompt": system_prompt,
-                           "include_eval_trace": True}
+                request = {"question": item["question"], "system_prompt": system_prompt, "include_eval_trace": True}
+                if top_k:  # 주지 않으면 서버 기본 근거 수
+                    request["top_k"] = top_k
                 if as_of:  # 주지 않으면 요청을 전과 똑같이 보낸다
                     request["as_of"] = as_of
                 response = session.post(f"{manifest['ai_url']}/query", timeout=timeout, json=request)
@@ -132,6 +135,11 @@ def run(evalset_path: str | Path, run_dir: str | Path, ai_url: str, index: str, 
                 body = response.json()
                 if "eval_trace" not in body:
                     raise ValueError("AI 서버가 평가용 기록(eval_trace)을 돌려주지 않는다 — PR #156 이후 판인지 본다")
+                version = (body["eval_trace"].get("runtime") or {}).get("prompt_template_version")
+                if manifest["runtime"] is not None and version != manifest["runtime"].get("prompt_template_version"):
+                    # 한 실행 폴더에 다른 입력 틀로 받은 답이 섞이지 않게 한다(#275)
+                    raise ValueError(f"입력 틀 판 번호가 실행 기록과 다르다({manifest['runtime'].get('prompt_template_version')} → "
+                                     f"{version}). 새 실행 폴더를 쓴다")
                 record.update(answer=body.get("answer"), sources=body.get("sources") or [], eval_trace=body["eval_trace"])
                 if manifest["runtime"] is None:
                     manifest["runtime"] = body["eval_trace"].get("runtime")

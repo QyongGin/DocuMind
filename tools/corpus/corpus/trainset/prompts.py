@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import re
+
 from .evidence import CONTACT, MAX_FIX_LINE_CHARS, evidence_blocks, guidance_candidates
 from .plan import REWORD
 
@@ -13,23 +15,33 @@ from .plan import REWORD
 # ('(없는 것)은 …')도 같은 문장이다. 운영 규칙 9·11은 옛 모양 그대로 두고 따옴표 안 문장만 바꿨다 — '있는 것은 답하고' 지시를
 # 함께 넣었더니 답이 없는 질문에서도 근거 속 다른 안내로 답해 개발셋 오답이 늘었다(docs/rag/m2/거절문장-기준선-20261102.md)
 REFUSAL = "학교 홈페이지 안내에서 찾지 못했습니다."
-# 지난 거절 문장: 옛 운영 문장과 2026-11-02 한때 쓴 문장. 지난 묶음의 목표 답과 입력에 남아 있어 검사는 모두 알아보고,
-# 내보낼 때 REFUSAL로 바꾼다
+# 지난 거절 문장: 옛 운영 문장과 2026-11-02 한때 쓴 문장. 지난 묶음의 목표 답과 입력에 남아 있어 검사는 모두 알아본다.
+# 내보낼 때 목표 답의 문장은 REFUSAL로 바꾸고, 입력(서버 프롬프트)은 바꾸지 않는다 — 입력 규칙이 지난 문장인 예시는 내보내지
+# 않고 지금 서버로 근거를 다시 붙인다(#275)
 LEGACY_REFUSALS = ("제공된 문서에서는 확인할 수 없습니다.", "학교 홈페이지 안내에서 이 내용을 찾지 못했습니다.")
 REFUSALS = (REFUSAL, *LEGACY_REFUSALS)
-# 운영 프롬프트(ai-server MANDATORY_RAG_PROMPT)의 거절 규칙 9·11. 학습 입력의 지난 규칙은 내보낼 때 이 규칙으로 바꾼다 — 입력
-# 규칙과 목표 답의 문장이 어긋나면 규칙과 다르게 답하는 버릇을 배운다. 운영 프롬프트와 글자가 같은지는 테스트가 본다
-REFUSAL_RULES = (
-    f"9. 근거가 부족하면 부족한 항목을 지어내지 말고 '{REFUSAL}'라고 답한다.",
-    f"11. '{REFUSAL}'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다.",
-)
-LEGACY_REFUSAL_RULES = (
-    (f"9. 근거가 부족하면 부족한 항목을 지어내지 말고 '{LEGACY_REFUSALS[0]}'라고 답한다.",
-     f"11. '{LEGACY_REFUSALS[0]}'라고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."),
-    (f"9. 근거가 부족하면 부족한 항목을 지어내지 말고 '{LEGACY_REFUSALS[1]}'라고 답한다. 질문의 일부만 근거에 없으면 있는 "
-     f"것은 답하고, 없는 것은 '(없는 것)은 {REFUSAL}'라고 쓴다.",
-     "11. 찾지 못했다고 답하는 경우에도 일반적인 추천 사항을 이어서 쓰지 않는다."),
-)
+
+
+EVIDENCE_HEAD = re.compile(r"^\[검색 근거\]\s*$", re.M)
+
+
+def rule_refusals(prompt: str) -> set[str]:
+    """프롬프트의 필수 답변 규칙([검색 근거] 앞)이 따옴표로 감싸 쓴 거절 문장(REFUSALS 중). 규칙 번호에 기대지 않는다(#275).
+
+    학습 입력은 서버가 준 프롬프트 그대로라 도구가 규칙을 고치지 않는다. 대신 내보낼 때 입력 규칙의 거절 문장이 목표 답의
+    거절 문장(REFUSAL)과 같은지 이것으로 본다 — 어긋나면 규칙과 다르게 답하는 버릇을 배운다.
+    """
+    # 규칙 글에도 '[검색 근거]'가 나오므로(「반드시 [검색 근거]에 있는 내용만」) 한 줄을 차지한 절 머리로 가른다
+    head = EVIDENCE_HEAD.search(prompt)
+    rules = prompt[:head.start()] if head else prompt
+    return {refusal for refusal in REFUSALS if f"'{refusal}'" in rules}
+
+
+def current_rule_refusal(prompt: str) -> bool:
+    """입력 규칙이 지금 거절 문장만 쓰는가."""
+    return rule_refusals(prompt) == {REFUSAL}
+
+
 # 모호한 질문에 답하는 규칙(ADR-0045, 시점 문구는 ADR-0047 결정 5). 목표 답 지시문과 판정 지침(judge)이 이 문장을
 # 함께 쓴다. '가장 최근 근거로'는 학습 근거에 재료보다 뒤에 올라온 판이 들어오던 때의 문구라 '오늘 기준'으로 바꿨다
 # 기준(학년도·학기)은 근거에 적힌 것만, 필요할 때만 밝힌다(ADR-0049). 예시 문구를 넣지 않는다 — 초안 모델이 그대로 베껴

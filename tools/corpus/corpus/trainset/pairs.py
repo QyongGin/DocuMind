@@ -18,7 +18,7 @@ from collections import Counter
 from pathlib import Path
 
 from ..evalset.scoring import normalize, numbers_with_units
-from . import checks, judge, pipeline
+from . import checks, judge, pipeline, prompts
 from .evidence import CITE, evidence_blocks
 from .plan import KINDS
 from .prompts import REFUSAL, REFUSALS
@@ -139,7 +139,7 @@ def pair_line(record: dict, rejected: dict, results: list[dict], model: str) -> 
     그대로(rejected는 assess 결과 하나). type_samples는 그 문항의 답 중 같은 종류로 틀린 답 수다. made_from은 비선호 답이
     어디서 왔는지(이 입력의 3회차 답, 답없음 사본이면 원본 답·사본 거절)다. chosen_from은 선호 답을 쓴 모델(chosen_source)이다."""
     return {"id": record["id"],
-            "prompt": [{"role": "user", "content": pipeline.current_rules(record["prompt"])}],
+            "prompt": [{"role": "user", "content": record["prompt"]}],
             "chosen": [{"role": "assistant", "content": pipeline.training_target(record["target_ga"])}],
             "rejected": [{"role": "assistant", "content": rejected["answer"]}],
             "meta": {key: record.get(key) for key in ("kind", "kind_planned", "user_actual", "style", "ledger_id", "group_id",
@@ -264,9 +264,9 @@ def build(batch_dirs: list[Path], model: str, copy_dirs: list[Path] = ()) -> tup
                 "chosen_from": dict(Counter(line["meta"]["chosen_from"] for line in lines)),
                 "copy_batches": [Path(copy_dir).name for copy_dir in copy_dirs], "copies": dict(copies),
                 "dropped_over_refusal": len(dropped), "items": dict(items), "answers": dict(answers),
-                # 입력 규칙이 지난 글인 문항 수(0이어야 한다 — 3회차 답은 받은 입력 그대로라, 학습 입력만 바꾸면 둘이 어긋난다)와
-                # 내보낸 입력·선호 답에 지난 거절 문장이나 '(없는 것)' 자리표시가 남은 줄 수
-                "legacy_prompts": sum(pipeline.current_rules(record["prompt"]) != record["prompt"] for record in records),
+                # 입력 규칙의 거절 문장이 지금 문장이 아닌 문항 수(0이어야 한다 — 입력은 서버가 준 그대로라 도구가 고치지 않는다,
+                # #275)와 내보낸 입력·선호 답에 지난 거절 문장이나 '(없는 것)' 자리표시가 남은 줄 수
+                "legacy_prompts": sum(not prompts.current_rule_refusal(record["prompt"]) for record in records),
                 "old_refusal_left": sum(any(mark in json.dumps([line["prompt"], line["chosen"]], ensure_ascii=False)
                                             for mark in pipeline.LEFTOVERS) for line in lines),
                 "ids": [line["id"] for line in lines]}

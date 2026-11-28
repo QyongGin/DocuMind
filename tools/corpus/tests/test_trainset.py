@@ -3,6 +3,7 @@
 import ast
 import json
 import random
+import re
 from pathlib import Path
 
 import pytest
@@ -142,12 +143,16 @@ def test_generate_turns_off_thinking_and_asks_json():
 
 
 def test_attach_takes_prompt_and_final_candidates():
-    trace = {"answer_path": "llm", "prompt": "P", "context": "C",
+    trace = {"answer_path": "llm", "prompt": "P", "context": "C", "runtime": {"prompt_template_version": 1, "default_top_k": 8},
              "stages": {"final": [{"chunk_id": "x", "document_id": "7", "ledger_id": "a/1", "chunk_index": 2,
                                    "chunk_role": "raw", "text": "긴 글"}]}}
     session = FakeSession({"answer": "학습 전 답", "eval_trace": trace})
     out = clients.attach(session, "http://ai", "질문")
-    assert session.sent[0][1]["include_eval_trace"] is True and session.sent[0][1]["top_k"] == 8
+    # 근거 수는 보내지 않는다(서버 기본값). 서버가 준 실행 설정과 보낸 요청을 남긴다(#275)
+    assert session.sent[0][1]["include_eval_trace"] is True and "top_k" not in session.sent[0][1]
+    assert out["runtime"]["default_top_k"] == 8 and out["request"] == {"question": "질문", "system_prompt": None}
+    with pytest.raises(ValueError, match="판 번호"):  # 판 번호를 주지 않는 옛 서버
+        clients.attach(FakeSession({"answer": "답", "eval_trace": {**trace, "runtime": {}}}), "http://ai", "질문")
     assert out["prompt"] == "P" and out["ax_answer"] == "학습 전 답"
     assert out["retrieved"] == [{"chunk_id": "x", "document_id": "7", "ledger_id": "a/1", "chunk_index": 2, "chunk_role": "raw"}]
     with pytest.raises(ValueError):
@@ -157,7 +162,7 @@ def test_attach_takes_prompt_and_final_candidates():
 
 def rerank_trace(used: bool) -> dict:
     """재순위를 켠 AI 서버의 평가 기록. used가 거짓이면 재순위 서버가 답하지 않아 순위 융합 순서로 나온 근거다."""
-    return {"answer_path": "llm", "prompt": "P", "stages": {"final": []},
+    return {"answer_path": "llm", "prompt": "P", "stages": {"final": []}, "runtime": {"prompt_template_version": 1},
             "rerank": {"enabled": True, "used": used, "candidates": 20 if used else 0,
                        "error": None if used else "ConnectError"}}
 
@@ -173,7 +178,8 @@ def test_attach_keeps_rerank_record_and_can_require_it():
         clients.attach(FakeSession({"answer": "답", "eval_trace": rerank_trace(False)}), "http://ai", "질문",
                        require_rerank=True)
     with pytest.raises(ValueError, match="재순위"):  # 재순위를 끈 서버(기록 없음)도 실패
-        clients.attach(FakeSession({"answer": "답", "eval_trace": {"answer_path": "llm", "prompt": "P"}}),
+        clients.attach(FakeSession({"answer": "답", "eval_trace": {"answer_path": "llm", "prompt": "P",
+                                                                  "runtime": {"prompt_template_version": 1}}}),
                        "http://ai", "질문", require_rerank=True)
 
 
@@ -190,6 +196,11 @@ def test_run_attach_retries_examples_without_rerank(tmp_path):
 
 
 PROMPT = """너는 가나대학 문서를 근거로 답변하는 안내 챗봇이다.
+
+필수 답변 규칙:
+1. 반드시 [검색 근거]에 있는 내용만 사용한다.
+9. 근거가 부족하면 부족한 항목을 지어내지 말고 '학교 홈페이지 안내에서 찾지 못했습니다.'라고 답한다.
+
 
 [검색 근거]
 [출처 1]
@@ -358,7 +369,7 @@ def test_pipeline_resumes_and_exports(tmp_path):
         if len(calls) == 1:
             raise OSError("터널 끊김")
         return {"answer": "학습 전 답", "eval_trace": {"answer_path": "llm", "prompt": PROMPT, "stages": {"final": [
-            {"document_id": "7", "chunk_index": 2}]}}}
+            {"document_id": "7", "chunk_index": 2}]}, "runtime": {"prompt_template_version": 1}}}
 
     class Session(FakeSession):
         def post(self, url, json=None, timeout=None):
@@ -699,56 +710,58 @@ def test_export_round_defaults_to_one_shape_and_counts_removed_citations(tmp_pat
     assert lines["c1"]["messages"][1]["content"] == rows[0][2]
 
 
-# ADR-0050 2026-11-02 변경: 거절 문장은 모델이 학습으로 바로 쓴다. 옛 문장으로 만든 묶음은 내보낼 때 목표 답과 입력 규칙을
-# 함께 바꾼다 — 둘이 어긋나면 규칙과 다르게 답하는 버릇을 배운다
+# 학습 입력은 서버가 준 프롬프트 그대로다(#275). 도구는 입력 규칙을 고치지 않고, 규칙이 따옴표로 쓴 거절 문장이 목표 답의
+# 거절 문장과 같은지만 본다 — 둘이 어긋나면 규칙과 다르게 답하는 버릇을 배운다. 거절 규칙은 번호가 아니라 문장으로 찾는다
 MAIN_PY = Path(__file__).resolve().parents[3] / "ai-server" / "main.py"
 
 
 def operating_rules() -> str:
-    """운영 프롬프트의 필수 답변 규칙(ai-server main.py의 MANDATORY_RAG_PROMPT). 서버 코드를 부르지 않고 글자만 읽는다."""
-    for node in ast.parse(MAIN_PY.read_text(encoding="utf-8")).body:
-        if isinstance(node, ast.Assign) and any(getattr(target, "id", "") == "MANDATORY_RAG_PROMPT" for target in node.targets):
-            return ast.literal_eval(node.value)
-    raise AssertionError("MANDATORY_RAG_PROMPT를 찾지 못함")
+    """운영 프롬프트의 필수 답변 규칙(ai-server main.py의 MANDATORY_RAG_PROMPT). 서버 코드를 부르지 않고 글자만 읽는다.
+    규칙 안의 f-string 조각(표 사실 규칙 줄)은 그 상수의 글로 채운다."""
+    tree = ast.parse(MAIN_PY.read_text(encoding="utf-8"))
+    constants = {node.targets[0].id: node.value for node in tree.body
+                 if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)}
+
+    def text(value) -> str:
+        if isinstance(value, ast.Constant):
+            return value.value
+        if isinstance(value, ast.JoinedStr):
+            return "".join(text(part.value if isinstance(part, ast.FormattedValue) else part) for part in value.values)
+        if isinstance(value, ast.Name):
+            return text(constants[value.id])
+        raise AssertionError(f"읽지 못하는 글 {ast.dump(value)}")
+
+    return text(constants["MANDATORY_RAG_PROMPT"])
 
 
-def with_rules(rules: str) -> str:
-    return PROMPT.replace("\n\n[검색 근거]", f"\n\n{rules}\n\n[검색 근거]")
+def test_server_rules_quote_only_the_current_refusal():
+    rules = operating_rules() + "\n\n[검색 근거]\n"
+    assert prompts.rule_refusals(rules) == {prompts.REFUSAL}
+    assert prompts.current_rule_refusal(rules)
+    # 규칙 번호를 다시 매겨도(3 다음이 5인 지금 번호를 고쳐도) 같은 문장으로 찾는다
+    renumbered = re.sub(r"^(\d+)\.", lambda match: f"{int(match.group(1)) + 20}.", rules, flags=re.M)
+    assert renumbered != rules and prompts.rule_refusals(renumbered) == {prompts.REFUSAL}
 
 
-def legacy_operating_rules(legacy: tuple[str, str]) -> str:
-    """지금 운영 규칙에서 거절 규칙 9·11만 지난 규칙으로 되돌린 글(지난 묶음의 학습 입력 모양)."""
-    rules = operating_rules()
-    for old, new in zip(legacy, prompts.REFUSAL_RULES):
-        rules = rules.replace(new, old)
-    return rules
+def test_rule_refusals_see_only_rules_not_evidence():
+    legacy = PROMPT.replace(prompts.REFUSAL, prompts.LEGACY_REFUSALS[0])
+    assert prompts.rule_refusals(legacy) == {prompts.LEGACY_REFUSALS[0]} and not prompts.current_rule_refusal(legacy)
+    # 근거 글에 따옴표 친 거절 문장이 있어도 규칙으로 보지 않는다
+    quoted = PROMPT.replace("휴학 신청 기간은", f"'{prompts.LEGACY_REFUSALS[1]}' 휴학 신청 기간은")
+    assert prompts.rule_refusals(quoted) == {prompts.REFUSAL}
+    assert prompts.rule_refusals("[검색 근거]\n규칙 없음") == set()
 
 
-def test_refusal_rules_are_the_operating_rules():
-    rules = operating_rules().splitlines()
-    assert all(rule in rules for rule in prompts.REFUSAL_RULES)  # 학습 입력에 넣는 규칙이 운영 규칙과 글자까지 같다
-    assert not any(legacy in rule for rule in rules for legacy in prompts.LEGACY_REFUSALS)
-    assert all(prompts.REFUSAL in rule for rule in prompts.REFUSAL_RULES)
-
-
-@pytest.mark.parametrize("legacy", range(len(prompts.LEGACY_REFUSAL_RULES)))
-def test_training_line_rewords_legacy_refusal_in_answer_and_rules(legacy):
-    """옛 운영 문장으로 만든 묶음과 2026-11-02 한때 문장으로 만든 묶음 모두 목표 답과 입력 규칙을 지금 문장으로 바꾼다."""
-    old = prompts.LEGACY_REFUSALS[legacy]
-
-    def line(target):
-        out = pipeline.training_line(record(prompt=with_rules(legacy_operating_rules(prompts.LEGACY_REFUSAL_RULES[legacy])),
-                                            target_ga=target), "ga")
-        return out["messages"][0]["content"], out["messages"][1]["content"]
-
-    prompt, bare = line(f"{old}\n\n[출처 1][출처 2]")
-    assert prompt == with_rules(operating_rules()) and bare == prompts.REFUSAL
-    guide = f"{old} 휴학 문의는 학사지원팀(02-000-0000)입니다.\n[출처 1]"
-    assert line(guide)[1] == guide.replace(old, prompts.REFUSAL)
-    partial = f"8월 29일까지 신청하면 됩니다. 수수료는 {old}\n[출처 1]"
-    assert line(partial)[1] == partial.replace(old, prompts.REFUSAL)  # 일부만 없음도 같은 문장
-    new = partial.replace(old, prompts.REFUSAL)
-    assert line(new)[1] == new  # 지금 문장으로 만든 답은 그대로
+def test_training_line_keeps_server_prompt_and_rewords_only_the_target():
+    old = prompts.LEGACY_REFUSALS[0]
+    line = pipeline.training_line(record(target_ga=f"{old}\n\n[출처 1][출처 2]",
+                                         runtime={"prompt_template_version": 1},
+                                         gold={"mode": "검색", "chunks": [{"block": None}]},
+                                         request={"question": "휴학 언제까지 신청해?", "as_of": "2026-10-31"}), "ga")
+    assert line["messages"][0]["content"] == PROMPT  # 서버 프롬프트 그대로
+    assert line["messages"][1]["content"] == prompts.REFUSAL
+    assert line["meta"]["prompt_template_version"] == 1 and line["meta"]["retrieval_mode"] == "검색"
+    assert line["meta"]["gold_blocks"] == [None] and line["meta"]["request"]["as_of"] == "2026-10-31"
 
 
 def test_checks_take_current_and_legacy_refusal():
@@ -760,28 +773,49 @@ def test_checks_take_current_and_legacy_refusal():
     assert checks.shape_check("fact", partial, "ga")[0] is False  # 답 예시에 섞인 거절
 
 
-def test_export_round_rewords_old_batches_and_counts_left_overs(tmp_path):
-    folder = tmp_path / "old"
-    old = prompts.LEGACY_REFUSALS[0]
-    rows = [("o1", "partial", f"8월 29일까지 신청하면 됩니다. 수수료는 {old}\n[출처 1]"),
-            ("o2", "refuse_guide", f"{old}\n\n[출처 1]")]
+def export_batch(folder, prompts_by_id, versions):
+    rows = [("o1", "partial", f"8월 29일까지 신청하면 됩니다. 수수료는 {prompts.LEGACY_REFUSALS[0]}\n[출처 1]"),
+            ("o2", "refuse_guide", f"{prompts.LEGACY_REFUSALS[0]}\n\n[출처 1]")]
     pipeline.write(folder, "plan", [{"id": i, "kind": kind} for i, kind, _ in rows], mode="w")
     pipeline.write(folder, "questions", [{"id": i, "question": f"가나대학 질문 {i}", "possible": True} for i, _, _ in rows])
-    pipeline.write(folder, "attached", [{"id": i, "prompt": with_rules(legacy_operating_rules(prompts.LEGACY_REFUSAL_RULES[0]))}
-                                        for i, _, _ in rows])
+    pipeline.write(folder, "attached", [{"id": i, "prompt": prompts_by_id.get(i, PROMPT),
+                                         "runtime": {"prompt_template_version": versions.get(i, 1)}} for i, _, _ in rows])
     pipeline.write(folder, "targets", [{"id": i, "target_ga": target} for i, _, target in rows])
     pipeline.write(folder, "checked", [{"id": i, "kind": kind, "keep": {"ga": True}} for i, kind, _ in rows])
     pipeline.write(folder, "judged", [{"id": i, "verdict": "통과"} for i, _, _ in rows])
-    manifest = pipeline.export_round([folder], tmp_path / "round1", 2)
-    assert manifest["reworded_refusals"] == {"targets": {"ga": 2}, "prompts": 2}
+
+
+def test_export_round_rewords_old_targets_and_keeps_prompts(tmp_path):
+    export_batch(tmp_path / "now", {}, {})
+    manifest = pipeline.export_round([tmp_path / "now"], tmp_path / "round1", 2)
+    assert manifest["reworded_refusals"] == {"targets": {"ga": 2}}
     assert manifest["removed_refusal_citations"] == {"ga": 1} and manifest["old_refusal_left"] == 0
-    # 규칙 글자가 다른 지난 프롬프트는 바꾸지 못한다 — 남은 줄을 세어 내보내기를 멈추게 한다
-    pipeline.write(folder, "attached", [{"id": "o1", "prompt": with_rules(f"9. '{old}'라고 답한다.")}])
-    assert pipeline.export_round([folder], tmp_path / "round2", 2)["old_refusal_left"] == 1
-    # 목표 답에 규칙의 '(없는 것)' 자리표시를 그대로 베낀 줄도 센다
-    pipeline.write(folder, "attached", [{"id": "o1", "prompt": PROMPT}])
-    pipeline.write(folder, "targets", [{"id": "o1", "target_ga": f"8월 29일까지입니다. (없는 것)은 {prompts.REFUSAL}\n[출처 1]"}])
-    assert pipeline.export_round([folder], tmp_path / "round3", 2)["old_refusal_left"] == 1
+    assert manifest["prompt_template_versions"] == {"1": 2} and pipeline.prompt_problem_count(manifest) == 0
+    lines = [json.loads(line) for line in (tmp_path / "round1" / "round-ga.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert all(line["messages"][0]["content"] == PROMPT for line in lines)
+
+
+@pytest.mark.parametrize("prompts_by_id, versions, problem", [
+    ({"o1": PROMPT.replace(prompts.REFUSAL, prompts.LEGACY_REFUSALS[0])}, {}, "old_rule_refusal"),  # 지난 규칙 입력
+    ({}, {"o1": None}, "no_template_version"),  # 판 번호 전 서버로 붙인 예시
+    ({}, {"o1": 2}, "mixed_template_versions"),  # 판 번호가 섞임
+])
+def test_export_round_counts_prompts_that_cannot_be_used(tmp_path, prompts_by_id, versions, problem):
+    export_batch(tmp_path / "old", prompts_by_id, versions)
+    manifest = pipeline.export_round([tmp_path / "old"], tmp_path / "round1", 2)
+    assert manifest[problem] and pipeline.prompt_problem_count(manifest) == 1
+    with pytest.raises(ValueError, match="다시 붙인다"):
+        pipeline.export(tmp_path / "old", tmp_path / "one.jsonl")
+    # 입력은 고치지 않는다: 내보낸 줄의 입력이 받은 프롬프트 그대로다
+    sent = {json.loads(line)["id"]: json.loads(line)["messages"][0]["content"]
+            for line in (tmp_path / "round1" / "round-ga.jsonl").read_text(encoding="utf-8").splitlines()}
+    assert sent["o1"] == prompts_by_id.get("o1", PROMPT)
+
+
+def test_export_round_left_over_placeholder_is_still_counted(tmp_path):
+    export_batch(tmp_path / "old", {}, {})
+    pipeline.write(tmp_path / "old", "targets", [{"id": "o1", "target_ga": f"8월 29일까지입니다. (없는 것)은 {prompts.REFUSAL}\n[출처 1]"}])
+    assert pipeline.export_round([tmp_path / "old"], tmp_path / "round3", 2)["old_refusal_left"] == 1
 
 
 # ADR-0048 결정 3·4: 답 근거가 든 블록은 코드가 짚고, 왕복 검사는 그 블록 기준, 표 질문은 사용자 말로

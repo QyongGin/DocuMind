@@ -390,6 +390,25 @@ def test_reduced_piece_still_too_big_drops_later_blocks(store):
     assert "[출처 2]" not in result.context and "|가학과0|" not in result.context
 
 
+def test_chunk_merged_into_block_dropped_by_limit_is_recorded(store):
+    # 청크 12는 표 1이 이미 든 블록 2(표 원문 블록, 표 전체)에 합쳐져 빠진다. 블록 2가 상한 때문에 빠지면 청크 12도
+    # 근거에 없으므로 기록에 남긴다. 합쳐진 블록이 남으면 남기지 않는다
+    pieces = _big_table_chunks(25, 40, "가")
+    store.add_odl(0, _whole_filled_table(pieces), [1], 1)
+    store.add(12, pieces[12], [1], 13)
+    result = store.build(["40_0", _odl_chunk_id(0), "31_12"])
+    assert result.info["dropped_chunk_ids"] == ["31_12"]
+    assert result.info["limit_dropped_chunk_ids"] == [_odl_chunk_id(0)]
+    assert result.info["limit_dropped_merged_chunk_ids"] == ["31_12"]
+    assert result.block_of["31_12"] is None and "|가학과300|" not in result.context
+
+    store.add(3, "모집 인원은 아래와 같다.\n|학과|인원|\n|---|---|\n|가학과|10|", [5], 2)
+    store.add(4, "모집 인원은 아래와 같다.\n|학과|인원|\n|---|---|\n|나학과|20|", [5], 3)
+    kept = store.build([f"{DOC}_3", f"{DOC}_4"])
+    assert kept.info["dropped_chunk_ids"] == [f"{DOC}_4"]
+    assert kept.info["limit_dropped_chunk_ids"] == [] and kept.info["limit_dropped_merged_chunk_ids"] == []
+
+
 def test_tables_left_after_dropping_blocks_go_back_to_whole(store):
     # 뒤 순위 블록(표 전체가 든 표 원문 블록)을 빼고 나면 남은 표 2는 상한 안에 들어 통째로 되돌린다
     store.add_odl(0, _whole_filled_table(_big_table_chunks(25, 40, "가")), [1], 1)

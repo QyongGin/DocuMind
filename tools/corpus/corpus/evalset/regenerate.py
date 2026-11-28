@@ -23,18 +23,22 @@ LLM_PATH = "llm"
 FIXED = ("generated_from", "evalset_sha256", "llm_model", "num_ctx", "num_predict", "llm_temperature")
 
 
-def regenerate(base_dir: str | Path, out_dir: str | Path, ollama_url: str, model: str, num_ctx: int,
+def regenerate(base_dir: str | Path, out_dir: str | Path, ollama_url: str, model: str, num_ctx: int | None = None,
                num_predict: int | None = None, ids: list[str] | None = None, limit: int | None = None,
                session=None, timeout: float = 600.0, keep_alive: str = "30m",
                now=lambda: datetime.now().isoformat(timespec="seconds"), clock=time.perf_counter, log=print) -> dict:
-    """기준 실행의 문항을 차례로 다시 생성한다. 돌려주는 것: 생성·옮김(우선 경로)·건너뜀·실패 수, 잘린 프롬프트 수."""
+    """기준 실행의 문항을 차례로 다시 생성한다. 돌려주는 것: 생성·옮김(우선 경로)·건너뜀·실패 수, 잘린 프롬프트 수.
+    문맥 길이와 출력 상한은 주지 않으면 기준 실행에 서버가 남긴 값을 쓴다(도구 쪽 기본값을 두지 않는다, #275)."""
     base_dir, out_dir = Path(base_dir), Path(out_dir)
     if base_dir.resolve() == out_dir.resolve():
         raise ValueError("결과는 기준 실행 폴더 밖에 쓴다")
     base_manifest = json.loads((base_dir / MANIFEST).read_text(encoding="utf-8"))
     base_runtime = base_manifest.get("runtime") or {}
     temperature = base_runtime.get("llm_temperature", 0.0)
-    num_predict = num_predict or base_runtime.get("num_predict") or 512
+    num_ctx = num_ctx or base_runtime.get("num_ctx")
+    num_predict = num_predict or base_runtime.get("num_predict")
+    if not num_ctx or not num_predict:
+        raise ValueError("기준 실행 기록에 서버의 문맥 길이·출력 상한이 없다 — --num-ctx, --num-predict로 준다")
     runtime = {**base_runtime, "llm_model": model, "num_ctx": num_ctx, "num_predict": num_predict}
 
     out_dir.mkdir(parents=True, exist_ok=True)

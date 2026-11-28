@@ -62,7 +62,7 @@ def test_old_versions_kept_in_about_one_tenth_of_examples_deterministically():
 
 
 def test_attach_sends_exclusions_only_when_given():
-    trace = {"answer_path": "llm", "prompt": "P", "stages": {"final": []}}
+    trace = {"answer_path": "llm", "prompt": "P", "stages": {"final": []}, "runtime": {"prompt_template_version": 1}}
     plain = FakeSession({"answer": "답", "eval_trace": trace})
     clients.attach(plain, "http://ai", "질문")
     assert not {"exclude_ledger_ids", "exclude_chunk_ids", "as_of"} & set(plain.sent[0][1])  # 그 전 요청 그대로
@@ -78,7 +78,7 @@ def test_run_attach_uses_the_day_of_each_example(ledger, tmp_path):
     assert not timeline.keeps_old_versions(item)
     pipeline.write(batch, "plan", [{"id": item, "kind": "fact", "ledger_id": MATERIAL, "chunks": []}], mode="w")
     pipeline.write(batch, "questions", [{"id": item, "question": "가나대학 국가근로 신청 언제까지야?", "possible": True}])
-    session = FakeSession({"answer": "답", "eval_trace": {"answer_path": "llm", "prompt": "P", "stages": {"final": []}}})
+    session = FakeSession({"answer": "답", "eval_trace": {"answer_path": "llm", "prompt": "P", "stages": {"final": []}, "runtime": {"prompt_template_version": 1}}})
     assert pipeline.run_attach(batch, session, "http://ai", dates=dates, today="2026-10-31", log=lambda line: None) == {
         "attached": 1}
     body = session.sent[0][1]

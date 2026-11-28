@@ -138,6 +138,11 @@ def hint_blocks(hint: str, prompt: str) -> list[int]:
     return found
 
 
+def refusal_target(record: dict) -> bool:
+    """실제 검색에서 정답 청크가 근거에 못 들고 답 근거도 프롬프트에 없어 목표 답을 거절로 둔 예시인가(#275)."""
+    return bool((record.get("gold") or {}).get("refusal_target"))
+
+
 def source_retrieved(record: dict) -> bool:
     """질문을 만든 청크가 검색된 근거 8개 안에 있는가."""
     sources = {(str(record.get("document_id")), str(chunk.get("chunk_index"))) for chunk in record.get("chunks") or []}
@@ -224,7 +229,7 @@ def check(record: dict, shape: str = "ga") -> dict:
                 "질문을 만든 청크도, 답 근거가 든 근거 블록도 근거 8개 안에 없음")
         put("모호한 표 근거", *ambiguous_table(target, prompt))
     refusal_info = record.get("refusal")
-    if planned == "refuse_guide" and refusal_info is not None:
+    if (planned == "refuse_guide" or refusal_target(record)) and refusal_info is not None:
         # 답이 든 청크를 빼서 만든 답없음 예시(ADR-0048 결정 2): 근거에 답이 없음을 확인하고, 거절했는지,
         # 확인처를 코드가 고른 블록(재료 문서·같은 게시글·같은 묶음)에서만 붙였는지 본다
         put("답 근거 없음", not hint_blocks(hint, prompt), "답이 든 청크를 뺐는데 근거에 답 근거가 남음")

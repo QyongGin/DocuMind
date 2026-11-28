@@ -128,7 +128,7 @@ def test_prepare_query_orders_candidates_by_rank_fusion(fake_retrieval, monkeypa
     stages: dict = {}
     prompt, sources, _ = main._prepare_query("가나대학 기숙사 신청 언제예요?", 5, None, stages)
     assert [entry["chunk_id"] for entry in stages["final"]] == ["12_3", "11_0"]
-    assert set(stages) == set(STAGES) | {"context", "prompt", "rerank"}
+    assert set(stages) == set(STAGES) | {"context", "prompt", "rerank", "retrieval"}
     assert stages["rerank"]["enabled"] is False and stages["rerank"]["used"] is False  # 기본은 재순위 꺼짐
     assert prompt and sources[0]["document_id"] == "12"
     assert "[우선 표 근거 사용 규칙]" not in prompt and "[우선 질의 근거 사용 규칙]" not in prompt

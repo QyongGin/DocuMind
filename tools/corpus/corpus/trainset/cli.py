@@ -31,8 +31,8 @@ from pathlib import Path
 
 import requests
 
-from . import judge, model_targets, pairs, pipeline, review, timeline
-from .plan import (REWORD, ROUND1, boilerplate_lines, dataset_documents, document_family, fill_quotas, parse_kinds,
+from . import gold, judge, model_targets, pairs, pipeline, review, timeline, verify
+from .plan import (KINDS, REWORD, ROUND1, boilerplate_lines, dataset_documents, document_family, fill_quotas, parse_kinds,
                    plan, scale, trained_groups)
 
 DEFAULT_MODEL = "gemma4:12b-it-qat"
@@ -75,7 +75,9 @@ def load_chunks(documents: list[dict], ai_url: str, cache: Path) -> dict[int, li
                 continue
             response = session.get(f"{ai_url.rstrip('/')}/documents/{document['document_id']}/chunks", timeout=120)
             response.raise_for_status()
-            chunks[document["document_id"]] = [{key: chunk.get(key) for key in ("id", "chunk_index", "content")}
+            # 표 번호(#269)는 정답 청크가 근거에 못 들었을 때 같은 표의 다른 조각이 들었는지 가르는 데 쓴다(#275)
+            chunks[document["document_id"]] = [{**{key: chunk.get(key) for key in ("id", "chunk_index", "content")},
+                                                "table_numbers": (chunk.get("metadata") or {}).get("table_numbers") or []}
                                                for chunk in response.json().get("chunks") or []]
             out.write(json.dumps({"document_id": document["document_id"], "chunks": chunks[document["document_id"]]},
                                  ensure_ascii=False) + "\n")
@@ -136,7 +138,7 @@ def cmd_attach(args) -> int:
     # 답없음 예시의 확인처 블록을 가릴 문서 관계(재료 문서·같은 게시글·같은 묶음, ADR-0048 결정 2)
     counts = pipeline.run_attach(_batch_dir(args), requests.Session(), args.ai_url, args.limit, dates=dates,
                                  today=date.today().isoformat(), family=document_family(con),
-                                 require_rerank=args.require_rerank)
+                                 require_rerank=args.require_rerank, pinned_share=args.pinned_share, seed=args.seed)
     print(dict(counts))
     return 0 if not counts.get("error") else 1
 
@@ -278,11 +280,28 @@ def cmd_merge_review(args) -> int:
     return 0
 
 
+def cmd_gold_report(args) -> int:
+    train = Path(args.root).parent / "train"
+    records = [record for name in args.batches.split(",") if name for record in pipeline.merged(train / name)]
+    print(json.dumps(gold.count_reasons(records, lambda kind: KINDS[kind].answerable), ensure_ascii=False, indent=1))
+    return 0
+
+
+def cmd_verify_prompts(args) -> int:
+    result = verify.verify_file(Path(args.file), requests.Session(), args.ai_url, args.limit)
+    print(json.dumps(result, ensure_ascii=False, indent=1))
+    return 0 if verify.ok(result) else 1
+
+
 def cmd_export(args) -> int:
     verdicts = json.loads(Path(args.verdicts).read_text(encoding="utf-8")) if args.verdicts else None
     if args.use_judge:
         verdicts = pipeline.verdicts(_batch_dir(args))
-    kept = pipeline.export(_batch_dir(args), Path(args.out), args.shape, verdicts)
+    try:
+        kept = pipeline.export(_batch_dir(args), Path(args.out), args.shape, verdicts)
+    except ValueError as error:
+        print(error)
+        return 1
     print(f"학습 예시 {kept}개 → {args.out}")
     return 0
 
@@ -299,6 +318,10 @@ def cmd_export_round(args) -> int:
     if manifest["old_refusal_left"]:
         print(f"지난 거절 문장이나 '(없는 것)' 자리표시가 {manifest['old_refusal_left']}줄에 남았다 — 입력 규칙의 글자가 다른 묶음이 섞였다. "
               "학습 파일로 쓰지 않는다")
+        return 1
+    if pipeline.prompt_problem_count(manifest):
+        print("입력 틀 판 번호가 없거나 섞였거나, 입력 규칙의 거절 문장이 지금 문장이 아닌 예시가 있다 — 지금 서버로 근거를 다시 "
+              "붙인 묶음만 쓴다. 학습 파일로 쓰지 않는다")
         return 1
     return 0
 
@@ -345,6 +368,10 @@ def add_parser(commands) -> None:
     attaching.add_argument("--require-rerank", action="store_true",
                            help="재순위가 실제로 쓰인 근거만 받는다(5회차, ADR-0055). 재순위 서버가 답하지 않아 순위 융합 "
                                 "순서로 나온 근거는 실패로 남겨 다음 실행에서 다시 붙인다")
+    attaching.add_argument("--pinned-share", type=_share, default=0.0,
+                           help="답 있는 예시 중 정답 청크를 근거의 무작위 자리에 지정해 붙일 몫(0~1, 기본 0 = 모두 실제 검색). "
+                                "몫은 단계 C에서 정한다(#275)")
+    attaching.add_argument("--seed", type=int, default=20261128, help="지정 여부와 자리를 고르는 씨앗(예시 번호와 함께 굴림)")
     attaching.set_defaults(func=cmd_attach)
 
     probing = with_batch("probe", "A.X 답 여러 번 받기(학습 전 모델의 아는 정도 ADR-0042, 학습한 모델의 답 ADR-0053)")
@@ -409,6 +436,16 @@ def add_parser(commands) -> None:
     exporting.add_argument("--verdicts", help="판정 JSON({예시 번호: '통과'|'탈락'}). 주면 통과만")
     exporting.add_argument("--use-judge", action="store_true", help="묶음의 판정(사람 > Claude)으로 통과만")
     exporting.set_defaults(func=cmd_export)
+
+    gold_report = sub.add_parser("gold-report", help="정답 청크가 근거에 못 든 예시의 이유별 수(#275)")
+    gold_report.add_argument("--batches", required=True, help="쉼표로 묶음 이름")
+    gold_report.set_defaults(func=cmd_gold_report)
+
+    verifying = sub.add_parser("verify-prompts", help="학습 파일의 프롬프트를 서버에 다시 받아 글자까지 대조(#275)")
+    verifying.add_argument("file", help="학습 파일(round-ga.jsonl 등, meta.request가 있는 줄)")
+    verifying.add_argument("--ai-url", default="http://localhost:18100")
+    verifying.add_argument("--limit", type=int)
+    verifying.set_defaults(func=cmd_verify_prompts)
 
     round_export = sub.add_parser("export-round", help="1회차 학습 파일(여러 묶음에서 종류 비율대로, A.X가 틀리던 예시 먼저)")
     round_export.add_argument("--batches", required=True, help="쉼표로 묶음 이름(앞 묶음이 질문 중복에서 남는다)")
