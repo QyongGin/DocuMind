@@ -19,8 +19,9 @@ import java.util.stream.Collectors;
  * 모델 원문 답을 사용자 화면의 답으로 바꾼다(ADR-0050·0051, docs/project/챗봇-답변-형식.md §3).
  *
  * <p>출처 번호({@code [출처 N]})를 지우고, 답이 쓴 근거(N번째 출처)의 문서 게시 정보로 참고한 문서를 만든다.
- * 거절 문장만 있는 답에는 정해 둔 안내를 붙이고 참고한 문서를 보이지 않는다. 같은 원문과 출처 목록이면 결과가
- * 같아서, 대화 기록을 다시 열 때도 저장한 원문으로 다시 만든다.</p>
+ * 거절 문장만 있는 답에는 정해 둔 안내를 붙이고 참고한 문서를 보이지 않는다. 확인 줄로 시작하고 결론 줄이 있는 답은
+ * 결론 줄머리 뒤의 글만 보인다({@link WorkingLines}). 출처 번호는 확인 줄까지 포함한 원문 전체에서 모은다. 같은 원문과
+ * 출처 목록이면 결과가 같아서, 대화 기록을 다시 열 때도 저장한 원문으로 다시 만든다.</p>
  */
 @Component
 public class ScreenAnswerMaker {
@@ -82,11 +83,23 @@ public class ScreenAnswerMaker {
                 }
             }
         }
-        String text = tidy(ANGLE_LINK.matcher(CITATION.matcher(raw).replaceAll("")).replaceAll("$1"));
+        // 확인 줄을 떼는 일은 거절 비교보다 먼저 한다. 결론이 거절 문장뿐인 답에도 정해 둔 안내가 붙게 하기 위해서다
+        Optional<String> conclusion = WorkingLines.conclusionOf(raw).map(ScreenAnswerMaker::screenText)
+                .filter(text -> !text.isEmpty());
+        // 확인 줄로 시작했는데 결론이 없거나 비었으면 원문을 그대로 보인다(빈 답이 화면에 나가지 않게)
+        String text = conclusion.orElseGet(() -> screenText(raw));
+        boolean workingLinesRemoved = conclusion.isPresent();
         if (text.equals(refusalSentence)) {
-            return new ScreenAnswer(text, List.of(), refusalGuidance, List.copyOf(cited), findLinks(text));
+            return new ScreenAnswer(text, List.of(), refusalGuidance, List.copyOf(cited), findLinks(text),
+                    workingLinesRemoved);
         }
-        return new ScreenAnswer(text, references(cited, sources), null, List.copyOf(cited), findLinks(text));
+        return new ScreenAnswer(text, references(cited, sources), null, List.copyOf(cited), findLinks(text),
+                workingLinesRemoved);
+    }
+
+    // 출처 번호를 지우고 꺾쇠 친 링크를 푼 화면 글
+    private static String screenText(String answer) {
+        return tidy(ANGLE_LINK.matcher(CITATION.matcher(answer).replaceAll("")).replaceAll("$1"));
     }
 
     /**
