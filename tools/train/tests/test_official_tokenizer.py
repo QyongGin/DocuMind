@@ -135,3 +135,14 @@ def test_check_still_stops_on_wrong_chat_template(model_dir):
 
     with pytest.raises(SystemExit, match="채팅 틀 확인 실패"):
         check_chat_template(tokenizer, official_tokenizer(model_dir))
+
+
+def test_load_tokenizer_runs_both_checks_before_returning(model_dir, monkeypatch):
+    import official_tokenizer
+
+    called = []
+    monkeypatch.setattr(official_tokenizer, "check_chat_template", lambda tokenizer, official: called.append("틀"))
+    monkeypatch.setattr(official_tokenizer, "check_saved_rules", lambda tokenizer, official: called.append("저장"))
+    official_tokenizer.load_tokenizer(model_dir)
+
+    assert called == ["틀", "저장"]
