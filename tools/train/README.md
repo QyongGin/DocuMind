@@ -5,7 +5,8 @@ A.X 4.0 Light를 학습 서버(AWS g5.xlarge, A10G 24GB)에서 QLoRA로 학습�
 | 파일 | 하는 일 |
 |---|---|
 | `data.py` | 학습 예시를 대화형 프롬프트·답 형식으로 바꾸고, 종류 비율대로 검증 몫을 고른다(같은 문서 묶음은 갈라지지 않게) |
-| `train_qlora.py` | 4비트 원본 + LoRA 어댑터로 답 부분만 학습한다. 채팅 틀이 서빙 틀과 같은지, 예시가 최대 길이 안인지 먼저 확인한다 |
+| `official_tokenizer.py` | 토크나이저를 원본의 공식 `tokenizer.json` 규칙 그대로 부르고(`TokenizersBackend`), 채팅 틀과 숫자가 든 글을 자르는 규칙, 저장할 파일이 공식 파일과 같은지 확인한다(이슈 #280) |
+| `train_qlora.py` | 4비트 원본 + LoRA 어댑터로 답 부분만 학습한다. 위 확인과 예시가 최대 길이 안인지를 먼저 본다 |
 | `train_dpo.py` | 4회차: 3회차 어댑터를 이어 선호 쌍으로 학습한다(DPO + 선호 답 가능도). 같은 확인을 먼저 한다(7절) |
 | `merge_adapter.py` | 어댑터를 bf16 원본에 합쳐 Hugging Face 폴더로 저장한다(GPU에서) |
 | `../../deploy/models/convert.sh` | 합친 폴더를 운영 모델과 같은 도구(llama.cpp b11312)로 4비트 GGUF로 바꾼다(`SOURCE_DIR`) |
