@@ -167,6 +167,7 @@ def score_record(item: dict, record: dict | None, judgments: dict[str, dict]) ->
     row.update(
         status="채점", question=item["question"], answer=answer, label=label, rule_label=result["label"],
         judged=bool(judged), doubt=doubted, guidance=result["guidance"]["label"], appended_refusal=result["appended_refusal"],
+        conclusion_only=result["conclusion_only"],
         invented=result["invented"], missing=list(result["missing"]),
         location=failure_location(item, label, hits), stages=hits, source_any=source_any,
         source_share=round(source_share, 3), truncated=(trace.get("generation") or {}).get("done_reason") == "length",
@@ -215,6 +216,7 @@ def aggregate(rows: list[dict]) -> dict:
         "judged": sum(1 for row in scored if row["judged"]),
         "doubted": sum(1 for row in scored if row.get("doubt")),
         "appended_refusal": sum(1 for row in scored if row["appended_refusal"]),
+        "conclusion_only": sum(1 for row in scored if row.get("conclusion_only")),
         "invented_numbers": sum(1 for row in scored if row["invented"]),
         "wrong_kinds": {kind: sum(1 for row in scored if row.get("wrong_kind") == kind) for kind in WRONG_KINDS},
         "truncated": sum(1 for row in scored if row["truncated"]),
@@ -317,7 +319,8 @@ def summary_lines(metrics: dict) -> list[str]:
                      f" · 안내 충실도 {pct(group['guidance'])}")
         lines.append(f"  애매(사람 판정 대기) {group['ambiguous_open']} · 사람 판정 재사용 {group['judged']}"
                      f" · 규칙 맞음 중 판정으로 보냄 {group['doubted']} · 덧붙인 거절 {group['appended_refusal']} · 지어낸 숫자 {group['invented_numbers']}"
-                     f" · 답 잘림 {group['truncated']}")
+                     f" · 답 잘림 {group['truncated']}"
+                     + (f" · 결론 부분 채점 {group['conclusion_only']}" if group.get("conclusion_only") else ""))
         lines.append("  틀림 종류 " + " · ".join(f"{kind} {count}" for kind, count in group.get("wrong_kinds", {}).items()))
         lines.append("  실패 위치 " + " · ".join(f"{key} {value}" for key, value in sorted(group["locations"].items())))
     return lines

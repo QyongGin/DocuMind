@@ -246,3 +246,18 @@ def test_judgment_can_mark_stalled_generation_as_empty(tmp_path):
     judgments.write_text(json.dumps({"key": "x", "label": "애매"}, ensure_ascii=False) + "\n", encoding="utf-8")
     with pytest.raises(ValueError):
         metrics.load_judgments(judgments)
+
+
+def test_conclusion_only_scoring_is_counted():
+    """확인 줄을 떼고 결론 부분으로 채점한 답의 수를 결과 행과 요약에 남긴다. 판정 열쇠는 모델 원문 그대로다."""
+    key = item("ev-0001", facts=[{"name": "학과", "values": ["가나학과"]}], forbidden=[{"value": "35명", "why": "옆 행 값"}])
+    answer = "확인한 행:\n- 가나학과: 40명\n- 다라학과: 35명\n결론: 가나학과입니다.\n\n[출처 1]"
+    context = "|학과|정원|\n|가나학과|40|\n|다라학과|35|"
+    checked = metrics.score_record(key, record(answer, trace(context=context)), {})
+    plain = metrics.score_record(item("ev-0002"), record("전형료는 30,000원입니다.", trace(context="전형료 30,000원")), {})
+    assert (checked["label"], checked["conclusion_only"], plain["conclusion_only"]) == ("맞음", True, False)
+    assert checked["key"] == metrics.judgment_key(key, answer)
+    result = metrics.aggregate([checked, plain])
+    assert result["conclusion_only"] == 1
+    assert "결론 부분 채점 1" in "\n".join(metrics.summary_lines({"groups": {"본/dev": result}}))
+    assert "결론 부분 채점" not in "\n".join(metrics.summary_lines({"groups": {"본/dev": metrics.aggregate([plain])}}))
